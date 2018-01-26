@@ -112,7 +112,7 @@ parametric models. It consists in maximising the log-likelihood
 function $\ell(\thetab)$ with respect to $\thetab$. The log-likelihood
 is
 \begin{align}
-\ell(\thetab) &= \sum_{i=1}^n \log \pnorm(\x_i;\thetab) = \sum_{i=1}^n \log \pnn(\x_i;\thetab) - n Z(\thetab),
+\ell(\thetab) &= \sum_{i=1}^n \log \pnorm(\x_i;\thetab) = \sum_{i=1}^n \log \pnn(\x_i;\thetab) - n \log ( Z(\thetab) ),
 \end{align}
 so that $\ell(\thetab)$ cannot be computed if $Z(\thetab)$ cannot be
 computed. This means that standard maximum likelihood estimation
@@ -197,7 +197,7 @@ constructed in an automated manner.
 
 
 \section{Noise-contrastive estimation with unobserved variables}
-We now assume that not have data on all variables of the model
+We now assume that we do not have data on all variables of the model
 $\pnorm(\u;\thetab)$. Equivalently, we assume that the unnormalised
 model is defined as an intractable integral over the unobserved variables $\z$
 \begin{align}
@@ -330,8 +330,8 @@ we have
 
 Taking second derivatives shows that $g_2(r)$ is a convex function,
 \begin{align}
-  \dod{g_2}{r} & = -\frac{1/\nu}{1+1/\nu r}\\
-  \dod[2]{g_2}{r} & = \frac{1/\nu^2}{(1+1/\nu r)^2} >0 \quad \text{for } r\ge 0.
+  \dod{g_2}{r} & = -\frac{1/\nu}{1+r/\nu}\\
+  \dod[2]{g_2}{r} & = \frac{1/\nu^2}{(1+r/\nu )^2} >0 \quad \text{for } r\ge 0.
 \end{align}
 We now use Fenchel's inequality to find a function that lower-bounds (minorises) $g_2(r)$. Let $g_2^*(v)$ be the convex conjugate of $g_2(r)$,
 \begin{equation}
@@ -345,7 +345,7 @@ for all $r$ and $s$. The interpretation of Fenchel's inequality is as follows: v
 
 The convex conjugate $g_2^*(s)$ is obtained by solving the optimisation problem $$\sup_{r\ge 0} \; \left\{ rs - g_2(r)\right\},$$ that is
 \begin{equation}
-   \sup_{r\ge 0} \; \left\{rs + \log(1+1/\nu r)\right\}
+   \sup_{r\ge 0} \; \left\{rs + \log(1+r/\nu )\right\}
 \end{equation}
 Taking the derivative of  $rs + \log(1+r/\nu)$ with respect to $r$ gives
 \begin{equation}
@@ -358,8 +358,8 @@ The second derivative is negative for all $r$ so that the maximising $r$ satisfi
 Since both $\nu$ and $r$ are positive, the convex conjugate is defined on $s<0$.
 The convex conjugate is
 \begin{align}
-  g_2^*(s) & =   \sup_{r\ge 0} \; rs + \log(1+1/\nu r) \\
-  & = (-\nu-1/s) s + \log\left[1+ \frac{1}{\nu} (\nu-1/s)\right]\\
+  g_2^*(s) & =   \sup_{r\ge 0} \; rs + \log(1+r/\nu ) \\
+  & = (-\nu-1/s) s + \log\left[1+ \frac{1}{\nu} (-\nu-1/s)\right]\\
   & = -1 -\nu s + \log\left[ -\frac{1}{\nu s}\right]
 \end{align}
 The inequality is $g_2(r) \ge rs - g_2^*(s)$ thus becomes
@@ -392,12 +392,12 @@ Inserting the above lower bound with $s=s(\y)$ into \eqref{eq:Jbound1} gives
 \begin{align}
   J(\thetab)  \ge&  -\Ex \E_{\z \sim q(\z|\x)} \log \left[1+\nu \frac{q(\z|\x)\pnoise(\x)}{\pnn(\x,\z; \thetab)}\right] -  \nu \Ey \log \left[1+1/\nu \exp(h(\y;\thetab))\right].\\
   \ge&  -\Ex \E_{\z \sim q(\z|\x)} \log \left[1+\nu \frac{q(\z|\x)\pnoise(\x)}{\pnn(\x,\z; \thetab)}\right] \nonumber \\
-  &+  \nu \Ey \E_{\z \sim q(\z|\y)} \left[\frac{\pnn(\y,\z; \thetab)}{q(\z|\y) \pnoise(\y)}\right]s(\y)  + 1+ \nu s(\y) - \log\left[ -\frac{1}{\nu s(\y)}\right]
+  &+  \nu \Ey \E_{\z \sim q(\z|\y)} \left[\frac{\pnn(\y,\z; \thetab)}{q(\z|\y) \pnoise(\y)}\right]s(\y)  + \nu + \nu^2 s(\y) - \nu\log\left[ -\frac{1}{\nu s(\y)}\right]
 \end{align}
 We thus have $J(\thetab) \ge J_1(\thetab,q) \ge J_2(\thetab,q)$, with
 \begin{align}
   J_2(\thetab,q) =&  -\Ex \E_{\z \sim q(\z|\x)} \log \left[1+\nu \frac{q(\z|\x)\pnoise(\x)}{\pnn(\x,\z; \thetab)}\right] \nonumber \\
-  &+  \nu \Ey \E_{\z \sim q(\z|\y)} \left[\frac{\pnn(\y,\z; \thetab)}{q(\z|\y) \pnoise(\y)}\right]s(\y)  + 1+ \nu s(\y) - \log\left[ -\frac{1}{\nu s(\y)}\right]
+  &+  \nu \Ey \E_{\z \sim q(\z|\y)} \left[\frac{\pnn(\y,\z; \thetab)}{q(\z|\y) \pnoise(\y)}\right]s(\y)  + \nu + \nu^2 s(\y) - \nu \log\left[ -\frac{1}{\nu s(\y)}\right]
   \label{eq:J2-def}
 \end{align}
 We can interpret $s(\y)$ as the number of noise samples $\z \mid \y$
