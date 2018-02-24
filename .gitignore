@@ -22,3 +22,5 @@ proposal.pdf
 *.mtc1
 *.out
 *.synctex.gz
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
