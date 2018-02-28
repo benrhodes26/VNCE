@@ -50,7 +50,7 @@ class LatentNCEOptimiser:
         self.pn = noise
         self.q = variational_dist
         self.nu = nu
-        self.sample_size = sample_size
+        self.n = sample_size
         self.nz = latent_samples_per_datapoint
         self.eps = eps
         self.Y = self.pn.sample(int(sample_size * nu))  # generate noise
@@ -64,7 +64,9 @@ class LatentNCEOptimiser:
         :return: array of shape (nz, ?)
             ? is either n or n*nu
         """
-        val = self.phi(U, Z) / (self.q(Z, U)*self.pn(U) + self.eps)
+        phi = self.phi(U, Z)
+        q = self.q(Z, U)
+        val = phi / (q*self.pn(U) + self.eps)
 
         correct_shape = (Z.shape[0], Z.shape[1])
         assert val.shape == correct_shape, 'Expected r to return' \
@@ -88,13 +90,27 @@ class LatentNCEOptimiser:
         """
         Y, nu = self.Y, self.nu
 
-        a = nu/(self.r(X, ZX) + self.eps)  # (nz, n)
+        r_x = self.r(X, ZX)
+        a = nu/(r_x + self.eps)  # (nz, n)
+        self.validate_shape(a.shape, (self.nz, self.n))
         first_term = -np.mean(np.log(1 + a))
 
-        b = (1/nu) * np.mean(self.r(Y, ZY), axis=0)  # (n, )
+        r_y = self.r(Y, ZY)
+        b = (1/nu) * np.mean(r_y, axis=0)  # (n*nu, )
+        self.validate_shape(b.shape, (self.n*self.nu, ))
         second_term = -nu*np.mean(np.log(1 + b))
 
         return first_term + second_term
+
+    def validate_shape(self, shape, correct_shape):
+        """
+        :param shape: tuple
+            shape to validate
+        :param correct_shape: tuple
+            correct shape to validate against
+        """
+        assert shape == correct_shape, 'Expected ' \
+            'shape {}, got {} instead'.format(correct_shape, shape)
 
     def compute_J1_grad(self, X, ZX, ZY):
         """Computes J1_grad w.r.t theta using Monte-Carlo
@@ -129,9 +145,8 @@ class LatentNCEOptimiser:
         # If theta is 1-dimensional, grad will be a float.
         if isinstance(grad, float):
             grad = np.array(grad)
-        assert grad.shape == self.phi.theta_shape, ' ' \
-            'Expected grad to be shape {}, got {} instead'.format(self.phi.theta_shape,
-                                                                  grad.shape)
+        self.validate_shape(grad.shape, self.phi.theta_shape)
+
         return grad
 
     def _psi_1(self, U, Z):
@@ -142,7 +157,8 @@ class LatentNCEOptimiser:
         """Return array (n, )"""
         return 1 + (1/self.nu) * np.mean(self.r(U, Z), axis=0)
 
-    def fit_using_analytic_q(self, X, theta0=np.array([0.5]), disp=True, plot=True, stop_threshold=10**-9):
+    def fit_using_analytic_q(self, X, theta0=np.array([0.5]), disp=True, plot=True,
+                             stop_threshold=10**-6, max_num_em_steps=20):
         """ Fit the parameters of the model to the data X with an
         EM-type algorithm that switches between optimising the model
         params to produce theta_k and then resetting the variational distribution
@@ -183,8 +199,10 @@ class LatentNCEOptimiser:
         J1s = []  # save fevals for each individual optimisation step
         J1_grads = []   # save grad evals for each individual optimisation step
 
+        num_em_steps = 0
         prev_J1, current_J1 = -999, -9999  # arbitrary negative numbers
-        while np.abs(prev_J1 - current_J1) > stop_threshold:
+        while np.abs(prev_J1 - current_J1) > stop_threshold \
+                and num_em_steps < max_num_em_steps:
             prev_J1 = self.compute_J1(X, ZX, ZY)
 
             # optimise w.r.t to theta
@@ -199,6 +217,7 @@ class LatentNCEOptimiser:
 
             # store results
             thetas_after_em_step.append(self.phi.theta)
+            num_em_steps += 1
 
         if plot:
             J1s = self.plot_loss_curve(J1s)
@@ -240,7 +259,7 @@ class LatentNCEOptimiser:
             return grad_val
 
         _ = minimize(J1_k_neg, self.phi.theta, method='BFGS', jac=J1_k_grad_neg,
-                       options={'gtol': 1e-5, 'disp': disp})
+                     options={'gtol': 1e-5, 'disp': disp})
 
         J1s.append(J1_vals)
         J1_grads.append(J1_grad_vals)
@@ -399,7 +418,8 @@ class LatentNCEOptimiserWithAnalyticExpectations:
                                                     grad.shape)
         return grad
 
-    def fit(self, X, theta0, alpha0, disp=True, plot=True, stop_threshold=10**-9):
+    def fit(self, X, theta0, alpha0, disp=True, plot=True, stop_threshold=10**-6,
+            max_num_em_steps=20):
         """ Fit the parameters theta to the data X with a variational EM-type algorithm
 
         The algorithm alternates between optimising the model
@@ -444,8 +464,10 @@ class LatentNCEOptimiserWithAnalyticExpectations:
         J1s = []  # save fevals for each individual E or M step
         J1_grads = []  # # save grad evals for each individual E or M step
 
+        num_em_steps = 0
         prev_J1, current_J1 = -999, -9999  # arbitrary negative numbers
-        while np.abs(prev_J1 - current_J1) > stop_threshold:
+        while np.abs(prev_J1 - current_J1) > stop_threshold\
+                and num_em_steps < max_num_em_steps:
             prev_J1 = self.compute_J1(X)
 
             # optimise w.r.t theta
@@ -459,6 +481,7 @@ class LatentNCEOptimiserWithAnalyticExpectations:
             thetas_after_em_step.append(self.phi.theta)
 
             current_J1 = self.compute_J1(X)
+            num_em_steps += 1
 
         if plot:
             self.plot_loss_curve(J1s)
@@ -494,7 +517,7 @@ class LatentNCEOptimiserWithAnalyticExpectations:
             return grad_val
 
         _ = minimize(J1_k_neg, self.phi.theta, method='BFGS', jac=J1_k_grad_neg,
-                       options={'gtol': 1e-5, 'disp': disp})
+                     options={'gtol': 1e-5, 'disp': disp})
 
         J1s.append(J1_vals)
         J1_grads.append(J1_grad_vals)
@@ -550,7 +573,7 @@ class LatentNCEOptimiserWithAnalyticExpectations:
         return "LatentNCEOptimiser"
 
 
-# noinspection PyMethodMayBeStatic,PyPep8Naming
+# noinspection PyMethodMayBeStatic,PyPep8Naming,PyTypeChecker
 class NCEOptimiser:
     """ Optimiser for estimating/learning the parameters of an unnormalised
     model as proposed in http://proceedings.mlr.press/v9/gutmann10a/gutmann10a.pdf
@@ -698,7 +721,7 @@ class NCEOptimiser:
             return grad_val
 
         _ = minimize(J1_k_neg, self.phi.theta, method='BFGS', jac=J1_k_grad_neg,
-                       options={'gtol': 1e-5, 'disp': disp})
+                     options={'gtol': 1e-5, 'disp': disp})
 
         return J1s, J1_grads
 
@@ -711,4 +734,3 @@ class NCEOptimiser:
 
     def __repr__(self):
         return "LatentNCEOptimiser"
-

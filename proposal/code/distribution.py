@@ -163,7 +163,8 @@ class MixtureOfTwoGaussianBernoulliPosterior(Distribution):
 
     def calculate_p(self, U):
         """Return probability binary variable is 1"""
-        a = norm.pdf(U, 0, self._alpha[0])
+        sigma = np.exp(self.alpha)
+        a = norm.pdf(U, 0, sigma)
         b = norm.pdf(U, 0, self.sigma1)
         return b / (a + b)
 
