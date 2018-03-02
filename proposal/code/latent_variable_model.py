@@ -445,11 +445,11 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         :return X:  array(n, d)
         """
         d, m = np.array(self.W_shape) - 1
-        Z = rnd.uniform(0, 1, (n, m)) < 0.5
+        Z = rnd.uniform(0, 1, (n, m)) < np.arange(1, m+1) / (m+1)
         p1 = self.p_visibles_given_latents(Z)  # (n, d)
         U = rnd.uniform(0, 1, p1.shape) < p1  # (nz, n, m)
 
-        return U.astype(int)
+        return U.astype(int), Z.astype(int)
 
     def normalised_and_marginalised_over_z(self, U):
         """Return values of p(U), where p is the (normalised) marginal over x

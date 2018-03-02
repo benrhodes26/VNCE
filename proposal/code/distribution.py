@@ -284,3 +284,34 @@ class GaussianNoise(Distribution):
         :return: array (num_noise_samples, d)
         """
         return rnd.multivariate_normal(self.mean, self.cov, num_noise_samples)
+
+
+# noinspection PyPep8Naming,PyMissingConstructor
+class MultivariateBernoulliNoise(Distribution):
+    # todo: specify probability of each configuration of a d-length
+    # vector of binary variables and incorporate covariance structure of data
+    def __init__(self, d):
+        """
+        :param d: length of multivariate binary vector
+        """
+        assert d <= 10, 'd is too large. Need to parameterise this dist' \
+                        'to avoid exponential number of terms'
+        self.d = d
+
+    def __call__(self, U):
+        """evaluate probability of data U
+
+        :param U: U: array (n, d)
+            n data points with dimension d
+        :return array of shape (n, )
+        """
+        return 2**-self.d
+
+    def sample(self, num_noise_samples):
+        """
+
+        :param num_noise_samples: int
+            number of noise samples used in NCE
+        :return: array (num_noise_samples, d)
+        """
+        return rnd.uniform(0, 1, (num_noise_samples, self.d)) < 0.5
