@@ -369,6 +369,7 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         :return array (nz, n)
         """
         W, a, b = self.get_weights()
+        # todo complete method
         Z = Z.reshape(Z.shape[0], Z.shape[1])
 
         first_term = (Z == 0)*self.marginal_z_0(U)  # (nz, n)
