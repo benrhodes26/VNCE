@@ -7,8 +7,8 @@ from numpy import random as rnd
 from matplotlib import pyplot as plt
 from scipy.stats import norm
 from sklearn.neighbors import KernelDensity as kd
+from utils import validate_shape, sigmoid
 # noinspection PyPep8Naming
-
 
 
 # noinspection PyPep8Naming
@@ -33,7 +33,7 @@ class LatentVarModel(metaclass=ABCMeta):
     def theta(self, value):
         if isinstance(value, float) or isinstance(value, int):
             value = np.array([value])
-        assert value.ndim == 1, 'Theta should have dimension 1, ' \
+        assert value.ndim == 1, 'Theta should have 1 dimension, ' \
                                 'not {}'.format(value.ndim)
         assert value.shape == self.theta_shape, 'Tried to ' \
             'set theta to array with shape {}, should be {}'.format(value.shape,
@@ -339,24 +339,32 @@ class MixtureOfTwoUnnormalisedGaussians(LatentVarModel):
 
 # noinspection PyPep8Naming,PyMissingConstructor,PyArgumentList,PyTypeChecker
 class RestrictedBoltzmannMachine(LatentVarModel):
-    # todo: complete docstring
-    """
+    """ Type of probabilistic graphical model that specifies an unnormalised
+    joint distribution over data and latent variables. The model is given by:
+             phi(u, z; W, a, b) = exp(uWz + au + bz)
+    where
+        - u, a are d-dimensional vectors
+        - z, b are m-dimensional vectors
+        - W is a (d, m) matrix
+    a, b and W are all weights, u is the visible data and z is the latent variable.
     """
 
-    def __init__(self, W, a, b):
+    def __init__(self, W):
         """Initialise the parameters of the RBM.
 
-        :param W: array (d, m)
+        Typically, the formula of the RMB is given as:
+            phi(u, z, W, a, b) = exp(uWz + au + bz)
+        Here, we prepend u and z with a bias term (i.e '1')
+        and enlarge W so that we can rewrite the 3 terms as 1:
+            phi(u, z, W) = exp(uWz)
+        Note that this gives us an extra W_11 term, which is useful,
+        since it can serve as a scaling parameter for NCE!
+
+        :param W: array (d+1, m+1)
             Weight matrix. d=num_visibles, m=num_hiddens
-        :param a: array (d, )
-            Visible weights
-        :param b: array (m, )
-            hidden weights
         """
-        self.W_shape = W.shape
-        self.a_shape = a.shape
-        self.b_shape = b.shape
-        theta = np.concatenate((W.reshape(-1), a, b))
+        self.W_shape = W.shape  # (d+1, m+1)
+        theta = W.reshape(-1)
         super().__init__(theta)
 
     def __call__(self, U, Z):
@@ -368,49 +376,28 @@ class RestrictedBoltzmannMachine(LatentVarModel):
             nz*n 1-dimensional latent variable samples for data U.
         :return array (nz, n)
         """
-        W, a, b = self.get_weights()
-        # todo complete method
-        Z = Z.reshape(Z.shape[0], Z.shape[1])
+        W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
 
-        first_term = (Z == 0)*self.marginal_z_0(U)  # (nz, n)
-        second_term = (Z == 1)*self.marginal_z_1(U)  # (nz, n)
+        U, Z = self.add_bias_terms(U), self.add_bias_terms(Z)
+        # (n, d+1), (nz, n, m+1)
 
-        return first_term + second_term
+        uW = np.dot(U, W)  # (n, m+1)
+        uWz = np.sum(Z * uW, axis=-1)  # (nz, n)
 
-    def get_weights(self):
-        """Return W, a, b with correct shapes"""
-        W_size = np.product(self.W_shape)
-        a_size = self.a_shape[0]
-        b_size = self.b_shape[0]
+        val = np.exp(uWz)  # (nz, n)
+        validate_shape(val.shape, Z.shape[:2])
 
-        W = self.theta[:W_size].reshape(self.W_shape)
-        a = self.theta[W_size:W_size + a_size]
-        b = self.theta[W_size + a_size:W_size + a_size + b_size]
+        return val
 
-        return W, a, b
-
-    def marginal_z_0(self, U):
-        """ Return value of model for z=0
-        :param U: array (n, d)
-            N is number of data points
-        :return array (n,)
+    def add_bias_terms(self, V):
+        """prepend 1s along final dimension
+        :param V: array (..., k)
+        :return: array (..., k+1)
         """
-        U = U.reshape(-1)
-        a = np.exp(-self.theta[0])  # scaling parameter
-        sigma = np.exp(self.theta[1])  # stdev parameter
-        b = np.exp(-U**2 / (2*(sigma**2)))
-        return a * b
-
-    def marginal_z_1(self, U):
-        """ Return value of model for z=1
-        :param U: array (n, d)
-            N is number of data points
-        :return array (n,)
-        """
-        U = U.reshape(-1)
-        a = np.exp(-self.theta[0])  # scaling parameter
-        b = np.exp(-U**2 / (2*(self.sigma1**2)))
-        return a * b
+        # add bias terms
+        V_bias = np.ones(V.shape[:-1] + (1, ))
+        V = np.concatenate((V_bias, V), axis=-1)
+        return V
 
     def grad_log_wrt_params(self, U, Z):
         """ Nabla_theta(log(phi(x,z; theta))) where phi is the unnormalised model
@@ -421,43 +408,48 @@ class RestrictedBoltzmannMachine(LatentVarModel):
             m-dimensional latent variable samples. nz per datapoint in U.
         :return grad: array (len(theta), nz, n)
         """
-        nz, n = Z.shape[0], Z.shape[1]
-        Z = Z.reshape(nz, n)
-        grad = np.zeros((len(self.theta), nz, n))
+        U, Z = self.add_bias_terms(U), self.add_bias_terms(Z)  # (n, d+1), (nz, n, m+1)
+        nz, n, m_add_1 = Z.shape
+        d_add_1 = U.shape[1]
 
-        grad[0] = -1  # grad w.r.t scaling param
-        a = (U**2 * np.exp(-2*self.theta[1]))  # (n, 1)
-        grad[1] = (Z == 0) * a.reshape(-1)  # (nz, n)
+        U = np.tile(U, m_add_1)  # (n, [d+1]*[m+1])
+        Z = np.repeat(Z, d_add_1, axis=-1)  # (nz, n, [d+1]*[m+1])
 
-        correct_shape = self.theta_shape + (nz, n)
-        assert grad.shape == correct_shape, ' ' \
-            'gradient should have shape {}, got {} instead'.format(correct_shape,
-                                                                   grad.shape)
+        grad = Z * U  # (nz, n, [d+1]*[m+1])
+        grad = np.transpose(grad, (2, 0, 1))
+        validate_shape(grad.shape, self.theta_shape + (nz, n))
+
         return grad
 
-    def grad_log_wrt_params_analytic(self, U):
-        """ nabla_theta(log(model))
-        :param U: array (n, d)
-            either data or noise for NCE
-        :return array (len(theta), n)
+    def p_visibles_given_latents(self, Z):
+        """Return probability binary (visible) variable is 1 given latent Z
+        :param Z: array (n, m)
+            n (hidden) data points
+        :return: (n, d)
+            For each of the n binary latents variables, calculate probability
+            that that the corresponding visible variable U = 1
         """
-        grad = np.zeros((self.theta.size, U.shape[0]))  # (2, n)
-        grad[0] = -1
-        a = (U**2 * np.exp(-2*self.theta[1]))  # (n, 1)
-        grad[1] = a.reshape(-1)
-        return grad  # (2, n)
+        Z = self.add_bias_terms(Z)  # (n, m+1)
+        W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
+
+        a = np.dot(Z, W[1:, :].T)  # (n, d)
+        p1 = sigmoid(a)
+
+        return p1
 
     def sample(self, n):
-        """ Sample n values from the model
+        """ Sample n datapoints using a uniform dist over latents
 
-        :param n: number of data points to sample
-        :return: data array of shape (n, d)
+        :param n: int
+            number of data points to sample
+        :return X:  array(n, d)
         """
-        sigma = np.exp(self.theta[1])
-        a = self.sigma1 / (sigma + self.sigma1)
-        w = rnd.uniform(0, 1, n) < a
-        x = (w == 0)*(rnd.randn(n)*sigma) + (w == 1)*(rnd.randn(n)*self.sigma1)
-        return x.reshape(-1, 1)
+        d, m = np.array(self.W_shape) - 1
+        Z = rnd.uniform(0, 1, (n, m)) < np.arange(1, m+1) / (m+1)
+        p1 = self.p_visibles_given_latents(Z)  # (n, d)
+        U = rnd.uniform(0, 1, p1.shape) < p1  # (nz, n, m)
+
+        return U.astype(int), Z.astype(int)
 
     def normalised_and_marginalised_over_z(self, U):
         """Return values of p(U), where p is the (normalised) marginal over x
@@ -468,6 +460,4 @@ class RestrictedBoltzmannMachine(LatentVarModel):
             probabilities of datapoints under p(x) i.e with z marginalised out
             and the distribution has been normalised
         """
-        sigma = np.exp(self.theta[1])
-        a = sigma / (sigma + self.sigma1)
-        return a*norm.pdf(U.reshape(-1), 0, sigma) + (1 - a)*norm.pdf(U.reshape(-1), 0, self.sigma1)
+        raise NotImplementedError

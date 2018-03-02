@@ -9,6 +9,7 @@ See the following for an introduction to NCE:
 import numpy as np
 from matplotlib import pyplot as plt
 from scipy.optimize import minimize
+from utils import validate_shape
 
 
 # noinspection PyPep8Naming,PyTypeChecker,PyMethodMayBeStatic
@@ -67,10 +68,7 @@ class LatentNCEOptimiser:
         phi = self.phi(U, Z)
         q = self.q(Z, U)
         val = phi / (q*self.pn(U) + self.eps)
-
-        correct_shape = (Z.shape[0], Z.shape[1])
-        assert val.shape == correct_shape, 'Expected r to return' \
-            'array of shape {}, got {} instead'.format(correct_shape, val.shape)
+        validate_shape(val.shape, (Z.shape[0], Z.shape[1]))
 
         return val
 
@@ -92,25 +90,15 @@ class LatentNCEOptimiser:
 
         r_x = self.r(X, ZX)
         a = nu/(r_x + self.eps)  # (nz, n)
-        self.validate_shape(a.shape, (self.nz, self.n))
+        validate_shape(a.shape, (self.nz, self.n))
         first_term = -np.mean(np.log(1 + a))
 
         r_y = self.r(Y, ZY)
         b = (1/nu) * np.mean(r_y, axis=0)  # (n*nu, )
-        self.validate_shape(b.shape, (self.n*self.nu, ))
+        validate_shape(b.shape, (self.n*self.nu, ))
         second_term = -nu*np.mean(np.log(1 + b))
 
         return first_term + second_term
-
-    def validate_shape(self, shape, correct_shape):
-        """
-        :param shape: tuple
-            shape to validate
-        :param correct_shape: tuple
-            correct shape to validate against
-        """
-        assert shape == correct_shape, 'Expected ' \
-            'shape {}, got {} instead'.format(correct_shape, shape)
 
     def compute_J1_grad(self, X, ZX, ZY):
         """Computes J1_grad w.r.t theta using Monte-Carlo
@@ -145,7 +133,7 @@ class LatentNCEOptimiser:
         # If theta is 1-dimensional, grad will be a float.
         if isinstance(grad, float):
             grad = np.array(grad)
-        self.validate_shape(grad.shape, self.phi.theta_shape)
+        validate_shape(grad.shape, self.phi.theta_shape)
 
         return grad
 
