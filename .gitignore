@@ -24,3 +24,4 @@ proposal.pdf
 *.synctex.gz
 .ipynb_checkpoints
 */.ipynb_checkpoints/*
+notebooks/test.ipynb
