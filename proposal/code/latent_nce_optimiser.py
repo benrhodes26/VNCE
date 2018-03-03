@@ -260,10 +260,8 @@ class LatentNCEOptimiser:
         t = np.arange(len(J1s))
         axs.plot(t, J1s, c='k')
         for i in range(len(cum_fevals)):
-            if i % 2 == 0:
-                axs.plot(cum_fevals[i] * np.array([1, 1]), plt.get(axs, 'ylim'), 'r--')
-            else:
-                axs.plot(cum_fevals[i] * np.array([1, 1]), plt.get(axs, 'ylim'), 'b--')
+            axs.plot(cum_fevals[i] * np.array([1, 1]), plt.get(axs, 'ylim'), 'r--')
+
         return J1s
 
     def __repr__(self):

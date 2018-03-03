@@ -226,13 +226,13 @@ class RBMLatentPosterior(Distribution):
         return U
 
     def calculate_p(self, U):
-        """Return probability binary variable is 1
+        """Return probability that binary latent variable is 1
         :param U: array (n, d)
-            n (visible) data points
-        :return: (n, m)
-            For each of the n data points, and each of the m binary
-            latent variables, calculate probability that the latent
-            variable is equal to 1
+            n (visible) data points that we condition on
+        :return: array (n, m)
+            Conditioning on each of our n data points, calculate the
+            probability that each of the m latent hidden variables
+            is equal to 1
         """
         # only add bias term to U, not Z
         U = self.add_bias_terms(U)  # (n, d+1)
@@ -255,8 +255,7 @@ class RBMLatentPosterior(Distribution):
         p1 = self.calculate_p(U)  # (n, m)
         Z_shape = (nz, ) + p1.shape
 
-        uniform = rnd.uniform(0, 1, Z_shape)
-        Z = uniform < p1  # (nz, n, m)
+        Z = rnd.uniform(0, 1, Z_shape) < p1  # (nz, n, m)
 
         return Z.astype(int)
 
@@ -290,28 +289,26 @@ class GaussianNoise(Distribution):
 class MultivariateBernoulliNoise(Distribution):
     # todo: specify probability of each configuration of a d-length
     # vector of binary variables and incorporate covariance structure of data
-    def __init__(self, d):
+    def __init__(self, marginals):
         """
-        :param d: length of multivariate binary vector
+        :param marginals: array (d,)
+            probabilities that each of d binary random variables equal 1
         """
-        assert d <= 10, 'd is too large. Need to parameterise this dist' \
-                        'to avoid exponential number of terms'
-        self.d = d
+        self.p = marginals
 
     def __call__(self, U):
-        """evaluate probability of data U
+        """evaluate probability of binary data U
 
         :param U: U: array (n, d)
             n data points with dimension d
         :return array of shape (n, )
         """
-        return 2**-self.d
+        return np.product(U*self.p + (1-U)*(1-self.p), axis=1)
 
     def sample(self, num_noise_samples):
         """
-
         :param num_noise_samples: int
             number of noise samples used in NCE
         :return: array (num_noise_samples, d)
         """
-        return rnd.uniform(0, 1, (num_noise_samples, self.d)) < 0.5
+        return rnd.uniform(0, 1, (num_noise_samples, len(self.p))) < self.p

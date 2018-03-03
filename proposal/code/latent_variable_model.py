@@ -373,7 +373,7 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         :param U: array (n, d)
              either data or noise for NCE
         :param Z: (nz, n, m)
-            nz*n 1-dimensional latent variable samples for data U.
+            nz*n m-dimensional latent variable samples for data U.
         :return array (nz, n)
         """
         W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
@@ -426,8 +426,9 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         :param Z: array (n, m)
             n (hidden) data points
         :return: (n, d)
-            For each of the n binary latents variables, calculate probability
-            that that the corresponding visible variable U = 1
+            For each of the n latent variables that we condition on, calculate
+            an d-length vector of probabilities, describing the chance
+            that the corresponding visible binary variable is 1
         """
         Z = self.add_bias_terms(Z)  # (n, m+1)
         W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
@@ -437,17 +438,40 @@ class RestrictedBoltzmannMachine(LatentVarModel):
 
         return p1
 
-    def sample(self, n):
-        """ Sample n datapoints using a uniform dist over latents
+    def p_latents_given_visibles(self, U):
+        """Return probability that the binary latent variable is 1
+        :param U: array (n, d)
+            n (visible) data points that we condition on
+        :return: array (n, m)
+            For each of the n visibles that we condition on, calculate
+            an m-length vector of probabilities, describing the chance
+            that the corresponding latent binary variable is 1
+        """
+        U = self.add_bias_terms(U)  # (n, d+1)
+        W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
+
+        a = np.dot(U, W[:, 1:])  # (n, m)
+        p1 = sigmoid(a)
+
+        return p1
+
+    def sample(self, n, num_iter=100):
+        """ Sample n 'visible' datapoint using gibbs sampling
 
         :param n: int
             number of data points to sample
+        :param num_iter: int
+            number of steps to take in gibbs sampling
         :return X:  array(n, d)
         """
         d, m = np.array(self.W_shape) - 1
-        Z = rnd.uniform(0, 1, (n, m)) < np.arange(1, m+1) / (m+1)
-        p1 = self.p_visibles_given_latents(Z)  # (n, d)
-        U = rnd.uniform(0, 1, p1.shape) < p1  # (nz, n, m)
+        Z = rnd.uniform(0, 1, (n, m)) < 0.5  # initialise gibbs sample
+
+        for _ in range(num_iter):
+            pu_given_z = self.p_visibles_given_latents(Z)  # (n, d)
+            U = rnd.uniform(0, 1, pu_given_z.shape) < pu_given_z  # (n, d)
+            pz_given_u = self.p_latents_given_visibles(U)  # (n, m)
+            Z = rnd.uniform(0, 1, pz_given_u.shape) < pz_given_u  # (n, m)
 
         return U.astype(int), Z.astype(int)
 
@@ -461,3 +485,12 @@ class RestrictedBoltzmannMachine(LatentVarModel):
             and the distribution has been normalised
         """
         raise NotImplementedError
+
+    def marginalised_over_z(self, U):
+        """
+        :param U: array (n, d)
+             either data or noise for NCE
+        :return array (n, )
+            probabilities of datapoints under p(x) i.e with z marginalised out
+            and the distribution has been normalised
+        """
