@@ -3,6 +3,7 @@
 import numpy as np
 
 from abc import ABCMeta, abstractmethod
+from itertools import product
 from numpy import random as rnd
 from matplotlib import pyplot as plt
 from scipy.stats import norm
@@ -372,7 +373,7 @@ class RestrictedBoltzmannMachine(LatentVarModel):
 
         :param U: array (n, d)
              either data or noise for NCE
-        :param Z: (nz, n, m)
+        :param Z: (nz, n, m) or (n, m)
             nz*n m-dimensional latent variable samples for data U.
         :return array (nz, n)
         """
@@ -385,7 +386,7 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         uWz = np.sum(Z * uW, axis=-1)  # (nz, n)
 
         val = np.exp(uWz)  # (nz, n)
-        validate_shape(val.shape, Z.shape[:2])
+        validate_shape(val.shape, Z.shape[:-1])
 
         return val
 
@@ -481,16 +482,156 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         :param U: array (n, d)
              either data or noise for NCE
         :return array (n, )
-            probabilities of datapoints under p(x) i.e with z marginalised out
+            probabilities of datapoints under p(u) i.e with z marginalised out
             and the distribution has been normalised
         """
-        raise NotImplementedError
+        W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
+        assert np.sum(W.shape) < 12, "Won't normalize when the sum of latent and " \
+            "and visible dimensions is {}. Maximum is 10, since this operation has " \
+            "O(2**(d+m)) cost".format(np.sum(W.shape))
+
+        # get values of RBM marginalized over z. During the marginalisation,
+        # we construct a matrix WZ, where Z is a (m+1, 2**m) matrix containing
+        # all possible m-length binary vectors (with bias terms added). We reuse
+        # this matrix when computing the normalisation constant
+        phi_u, Wz = self.marginalised_over_z(U)  # (n, ), (d+1, 2**m)
+
+        # compute the normalisation constant
+        all_visibles = self.get_all_binary_vectors(U.shape[1])  # (2**d, d)
+        all_visibles = self.add_bias_terms(all_visibles)  # (2**d, d+1)
+        uWz = np.dot(all_visibles, Wz)  # (2**d, 2**m)
+        exp_uWz = np.exp(uWz)
+        norm_constant = np.sum(exp_uWz)
+
+        return phi_u / norm_constant, norm_constant
 
     def marginalised_over_z(self, U):
         """
         :param U: array (n, d)
              either data or noise for NCE
-        :return array (n, )
+        :return
+        val: array (n, )
             probabilities of datapoints under p(x) i.e with z marginalised out
             and the distribution has been normalised
+        marginalisation_matrix: array (d+1, 2**m)
+            WZ, where Z contains all possible m-length binary vectors
+            vertically stacked, and W is the RBM weight matrix
         """
+        W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
+
+        U = self.add_bias_terms(U)  # (n, d+1)
+        Wz = self.get_z_marginalization_matrix(W)  # (d+1, 2**m)
+        uWz = np.dot(U, Wz)  # (n, 2**m)
+
+        # For each datapoint and setting of the latent variable, compute value of RBM
+        val = np.exp(uWz)  # (n, 2**m)
+
+        # For each datapoint, marginalize (i.e sum) over the latents
+        val = np.sum(val, axis=-1)   # (n,)
+
+        validate_shape(val.shape, (U.shape[0], ))
+
+        return val, Wz
+
+    def get_z_marginalization_matrix(self, W):
+        """Stack each of the 2**m possible binary latent vectors into a
+        (m+1, 2**m) matrix Z, and then return the matrix multiply WZ
+
+        :param W: array (d+1, m+1)
+            weight matrix of RBM
+        :return: array (d+1, 2**m)
+            WZ, where Z contains all possible m-length binary vectors
+        """
+        m = W.shape[1] - 1
+        Z = self.get_all_binary_vectors(m)  # (2**m, m)
+        Z = self.add_bias_terms(Z)  # (2**m, m+1)
+        Wz = np.dot(W, Z.T)  # (d+1, 2**m)
+
+        return Wz
+
+    def normalised_and_marginalised_over_u(self, Z):
+        """Return values of p(U), where p is the (normalised) marginal over x
+
+        :param Z: array (n, m)
+             latent variables
+        :return array (n, )
+            probabilities of datapoints under p(z) i.e with u marginalised out
+            and the distribution has been normalised
+        """
+        W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
+        assert np.sum(W.shape) < 12, "Won't normalize when the sum of latent and " \
+            "and visible dimensions is {}. Maximum is 10, since this operation has " \
+            "O(2**(d+m)) cost".format(np.sum(W.shape))
+
+        # get values of RBM marginalized over u. During the marginalisation,
+        # we construct a matrix UW, where U is a (d+1, 2**d) matrix containing
+        # all possible d-length binary vectors (with bias terms added). We reuse
+        # this matrix when computing the normalisation constant
+        phi_z, uW = self.marginalised_over_u(Z)  # (n, ), (2**d, m+1)
+
+        # compute the normalisation constant
+        all_hiddens = self.get_all_binary_vectors(Z.shape[1])  # (2**m, m)
+        all_hiddens = self.add_bias_terms(all_hiddens)  # (2**m, m+1)
+        uWz = np.dot(uW, all_hiddens.T)  # (2**d, 2**m)
+        exp_uWz = np.exp(uWz)
+        norm_constant = np.sum(exp_uWz)
+
+        return phi_z / norm_constant, norm_constant
+
+    def marginalised_over_u(self, Z):
+        """
+        :param Z: array (n, m)
+             latent variables
+        :return
+        val: array (n, )
+            probabilities of datapoints under p(z) i.e with u marginalised out
+            and the distribution has been normalised
+        marginalisation_matrix: array (d+1, 2**m)
+            WZ, where Z contains all possible m-length binary vectors
+            vertically stacked, and W is the RBM weight matrix
+        """
+        W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
+
+        Z = self.add_bias_terms(Z)  # (n, m+1)
+        uW = self.get_u_marginalization_matrix(W)  # (2**d, m+1)
+        uWz = np.dot(uW, Z.T)  # (2**d, n)
+
+        # For each datapoint and setting of the latent variable, compute value of RBM
+        val = np.exp(uWz)  # (2**d, n)
+
+        # For each datapoint, marginalize (i.e sum) over the visibles
+        val = np.sum(val, axis=0)   # (n,)
+
+        validate_shape(val.shape, (Z.shape[0], ))
+
+        return val, uW
+
+    def get_u_marginalization_matrix(self, W):
+        """Stack each of the 2**m possible binary visible vectors into a
+        (2**d, d+1) matrix Z, and then return the matrix multiply UW
+
+        :param W: array (d+1, m+1)
+            weight matrix of RBM
+        :return: array (2**d, m+1)
+            UW, where U contains all possible d-length binary vectors
+        """
+        d = W.shape[0] - 1
+        U = self.get_all_binary_vectors(d)  # (2**d, d)
+        U = self.add_bias_terms(U)  # (2**d, d+1)
+        uW = np.dot(U, W)  # (2**d, m+1)
+
+        return uW
+
+    def get_all_binary_vectors(self, k):
+        """Return matrix of all k-length binary vectors
+
+        :param k: int
+        :return: array (2**k, k)
+        """
+        assert k < 10, "Won't construct all binary vectors with dimension {}. " \
+            "maximum dimension is 10, since this operation has O(2**k) cost".format(k)
+
+        binary_pairs = [[0, 1] for _ in range(k)]
+        all_binary_vectors = np.array(list(product(*binary_pairs)))  # (2**k, k)
+
+        return all_binary_vectors
