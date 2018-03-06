@@ -413,8 +413,8 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         nz, n, m_add_1 = Z.shape
         d_add_1 = U.shape[1]
 
-        U = np.tile(U, m_add_1)  # (n, [d+1]*[m+1])
-        Z = np.repeat(Z, d_add_1, axis=-1)  # (nz, n, [d+1]*[m+1])
+        U = np.repeat(U, m_add_1, axis=-1)  # (n, [d+1]*[m+1])
+        Z = np.tile(Z, d_add_1)  # (nz, n, [d+1]*[m+1])
 
         grad = Z * U  # (nz, n, [d+1]*[m+1])
         grad = np.transpose(grad, (2, 0, 1))
