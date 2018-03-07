@@ -486,8 +486,8 @@ class RestrictedBoltzmannMachine(LatentVarModel):
             and the distribution has been normalised
         """
         W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
-        assert np.sum(W.shape) < 12, "Won't normalize when the sum of latent and " \
-            "and visible dimensions is {}. Maximum is 10, since this operation has " \
+        assert np.sum(W.shape) <= 22, "Won't normalize when the sum of latent and " \
+            "and visible dimensions is {}. Maximum is 20, since this operation has " \
             "O(2**(d+m)) cost".format(np.sum(W.shape))
 
         # get values of RBM marginalized over z. During the marginalisation,
@@ -559,8 +559,8 @@ class RestrictedBoltzmannMachine(LatentVarModel):
             and the distribution has been normalised
         """
         W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
-        assert np.sum(W.shape) < 12, "Won't normalize when the sum of latent and " \
-            "and visible dimensions is {}. Maximum is 10, since this operation has " \
+        assert np.sum(W.shape) <= 22, "Won't normalize when the sum of latent and " \
+            "and visible dimensions is {}. Maximum is 20, since this operation has " \
             "O(2**(d+m)) cost".format(np.sum(W.shape))
 
         # get values of RBM marginalized over u. During the marginalisation,
@@ -628,8 +628,8 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         :param k: int
         :return: array (2**k, k)
         """
-        assert k < 10, "Won't construct all binary vectors with dimension {}. " \
-            "maximum dimension is 10, since this operation has O(2**k) cost".format(k)
+        assert k <= 20, "Won't construct all binary vectors with dimension {}. " \
+            "maximum dimension is 20, since this operation has O(2**k) cost".format(k)
 
         binary_pairs = [[0, 1] for _ in range(k)]
         all_binary_vectors = np.array(list(product(*binary_pairs)))  # (2**k, k)

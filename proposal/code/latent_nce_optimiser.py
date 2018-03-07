@@ -208,7 +208,7 @@ class LatentNCEOptimiser:
             num_em_steps += 1
 
         if plot:
-            J1s = self.plot_loss_curve(J1s)
+            self.plot_loss_curve(J1s)
 
         return np.array(thetas_after_em_step), np.array(J1s), np.array(J1_grads)
 
@@ -261,8 +261,6 @@ class LatentNCEOptimiser:
         axs.plot(t, J1s, c='k')
         for i in range(len(cum_fevals)):
             axs.plot(cum_fevals[i] * np.array([1, 1]), plt.get(axs, 'ylim'), 'r--')
-
-        return J1s
 
     def __repr__(self):
         return "LatentNCEOptimiser"
@@ -676,7 +674,7 @@ class NCEOptimiser:
         J1s, J1_grads = self.maximize_J1_wrt_theta(X, disp)
 
         if plot:
-            J1s = self.plot_loss_curve(J1s)
+            self.plot_loss_curve(J1s)
 
         return np.array(J1s), np.array(J1_grads)
 
@@ -715,8 +713,6 @@ class NCEOptimiser:
         fig, axs = plt.subplots(1, 1, figsize=(10, 7))
         t = np.arange(len(J1s))
         axs.plot(t, J1s, c='k')
-
-        return J1s
 
     def __repr__(self):
         return "LatentNCEOptimiser"
