@@ -263,6 +263,10 @@ class RBMLatentPosterior(Distribution):
 # noinspection PyPep8Naming,PyMissingConstructor
 class GaussianNoise(Distribution):
     def __init__(self, mean=0, cov=1):
+        if isinstance(mean, float) or isinstance(mean, int):
+            mean = np.array([mean])
+        if isinstance(cov, float) or isinstance(cov, int):
+            cov = np.array([[cov]])
         self.mean = mean
         self.cov = cov
 

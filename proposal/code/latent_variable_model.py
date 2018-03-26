@@ -347,7 +347,7 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         - u, a are d-dimensional vectors
         - z, b are m-dimensional vectors
         - W is a (d, m) matrix
-    a, b and W are all weights, u is the visible data and z is the latent variable.
+    a, b and W are all weights, u is the visible data and z is the latent vector.
     """
 
     def __init__(self, W):
@@ -405,10 +405,12 @@ class RestrictedBoltzmannMachine(LatentVarModel):
 
         :param U: array (n, d)
              either data or noise for NCE
-        :param Z: (nz, n, m)
+        :param Z: (nz, n, m) or (n, m)
             m-dimensional latent variable samples. nz per datapoint in U.
         :return grad: array (len(theta), nz, n)
         """
+        if len(Z.shape) == 2:
+            Z = Z.reshape((1, ) + Z.shape)
         U, Z = self.add_bias_terms(U), self.add_bias_terms(Z)  # (n, d+1), (nz, n, m+1)
         nz, n, m_add_1 = Z.shape
         d_add_1 = U.shape[1]
@@ -457,8 +459,7 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         return p1
 
     def sample(self, n, num_iter=100):
-        """ Sample n 'visible' datapoint using gibbs sampling
-
+        """ Sample n 'visible' and latent datapoints using gibbs sampling
         :param n: int
             number of data points to sample
         :param num_iter: int
@@ -475,6 +476,41 @@ class RestrictedBoltzmannMachine(LatentVarModel):
             Z = rnd.uniform(0, 1, pz_given_u.shape) < pz_given_u  # (n, m)
 
         return U.astype(int), Z.astype(int)
+
+    # noinspection PyUnboundLocalVariable
+    def sample_for_contrastive_divergence(self, U_0, num_iter=100):
+        """ Sample the random variables needed for CD learning
+
+        Contrastive divergence learning (see optimisers class)
+        needs two things:
+        - E(Z|U_0). The expected value of latents given data
+        - (V_k, Z_k) sampled from the *model*, which requires gibbs
+        sampling. In fact, it is recommended not to directly sample
+        the final Z_k, but to return E(Z_k | V_k), so we do this.
+
+        :param U_0 array (n, d)
+            data vectors used to initialise gibbs sampling
+        :param num_iter: int
+            number of steps to take in gibbs sampling
+        :return p_z0_given_u0 array (n, m)
+                    expected value of latents given U_0
+                U: array (n, d)
+                    binary sample of visibles after k gibbs steps
+                p_z_given_u: array (n, m)
+                    expected value of latents after k gibbs steps
+        """
+        p_z0_given_u0 = self.p_latents_given_visibles(U_0)  # (n, m)
+        Z_0 = rnd.uniform(0, 1, p_z0_given_u0.shape) < p_z0_given_u0  # (n, m)
+
+        Z = Z_0
+        for i in range(num_iter):
+            p_u_given_z = self.p_visibles_given_latents(Z)  # (n, d)
+            U = rnd.uniform(0, 1, p_u_given_z.shape) < p_u_given_z  # (n, d)
+
+            p_z_given_u = self.p_latents_given_visibles(U)  # (n, m)
+            Z = rnd.uniform(0, 1, p_z_given_u.shape) < p_z_given_u  # (n, m)
+
+        return p_z0_given_u0, U.astype(int), p_z_given_u
 
     def normalised_and_marginalised_over_z(self, U):
         """Return values of p(U), where p is the (normalised) marginal over x

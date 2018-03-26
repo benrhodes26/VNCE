@@ -11,6 +11,7 @@ from matplotlib import pyplot as plt
 from scipy.optimize import minimize
 from utils import validate_shape
 
+DEFAULT_SEED = 22012018
 
 # noinspection PyPep8Naming,PyTypeChecker,PyMethodMayBeStatic
 class LatentNCEOptimiser:
@@ -178,7 +179,7 @@ class LatentNCEOptimiser:
                 single step (loop) in the EM-type optimisation
         """
         # initialise parameters
-        self.phi.theta, self.q.alpha = theta0, theta0
+        self.phi.theta, self.q.alpha = np.array(theta0), np.array(theta0)
 
         # Sample latent variables
         ZX, ZY = self.q.sample(self.nz, X), self.q.sample(self.nz, self.Y)
@@ -247,7 +248,7 @@ class LatentNCEOptimiser:
             return grad_val
 
         _ = minimize(J1_k_neg, self.phi.theta, method='BFGS', jac=J1_k_grad_neg,
-                     options={'gtol': 1e-5, 'disp': disp})
+                     options={'gtol': 1e-4, 'disp': disp})
 
         J1s.append(J1_vals)
         J1_grads.append(J1_grad_vals)
@@ -261,6 +262,8 @@ class LatentNCEOptimiser:
         axs.plot(t, J1s, c='k')
         for i in range(len(cum_fevals)):
             axs.plot(cum_fevals[i] * np.array([1, 1]), plt.get(axs, 'ylim'), 'r--')
+
+        return fig, axs
 
     def __repr__(self):
         return "LatentNCEOptimiser"
@@ -441,7 +444,7 @@ class LatentNCEOptimiserWithAnalyticExpectations:
                 single E or M step in the EM-type optimisation
         """
         # initialise parameters
-        self.phi.theta, self.q.alpha = theta0, alpha0
+        self.phi.theta, self.q.alpha = np.array(theta0), np.array(alpha0)
 
         alphas_after_em_step = [alpha0]
         thetas_after_em_step = [theta0]  # save theta_k after for each EM step
@@ -553,8 +556,10 @@ class LatentNCEOptimiserWithAnalyticExpectations:
             else:
                 axs.plot(cum_fevals[i] * np.array([1, 1]), plt.get(axs, 'ylim'), 'b--')
 
+        return fig, axs
+
     def __repr__(self):
-        return "LatentNCEOptimiser"
+        return "LatentNCEOptimiserWithAnalyticExpectations"
 
 
 # noinspection PyMethodMayBeStatic,PyPep8Naming,PyTypeChecker
@@ -668,7 +673,7 @@ class NCEOptimiser:
                 single step (loop) in the EM-type optimisation
         """
         # initialise parameters
-        self.phi.theta = theta0
+        self.phi.theta = np.array(theta0)
 
         # optimise w.r.t to theta
         J1s, J1_grads = self.maximize_J1_wrt_theta(X, disp)
@@ -714,5 +719,96 @@ class NCEOptimiser:
         t = np.arange(len(J1s))
         axs.plot(t, J1s, c='k')
 
+        return fig, axs
+
     def __repr__(self):
-        return "LatentNCEOptimiser"
+        return "NCEOptimiser"
+
+
+# noinspection PyMethodMayBeStatic,PyPep8Naming,PyTypeChecker
+class CDOptimiser:
+    """ Contrastive divergence Optimiser for estimating/learning the
+    parameters of an unnormalised model as proposed in:
+    http://www.cs.toronto.edu/~fritz/absps/tr00-004.pdf
+
+    For a simple, practical guide that informed this implementation, see:
+    https://www.cs.toronto.edu/~hinton/absps/guideTR.pdf
+
+    """
+    def __init__(self, model, rng=None):
+        """ Initialise unnormalised model and noise distribution
+
+        :param model: LatentVariableModel
+            unnormalised model whose parameters theta we want to optimise.
+            Has arguments (U, theta) where:
+            - U is (n, d) array of data
+        :param rng: random number generator
+        """
+        self.phi = model
+        if not rng:
+            self.rng = np.random.RandomState(DEFAULT_SEED)
+        else:
+            self.rng = rng
+
+    def fit(self, X, theta0,  num_gibbs_steps, learning_rate, batch_size):
+        """ Fit the parameters of the model to the data X.
+
+        We fit the data by using the contrastive divergence gradient updates:
+
+        W_ij =  W_ij + learning_rate*( E(v_i*h_j) - E(v_i*h_j) )
+
+        The first expectation is with respect to p_emp(x). p(z| x)
+        where p_emp is the empirical distribution of the data.
+        The second expectation is with respect to p_model(x, z), which
+        we must use gibbs sampling to sample from.
+
+        Following https://www.cs.toronto.edu/~hinton/absps/guideTR.pdf,
+        This implementation directly calculates the expected latents Z, given data
+        (as opposed to first sampling from P(Z | X)).
+        It also directly calculates the expected value of latents on the *final*
+        step of gibbs sampling. for every step before that, we sample
+        latents.
+
+        :param X: Array of shape (num_data, data_dim)
+            data that we want to fit the model to
+        :param theta0: array
+            initial values for model's parameters
+        :param num_gibbs_steps: int
+            number of gibbs steps to perform during learning, when trying
+            to sample from the model's distribution
+        :param learning rate: float
+            learning rate for gradient ascent
+        :param batch_size: int
+            size of a mini-batch
+        :return thetas list of array
+            values of model parameters (theta) after each gradient step
+        """
+        # todo: make it easy to access biases and non-bias weights separately
+        # todo: write a get_learning_rate method using decay
+        # initialise parameters
+        self.phi.theta = np.array(theta0)
+        thetas = []  # store model params after each gradient step
+
+        # shuffle data
+        n = X.shape[0]
+        perm = self.rng.permutation(n)
+        X = X[perm]
+        for i in range(0, n, batch_size):
+            X_batch = X[i:i+batch_size]
+            Z, X_model, Z_model = self.phi.sample_for_contrastive_divergence(
+                X_batch, num_iter=num_gibbs_steps)
+
+            data_grad = self.phi.grad_log_wrt_params(X_batch, Z)  # (len(theta), 1, n)
+            data_grad = np.mean(data_grad, axis=(1, 2))  # (len(theta), )
+
+            model_grad = self.phi.grad_log_wrt_params(X_model, Z_model)
+            model_grad = np.mean(model_grad, axis=(1, 2))  # (len(theta), )
+
+            grad = data_grad - model_grad  # (len(theta), )
+            self.phi.theta += learning_rate * grad
+            thetas.append(self.phi.theta)
+
+        return thetas
+
+    def __repr__(self):
+        return "CDOptimiser"
