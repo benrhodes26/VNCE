@@ -365,16 +365,23 @@ class RestrictedBoltzmannMachine(LatentVarModel):
             Weight matrix. d=num_visibles, m=num_hiddens
         """
         self.W_shape = W.shape  # (d+1, m+1)
+        self.norm_const = None
         theta = W.reshape(-1)
         super().__init__(theta)
 
-    def __call__(self, U, Z):
+    def __call__(self, U, Z, normalise=False, reset_norm_const=True):
         """ Evaluate model for each data point U[i, :]
 
         :param U: array (n, d)
              either data or noise for NCE
         :param Z: (nz, n, m) or (n, m)
             nz*n m-dimensional latent variable samples for data U.
+        :param normalise: bool
+            if true, first normalise the distribution.
+        :param reset_norm_const: bool
+            if True, recalculate the normalisation constant using current
+            parameters. If false, use already saved norm const. Note: this
+            argument only matters if normalise=True.
         :return array (nz, n)
         """
         W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
@@ -386,8 +393,12 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         uWz = np.sum(Z * uW, axis=-1)  # (nz, n)
 
         val = np.exp(uWz)  # (nz, n)
-        validate_shape(val.shape, Z.shape[:-1])
+        if normalise:
+            if (not self.norm_const) or reset_norm_const:
+                self.reset_norm_const()
+            val /= self.norm_const
 
+        validate_shape(val.shape, Z.shape[:-1])
         return val
 
     def add_bias_terms(self, V):
@@ -512,34 +523,47 @@ class RestrictedBoltzmannMachine(LatentVarModel):
 
         return p_z0_given_u0, U.astype(int), p_z_given_u
 
-    def normalised_and_marginalised_over_z(self, U):
+    def reset_norm_const(self):
+        """Reset normalisation constant using current theta"""
+        W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
+        d, m = W.shape[0] - 1, W.shape[1] - 1
+        assert d*(2**m) <= 10**6, "Calculating the normalisation" \
+            "constant has O(d 2**m) cost. Assertion raised since d*2^m " \
+            "equal to {}, which exceeds the current limit of 10^6,".format(d*(2**m))
+
+        W_times_all_latents = self.get_z_marginalization_matrix(W)  # (d+1, 2**m)
+        W_times_all_latents = np.exp(W_times_all_latents)
+        W_times_all_latents += np.concatenate((np.zeros((1, 2**m)),
+                                               np.ones((d, 2**m))), axis=0)
+        self.norm_const = np.sum(np.product(W_times_all_latents, axis=0))
+
+    def normalised_and_marginalised_over_z(self, U, reset_norm_const=True):
         """Return values of p(U), where p is the (normalised) marginal over x
 
         :param U: array (n, d)
              either data or noise for NCE
-        :return array (n, )
+        :param reset_norm_const bool
+            If true, recalculate the normalisation constant for current params
+        :return
+        array (n, )
             probabilities of datapoints under p(u) i.e with z marginalised out
             and the distribution has been normalised
+        norm_const: float
+            the normalisation constant for current parameters
+
         """
         W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
-        assert np.sum(W.shape) <= 22, "Won't normalize when the sum of latent and " \
-            "and visible dimensions is {}. Maximum is 20, since this operation has " \
-            "O(2**(d+m)) cost".format(np.sum(W.shape))
+        d, m = W.shape[0] - 1, W.shape[1] - 1
+        assert d*(2**m) <= 10**6, "Calculating the normalisation" \
+            "constant has O(d 2**m) cost. Assertion raised since d*2^m " \
+            "equal to {}, which exceeds the current limit of 10^6,".format(d*(2**m))
 
-        # get values of RBM marginalized over z. During the marginalisation,
-        # we construct a matrix WZ, where Z is a (m+1, 2**m) matrix containing
-        # all possible m-length binary vectors (with bias terms added). We reuse
-        # this matrix when computing the normalisation constant
         phi_u, Wz = self.marginalised_over_z(U)  # (n, ), (d+1, 2**m)
 
-        # compute the normalisation constant
-        all_visibles = self.get_all_binary_vectors(U.shape[1])  # (2**d, d)
-        all_visibles = self.add_bias_terms(all_visibles)  # (2**d, d+1)
-        uWz = np.dot(all_visibles, Wz)  # (2**d, 2**m)
-        exp_uWz = np.exp(uWz)
-        norm_constant = np.sum(exp_uWz)
+        if reset_norm_const:
+            self.reset_norm_const()
 
-        return phi_u / norm_constant, norm_constant
+        return phi_u / self.norm_const, self.norm_const
 
     def marginalised_over_z(self, U):
         """
@@ -585,34 +609,32 @@ class RestrictedBoltzmannMachine(LatentVarModel):
 
         return Wz
 
-    def normalised_and_marginalised_over_u(self, Z):
+    def normalised_and_marginalised_over_u(self, Z, reset_norm_const=True):
         """Return values of p(U), where p is the (normalised) marginal over x
 
         :param Z: array (n, m)
              latent variables
-        :return array (n, )
+        :param reset_norm_const bool
+            If true, recalculate the normalisation constant for current params
+        :return
+        array (n, )
             probabilities of datapoints under p(z) i.e with u marginalised out
             and the distribution has been normalised
+        norm_const: float
+            the normalisation constant for current parameters
         """
         W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
-        assert np.sum(W.shape) <= 22, "Won't normalize when the sum of latent and " \
-            "and visible dimensions is {}. Maximum is 20, since this operation has " \
-            "O(2**(d+m)) cost".format(np.sum(W.shape))
+        d, m = W.shape[0] - 1, W.shape[1] - 1
+        assert d*(2**m) <= 10**6, "Calculating the normalisation" \
+            "constant has O(d 2**m) cost. Assertion raised since d*2^m " \
+            "equal to {}, which exceeds the current limit of 10^6,".format(d*(2**m))
 
-        # get values of RBM marginalized over u. During the marginalisation,
-        # we construct a matrix UW, where U is a (d+1, 2**d) matrix containing
-        # all possible d-length binary vectors (with bias terms added). We reuse
-        # this matrix when computing the normalisation constant
         phi_z, uW = self.marginalised_over_u(Z)  # (n, ), (2**d, m+1)
 
-        # compute the normalisation constant
-        all_hiddens = self.get_all_binary_vectors(Z.shape[1])  # (2**m, m)
-        all_hiddens = self.add_bias_terms(all_hiddens)  # (2**m, m+1)
-        uWz = np.dot(uW, all_hiddens.T)  # (2**d, 2**m)
-        exp_uWz = np.exp(uWz)
-        norm_constant = np.sum(exp_uWz)
+        if reset_norm_const:
+            self.reset_norm_const()
 
-        return phi_z / norm_constant, norm_constant
+        return phi_z / self.norm_const, self.norm_const
 
     def marginalised_over_u(self, Z):
         """
@@ -657,6 +679,36 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         uW = np.dot(U, W)  # (2**d, m+1)
 
         return uW
+
+    def evaluate_on_entire_domain(self, normalise=False, reset_norm_const=True):
+        """return value of rbm on every combination of visible and hidden input
+
+        :param normalise: bool
+            if true, first normalise the distribution.
+        :param reset_norm_const: bool
+            if True, recalculate the normalisation constant using current
+            parameters. If false, use already saved norm const. Note: this
+            argument only matters if normalise=True.
+        :return: array (2**d, 2**m)
+            matrix containing all values of rbm
+        """
+        W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
+        d, m = W.shape[0] - 1, W.shape[1] - 1
+        assert d + m <= 20, "Evaluating over the whole domain " \
+            "has O(2**(m+d)) cost. Assertion raised since m+d is " \
+            "equal to {}, which exceeds the current limit of 20".format(d+m)
+
+        U = self.get_all_binary_vectors(d)  # (2**d, d)
+        U = self.add_bias_terms(U)  # (2**d, d+1)
+        Wz = self.get_z_marginalization_matrix(W)  # (d+1, 2**m)
+        uWz = np.dot(U, Wz)  # (2**d, 2**m)
+        val = np.exp(uWz)
+        if normalise:
+            if (not self.norm_const) or reset_norm_const:
+                self.reset_norm_const()
+            val /= self.norm_const
+
+        return val
 
     def get_all_binary_vectors(self, k):
         """Return matrix of all k-length binary vectors

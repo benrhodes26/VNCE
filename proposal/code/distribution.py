@@ -4,6 +4,9 @@ import numpy as np
 
 from abc import ABCMeta, abstractmethod
 from numpy import random as rnd
+from pandas import DataFrame
+from pomegranate import BayesianNetwork
+from pyBN import chow_liu, mle, random_sample, Factor
 from scipy.stats import norm, multivariate_normal
 from utils import sigmoid
 
@@ -40,6 +43,8 @@ class Distribution(metaclass=ABCMeta):
 
         :param U: array (n, d)
             n datapoints with d dimensions
+        :return array (n, )
+            probability of each input datapoint
         """
         raise NotImplementedError
 
@@ -47,7 +52,10 @@ class Distribution(metaclass=ABCMeta):
     def sample(self, nz):
         """Return n samples from the distribution
 
-        :param nz: sample size
+        :param nz: int
+            sample size
+        :return array (n, )
+            a sample from the distribution
         """
         raise NotImplementedError
 
@@ -276,6 +284,7 @@ class GaussianNoise(Distribution):
         :param U: U: array (n, d)
             n data points with dimension d
         :return array of shape (n, )
+            probability of each input datapoint
         """
         return multivariate_normal.pdf(U, self.mean, self.cov)
 
@@ -306,6 +315,7 @@ class MultivariateBernoulliNoise(Distribution):
         :param U: U: array (n, d)
             n data points with dimension d
         :return array of shape (n, )
+            probability of each input datapoint
         """
         return np.product(U*self.p + (1-U)*(1-self.p), axis=1)
 
@@ -316,3 +326,93 @@ class MultivariateBernoulliNoise(Distribution):
         :return: array (num_noise_samples, d)
         """
         return rnd.uniform(0, 1, (num_noise_samples, len(self.p))) < self.p
+
+
+# noinspection PyPep8Naming,PyMissingConstructor
+class EmpiricalNoise(Distribution):
+
+    def __init__(self, X):
+        """
+        :param X: array
+            data that defines empirical distribution
+        """
+        self.X = X
+        self.sample_size = len(X)
+        self.freqs = self.construct_freqs()
+
+    def __call__(self, U):
+        """evaluate probability of binary data U
+
+        :param U: U: array (n, d)
+            n data points with dimension d
+        :return array of shape (n, )
+            probability of each input datapoint
+        """
+        probs = np.zeros(U.shape[0])
+        for i, u in enumerate(U):
+            probs[i] = self.freqs.get(str(u), 0) / self.sample_size
+
+        return probs
+
+    def sample(self, num_noise_samples):
+        """
+        :param num_noise_samples: int
+            number of noise samples used in NCE
+        :return: array (num_noise_samples, d)
+        """
+        sample_inds = np.random.randint(0, self.sample_size, num_noise_samples)
+        return self.X[sample_inds]
+
+    def construct_freqs(self):
+        """Construct dict of binary vector to frequency in data X"""
+        test_dict = {}
+        for i in self.X:
+            test_dict[str(i)] = test_dict.get(str(i), 0) + 1
+
+        return test_dict
+
+
+# noinspection PyMissingConstructor
+class ChowLiuTree(Distribution):
+
+    def __init__(self, X):
+        """initialise tree structure and estimate the model parameters
+
+        NOTE: this implementation is currently hacky, combining two
+        different bayesian network libraries, since I couldn't find
+        one library that could both evaluate the probability of a
+        set of datapoints AND produce samples.
+        :param X: array (n, d)
+            data used to construct tree
+        """
+        self.pybn_model = chow_liu(X)
+        mle.mle_fast(self.pybn_model, DataFrame(X))
+        self.tree_structure = self.get_tree_structure()
+        self.pomegranate_model = BayesianNetwork().from_structure(
+            X, self.tree_structure)
+
+    def __call__(self, U):
+        """
+        :param U: U: array (n, d)
+            n data points with dimension d
+        :return array of shape (n, )
+            probability of each input datapoint
+        """
+        return self.pomegranate_model.probability(U)
+
+    def sample(self, n):
+        """sample n datapoints from the distribution
+
+        :param n: int
+            number of datapoints to sample
+        :return: array (n, )
+            data sampled from the distribution
+        """
+        return random_sample(self.pybn_model, n)
+
+    def get_tree_structure(self):
+        tree_structure = []
+        for v in sorted(self.pybn_model.V):
+            parents = tuple(self.pybn_model.F[v]['parents'])
+            tree_structure.append(parents)
+        return tuple(tree_structure)

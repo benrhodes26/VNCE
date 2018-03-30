@@ -7,7 +7,10 @@ See the following for an introduction to NCE:
 """
 
 import numpy as np
+from collections import OrderedDict
+from copy import deepcopy
 from matplotlib import pyplot as plt
+from numpy import random as rnd
 from scipy.optimize import minimize
 from utils import validate_shape
 
@@ -73,21 +76,25 @@ class LatentNCEOptimiser:
 
         return val
 
-    def compute_J1(self, X, ZX, ZY):
+    def compute_J1(self, X, ZX=None, ZY=None):
         """Return MC estimate of Lower bound of NCE objective
 
         :param X: array (N, d)
             data sample we are training our model on
-        :param ZX: (N, nz, m)
+        :param ZX: array (N, nz, m)
             latent variable samples for data x. for each
             x there are nz samples of shape (m, )
-        :param ZY: (nz, N*nu)
+        :param ZY: array (nz, N*nu)
             latent variable samples for noise y. for each
             y there are nz samples of shape (m, )
         :return: float
             Value of objective for current parameters
         """
         Y, nu = self.Y, self.nu
+        if ZX is None:
+            ZX = self.q.sample(self.nz, X)
+        if ZY is None:
+            ZY = self.q.sample(self.nz, Y)
 
         r_x = self.r(X, ZX)
         a = nu/(r_x + self.eps)  # (nz, n)
@@ -101,7 +108,7 @@ class LatentNCEOptimiser:
 
         return first_term + second_term
 
-    def compute_J1_grad(self, X, ZX, ZY):
+    def compute_J1_grad(self, X, ZX=None, ZY=None):
         """Computes J1_grad w.r.t theta using Monte-Carlo
 
         :param X: array (N, d)
@@ -115,6 +122,10 @@ class LatentNCEOptimiser:
         :return grad: array of shape (len(phi.theta), )
         """
         Y = self.Y
+        if ZX is None:
+            ZX = self.q.sample(self.nz, X)
+        if ZY is None:
+            ZY = self.q.sample(self.nz, Y)
 
         gradX = self.phi.grad_log_wrt_params(X, ZX)  # (len(theta), nz, n)
         a = (self._psi_1(X, ZX) - 1)/self._psi_1(X, ZX)  # (nz, n)
@@ -146,8 +157,10 @@ class LatentNCEOptimiser:
         """Return array (n, )"""
         return 1 + (1/self.nu) * np.mean(self.r(U, Z), axis=0)
 
-    def fit_using_analytic_q(self, X, theta0=np.array([0.5]), disp=True, plot=True,
-                             stop_threshold=10**-6, max_num_em_steps=20):
+    def fit_using_analytic_q(self, theta_inds, X, theta0=np.array([0.5]), disp=True, plot=True,
+                             stop_threshold=10**-6, max_num_em_steps=20, gtol=1e-4,
+                             ftol=1e-4):
+        # todo: update second paragraph, currently not true
         """ Fit the parameters of the model to the data X with an
         EM-type algorithm that switches between optimising the model
         params to produce theta_k and then resetting the variational distribution
@@ -158,6 +171,8 @@ class LatentNCEOptimiser:
         then use self.fit, which takes a parametrised q and then optimises
         its variational parameters alpha.
 
+        :param theta_inds: array
+            indices of elements of theta we want to optimise
         :param X: Array of shape (num_data, data_dim)
             data that we want to fit the model to
         :param theta0: array of shape (1, )
@@ -169,6 +184,13 @@ class LatentNCEOptimiser:
         :param stop_threshold: float
             stop EM-type optimisation when the value of the lower
             bound J1 changes by less than stop_threshold
+        :param gtol: float
+            parameter passed to scipy.minimize. An iteration will stop
+            when max{|proj g_i | i = 1, ..., n} <= gtol where
+            pg_i is the i-th component of the projected gradient.
+        :param ftol: float
+            parameter passed to scipy.minimize. An iteration stops
+            when (f^k - f^{k+1})/max{|f^k|,|f^{k+1}|,1} <= ftol.
         :return
             thetas_after_em_step: (?, num_em_steps),
             J1s: list of lists
@@ -179,10 +201,10 @@ class LatentNCEOptimiser:
                 single step (loop) in the EM-type optimisation
         """
         # initialise parameters
-        self.phi.theta, self.q.alpha = np.array(theta0), np.array(theta0)
+        self.phi.theta, self.q.alpha = deepcopy(theta0), deepcopy(theta0)
 
         # Sample latent variables
-        ZX, ZY = self.q.sample(self.nz, X), self.q.sample(self.nz, self.Y)
+        # ZX, ZY = self.q.sample(self.nz, X), self.q.sample(self.nz, self.Y)
 
         thetas_after_em_step = [theta0]  # save theta_k after each em step
         J1s = []  # save fevals for each individual optimisation step
@@ -192,17 +214,23 @@ class LatentNCEOptimiser:
         prev_J1, current_J1 = -999, -9999  # arbitrary negative numbers
         while np.abs(prev_J1 - current_J1) > stop_threshold \
                 and num_em_steps < max_num_em_steps:
-            prev_J1 = self.compute_J1(X, ZX, ZY)
+            # prev_J1 = self.compute_J1(X, ZX, ZY)
+            prev_J1 = self.compute_J1(X)
 
             # optimise w.r.t to theta
-            self.maximize_J1_wrt_theta(X, ZX, ZY, J1s, J1_grads, disp)
+            # self.maximize_J1_wrt_theta(X, ZX, ZY, J1s, J1_grads, disp,
+            #                           gtol=gtol, ftol=ftol)
+            self.maximize_J1_wrt_theta(theta_inds, X, J1s, J1_grads,
+                                       disp=disp, gtol=gtol, ftol=ftol)
 
             # reset the variational distribution to new posterior
+            # print('resetting variational dist!')
             self.q.alpha = self.phi.theta
 
             # re-sample latent variables from new variational dist
-            ZX, ZY = self.q.sample(self.nz, X), self.q.sample(self.nz, self.Y)
-            current_J1 = self.compute_J1(X, ZX, ZY)
+            # ZX, ZY = self.q.sample(self.nz, X), self.q.sample(self.nz, self.Y)
+            # current_J1 = self.compute_J1(X, ZX, ZY)
+            current_J1 = self.compute_J1(X)
 
             # store results
             thetas_after_em_step.append(self.phi.theta)
@@ -213,9 +241,13 @@ class LatentNCEOptimiser:
 
         return np.array(thetas_after_em_step), np.array(J1s), np.array(J1_grads)
 
-    def maximize_J1_wrt_theta(self, X, ZX, ZY, J1s, J1_grads, disp):
+# def maximize_J1_wrt_theta(self, X, ZX, ZY, J1s, J1_grads, disp, gtol=1e-4, ftol=1e-4):
+    def maximize_J1_wrt_theta(self, theta_inds,  X, J1s, J1_grads,
+                              disp=True, gtol=1e-4, ftol=1e-4):
         """Return theta that maximises J1
 
+        :param theta_inds: array
+            indices of elements of theta we want to optimise
         :param X: array (n, 1)
             data
         :param ZX: (N, nz, m)
@@ -230,40 +262,99 @@ class LatentNCEOptimiser:
             list of function evaluations of J1_grad during optimisation
         :param disp: bool
             display optimisation results for each iteration
+        :param gtol: float
+            parameter passed to scipy.minimize. An iteration will stop
+            when max{|proj g_i | i = 1, ..., n} <= gtol where
+            pg_i is the i-th component of the projected gradient.
+        :param ftol: float
+            parameter passed to scipy.minimize. An iteration stops
+            when (f^k - f^{k+1})/max{|f^k|,|f^{k+1}|,1} <= ftol.
         :return new_theta: array
             new theta that maximises the J1 defined by input theta
         """
         J1_vals, J1_grad_vals = [], []
 
-        def J1_k_neg(theta):
-            self.phi.theta = theta
-            val = -self.compute_J1(X, ZX, ZY)
+        def J1_k_neg(theta_subset):
+            self.phi.theta[theta_inds] = theta_subset
+            # val = -self.compute_J1(X, ZX, ZY)
+            val = -self.compute_J1(X)
             J1_vals.append(-val)
+            # print(-val)
             return val
 
-        def J1_k_grad_neg(theta):
-            self.phi.theta = theta
-            grad_val = -self.compute_J1_grad(X, ZX, ZY)
+        def J1_k_grad_neg(theta_subset):
+            self.phi.theta[theta_inds] = theta_subset
+            # grad_val = -self.compute_J1_grad(X, ZX, ZY)
+            grad_val = -self.compute_J1_grad(X)[theta_inds]
             J1_grad_vals.append(-grad_val)
             return grad_val
 
-        _ = minimize(J1_k_neg, self.phi.theta, method='BFGS', jac=J1_k_grad_neg,
-                     options={'gtol': 1e-4, 'disp': disp})
+        _ = minimize(J1_k_neg, self.phi.theta[theta_inds], method='L-BFGS-B', jac=J1_k_grad_neg,
+                     options={'gtol': gtol, 'ftol': ftol, 'disp': disp})
 
         J1s.append(J1_vals)
         J1_grads.append(J1_grad_vals)
 
-    def plot_loss_curve(self, J1s):
+    def plot_loss_curve(self, J1s, plot_reset_points=True,
+                        endpoints=None, true_theta=None, X=None):
+        """plot of objective function during optimisation
+
+        :param J1s: list of lists
+            returned by self.fit_using_analytic_q. Each inner list
+            contains the fevals computed for a single step (loop) in
+            the EM-type optimisation
+        :param plot_reset_points bool
+            plot vertical line at time-points at each E step of EM algorithm
+        :param endpoints: tuple
+            (start, end) to specify interval over which to plot curve.
+        :param true_theta: array
+            true value of parameters that generated the data (if known).
+            Used to plot value of J1 at the true parameters, which we
+            expect to upper bound the values in J1.
+        :param X: array (n, d)
+            needed to compute objective function at true_theta.
+        :return:
+            fig, ax
+                plot of objective function during optimisation
+        """
         num_fevals_per_step = [len(i) for i in J1s]
         cum_fevals = [sum(num_fevals_per_step[:i + 1]) for i in range(len(num_fevals_per_step))]
-        fig, axs = plt.subplots(1, 1, figsize=(10, 7))
+        fig, ax = plt.subplots(1, 1, figsize=(10, 7))
         J1s = [i for sublist in J1s for i in sublist]
-        t = np.arange(len(J1s))
-        axs.plot(t, J1s, c='k')
-        for i in range(len(cum_fevals)):
-            axs.plot(cum_fevals[i] * np.array([1, 1]), plt.get(axs, 'ylim'), 'r--')
 
-        return fig, axs
+        if endpoints is not None:
+            t = np.arange(endpoints[0], endpoints[1])
+            J1 = J1s[endpoints[0]:endpoints[1]]
+        else:
+            t = np.arange(len(J1s))
+            J1 = J1s
+
+        # plot optimisation curve
+        ax.plot(t, J1, c='k')
+
+        if plot_reset_points:
+            for i in range(len(cum_fevals)):
+                ax.plot(cum_fevals[i] * np.array([1, 1]), np.array([np.min(J1), 0]), 'r--',
+                        label='resetting variational distribution')
+
+        if (true_theta is not None) and (X is not None):
+            current_theta = deepcopy(self.phi.theta)
+            current_nz = deepcopy(self.nz)
+            self.phi.theta, self.q.alpha = true_theta, true_theta
+            self.nz = 100  # increase accuracy of approximation
+            optimal_J1 = self.compute_J1(X)
+            self.phi.theta, self.q.alpha = current_theta, current_theta
+            self.nz = current_nz
+
+            ax.plot((t[0], t[-1]), (optimal_J1, optimal_J1), 'b--',
+                    label='J1 evaluated at true theta')
+
+        # Remove duplicates from the legend
+        handles, labels = ax.get_legend_handles_labels()
+        by_label = OrderedDict(zip(labels, handles))
+        plt.legend(by_label.values(), by_label.keys(), loc='lower right')
+        plt.yticks(np.arange(round(min(J1)) - 1, 1, 1.0))
+        return fig, ax
 
     def __repr__(self):
         return "LatentNCEOptimiser"
@@ -406,7 +497,7 @@ class LatentNCEOptimiserWithAnalyticExpectations:
         return grad
 
     def fit(self, X, theta0, alpha0, disp=True, plot=True, stop_threshold=10**-6,
-            max_num_em_steps=20):
+            max_num_em_steps=20, gtol=1e-4):
         """ Fit the parameters theta to the data X with a variational EM-type algorithm
 
         The algorithm alternates between optimising the model
@@ -434,6 +525,10 @@ class LatentNCEOptimiserWithAnalyticExpectations:
         :param stop_threshold: float
             stop EM-type optimisation when the value of the lower
             bound J1 changes by less than stop_threshold
+        :param gtol: float
+            parameter passed to scipy.minimize. An iteration will stop
+            when max{|proj g_i | i = 1, ..., n} <= gtol where
+            pg_i is the i-th component of the projected gradient.
         :return
             thetas_after_em_step: (?, num_em_steps),
             J1s: list of lists
@@ -444,7 +539,7 @@ class LatentNCEOptimiserWithAnalyticExpectations:
                 single E or M step in the EM-type optimisation
         """
         # initialise parameters
-        self.phi.theta, self.q.alpha = np.array(theta0), np.array(alpha0)
+        self.phi.theta, self.q.alpha = deepcopy(theta0), deepcopy(alpha0)
 
         alphas_after_em_step = [alpha0]
         thetas_after_em_step = [theta0]  # save theta_k after for each EM step
@@ -458,10 +553,10 @@ class LatentNCEOptimiserWithAnalyticExpectations:
             prev_J1 = self.compute_J1(X)
 
             # optimise w.r.t theta
-            self.maximize_J1_wrt_theta(X, J1s, J1_grads, disp)
+            self.maximize_J1_wrt_theta(X, J1s, J1_grads, disp, gtol)
 
             # optimise w.r.t alpha
-            self.maximize_J1_wrt_alpha(X, J1s, J1_grads, disp)
+            self.maximize_J1_wrt_alpha(X, J1s, J1_grads, disp, gtol)
 
             # store results
             alphas_after_em_step.append(self.q.alpha)
@@ -475,7 +570,7 @@ class LatentNCEOptimiserWithAnalyticExpectations:
 
         return np.array(thetas_after_em_step), np.array(alphas_after_em_step), J1s, J1_grads
 
-    def maximize_J1_wrt_theta(self, X, J1s, J1_grads, disp):
+    def maximize_J1_wrt_theta(self, X, J1s, J1_grads, disp, gtol=1e-4):
         """Return theta that maximises J1
 
         :param X: array (n, 1)
@@ -486,6 +581,10 @@ class LatentNCEOptimiserWithAnalyticExpectations:
             list of function evaluations of J1_grad during optimisation
         :param disp:
             display output from scipy.minimize
+        :param gtol: float
+            parameter passed to scipy.minimize. An iteration will stop
+            when max{|proj g_i | i = 1, ..., n} <= gtol where
+            pg_i is the i-th component of the projected gradient.
         :return new_theta: array
             new theta that maximises the J1 defined by input theta
         """
@@ -503,13 +602,13 @@ class LatentNCEOptimiserWithAnalyticExpectations:
             J1_grad_vals.append(-grad_val)
             return grad_val
 
-        _ = minimize(J1_k_neg, self.phi.theta, method='BFGS', jac=J1_k_grad_neg,
-                     options={'gtol': 1e-5, 'disp': disp})
+        _ = minimize(J1_k_neg, self.phi.theta, method='L-BFGS-B', jac=J1_k_grad_neg,
+                     options={'gtol': gtol, 'disp': disp})
 
         J1s.append(J1_vals)
         J1_grads.append(J1_grad_vals)
 
-    def maximize_J1_wrt_alpha(self, X, J1s, J1_grads, disp):
+    def maximize_J1_wrt_alpha(self, X, J1s, J1_grads, disp, gtol=1e-4):
         """Return alpha that maximises J1
 
         :param X: array (n, 1)
@@ -520,6 +619,10 @@ class LatentNCEOptimiserWithAnalyticExpectations:
             list of function evaluations of J1_grad during optimisation
         :param disp:
             display output from scipy.minimize
+        :param gtol: float
+            parameter passed to scipy.minimize. An iteration will stop
+            when max{|proj g_i | i = 1, ..., n} <= gtol where
+            pg_i is the i-th component of the projected gradient.
         :return new_alpha: array
             new alpha that maximises the J1 defined by input alpha
         """
@@ -537,8 +640,8 @@ class LatentNCEOptimiserWithAnalyticExpectations:
             J1_grad_vals.append(-grad_val)
             return grad_val
 
-        _ = minimize(J1_k_neg, self.q.alpha, method='BFGS', jac=J1_k_grad_neg,
-                     options={'gtol': 1e-5, 'disp': disp})
+        _ = minimize(J1_k_neg, self.q.alpha, method='L-BFGS-B', jac=J1_k_grad_neg,
+                     options={'gtol': gtol, 'disp': disp})
 
         J1s.append(J1_vals)
         J1_grads.append(J1_grad_vals)
@@ -649,7 +752,7 @@ class NCEOptimiser:
                                                                   grad.shape)
         return grad
 
-    def fit(self, X, theta0=np.array([0.5]), disp=True, plot=True):
+    def fit(self, X, theta0=np.array([0.5]), disp=True, plot=True, gtol=1e-4):
         """ Fit the parameters of the model to the data X by optimising
         the objective function defined in self.compute_J1(). To do this,
         we use a gradient-based optimiser and define the gradient of J1
@@ -663,6 +766,10 @@ class NCEOptimiser:
             display output from scipy.minimize
         :param plot: bool
             plot optimisation loss curve
+        :param gtol: float
+            parameter passed to scipy.minimize. An iteration will stop
+            when max{|proj g_i | i = 1, ..., n} <= gtol where
+            pg_i is the i-th component of the projected gradient.
         :return
             thetas_after_em_step: (?, num_em_steps),
             J1s: list of lists
@@ -673,23 +780,27 @@ class NCEOptimiser:
                 single step (loop) in the EM-type optimisation
         """
         # initialise parameters
-        self.phi.theta = np.array(theta0)
+        self.phi.theta = deepcopy(theta0)
 
         # optimise w.r.t to theta
-        J1s, J1_grads = self.maximize_J1_wrt_theta(X, disp)
+        J1s, J1_grads = self.maximize_J1_wrt_theta(X, disp, gtol)
 
         if plot:
             self.plot_loss_curve(J1s)
 
         return np.array(J1s), np.array(J1_grads)
 
-    def maximize_J1_wrt_theta(self, X, disp):
+    def maximize_J1_wrt_theta(self, X, disp, gtol=1e-4):
         """Return theta that maximises J1
 
         :param X: array (n, 1)
             data
         :param disp: bool
             display optimisation results for each iteration
+        :param gtol: float
+            parameter passed to scipy.minimize. An iteration will stop
+            when max{|proj g_i | i = 1, ..., n} <= gtol where
+            pg_i is the i-th component of the projected gradient.
         :return J1s: list
             function evaluations during optimisation
                 J1_grads: list
@@ -709,8 +820,8 @@ class NCEOptimiser:
             J1_grads.append(-grad_val)
             return grad_val
 
-        _ = minimize(J1_k_neg, self.phi.theta, method='BFGS', jac=J1_k_grad_neg,
-                     options={'gtol': 1e-5, 'disp': disp})
+        _ = minimize(J1_k_neg, self.phi.theta, method='L-BFGS-B', jac=J1_k_grad_neg,
+                     options={'gtol': gtol, 'disp': disp})
 
         return J1s, J1_grads
 
@@ -786,7 +897,7 @@ class CDOptimiser:
         # todo: make it easy to access biases and non-bias weights separately
         # todo: write a get_learning_rate method using decay
         # initialise parameters
-        self.phi.theta = np.array(theta0)
+        self.phi.theta = deepcopy(theta0)
         thetas = []  # store model params after each gradient step
 
         # shuffle data
