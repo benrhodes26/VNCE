@@ -157,7 +157,7 @@ class LatentNCEOptimiser:
         """Return array (n, )"""
         return 1 + (1/self.nu) * np.mean(self.r(U, Z), axis=0)
 
-    def fit_using_analytic_q(self, theta_inds, X, theta0=np.array([0.5]), disp=True, plot=True,
+    def fit_using_analytic_q(self, X, theta_inds=None, theta0=np.array([0.5]), disp=True, plot=True,
                              stop_threshold=10**-6, max_num_em_steps=20, gtol=1e-4,
                              ftol=1e-4):
         # todo: update second paragraph, currently not true
@@ -171,10 +171,11 @@ class LatentNCEOptimiser:
         then use self.fit, which takes a parametrised q and then optimises
         its variational parameters alpha.
 
-        :param theta_inds: array
-            indices of elements of theta we want to optimise
         :param X: Array of shape (num_data, data_dim)
             data that we want to fit the model to
+        :param theta_inds: array
+            indices of elements of theta we want to optimise. By default
+            this get populated with all indices.
         :param theta0: array of shape (1, )
             initial value of theta used for optimisation
         :param disp: bool
@@ -200,6 +201,9 @@ class LatentNCEOptimiser:
                 each inner list contains the grad fevals computed for a
                 single step (loop) in the EM-type optimisation
         """
+        # by default, optimise all elements of theta
+        if theta_inds is None:
+            theta_inds = np.arange(len(self.phi.theta))
         # initialise parameters
         self.phi.theta, self.q.alpha = deepcopy(theta0), deepcopy(theta0)
 
@@ -214,24 +218,17 @@ class LatentNCEOptimiser:
         prev_J1, current_J1 = -999, -9999  # arbitrary negative numbers
         while np.abs(prev_J1 - current_J1) > stop_threshold \
                 and num_em_steps < max_num_em_steps:
-            # prev_J1 = self.compute_J1(X, ZX, ZY)
             prev_J1 = self.compute_J1(X)
 
             # optimise w.r.t to theta
-            # self.maximize_J1_wrt_theta(X, ZX, ZY, J1s, J1_grads, disp,
-            #                           gtol=gtol, ftol=ftol)
             self.maximize_J1_wrt_theta(theta_inds, X, J1s, J1_grads,
-                                       disp=disp, gtol=gtol, ftol=ftol)
+                                       thetas_after_em_step, disp=disp,
+                                       gtol=gtol, ftol=ftol)
 
             # reset the variational distribution to new posterior
-            # print('resetting variational dist!')
-            self.q.alpha = self.phi.theta
+            self.q.alpha = deepcopy(self.phi.theta)
 
-            # re-sample latent variables from new variational dist
-            # ZX, ZY = self.q.sample(self.nz, X), self.q.sample(self.nz, self.Y)
-            # current_J1 = self.compute_J1(X, ZX, ZY)
             current_J1 = self.compute_J1(X)
-
             # store results
             thetas_after_em_step.append(self.phi.theta)
             num_em_steps += 1
@@ -243,19 +240,14 @@ class LatentNCEOptimiser:
 
 # def maximize_J1_wrt_theta(self, X, ZX, ZY, J1s, J1_grads, disp, gtol=1e-4, ftol=1e-4):
     def maximize_J1_wrt_theta(self, theta_inds,  X, J1s, J1_grads,
-                              disp=True, gtol=1e-4, ftol=1e-4):
+                              thetas_after_em_step, disp=True,
+                              gtol=1e-4, ftol=1e-4):
         """Return theta that maximises J1
 
         :param theta_inds: array
             indices of elements of theta we want to optimise
         :param X: array (n, 1)
             data
-        :param ZX: (N, nz, m)
-            latent variable samples for data x. for each
-            x there are nz samples of shape (m, )
-        :param ZY: (nz, N*nu)
-            latent variable samples for noise y. for each
-            y there are nz samples of shape (m, )
         :param J1s: list
             list of function evaluations of J1 during optimisation
         :param J1_grads: list
@@ -276,7 +268,8 @@ class LatentNCEOptimiser:
 
         def J1_k_neg(theta_subset):
             self.phi.theta[theta_inds] = theta_subset
-            # val = -self.compute_J1(X, ZX, ZY)
+            self.q.alpha[theta_inds] = theta_subset
+            thetas_after_em_step.append(self.q.alpha)
             val = -self.compute_J1(X)
             J1_vals.append(-val)
             # print(-val)
@@ -284,14 +277,17 @@ class LatentNCEOptimiser:
 
         def J1_k_grad_neg(theta_subset):
             self.phi.theta[theta_inds] = theta_subset
-            # grad_val = -self.compute_J1_grad(X, ZX, ZY)
+            self.q.alpha[theta_inds] = theta_subset
             grad_val = -self.compute_J1_grad(X)[theta_inds]
             J1_grad_vals.append(-grad_val)
             return grad_val
 
-        _ = minimize(J1_k_neg, self.phi.theta[theta_inds], method='L-BFGS-B', jac=J1_k_grad_neg,
-                     options={'gtol': gtol, 'ftol': ftol, 'disp': disp})
-
+        res = minimize(J1_k_neg, self.phi.theta[theta_inds], method='CG', jac=J1_k_grad_neg,
+                       options={'gtol': gtol, 'ftol': ftol, 'disp': disp})
+        #res = minimize(J1_k_neg, self.phi.theta[theta_inds], method='Nelder-Mead',
+        #               options={'gtol': gtol, 'ftol': ftol, 'disp': disp})
+        self.phi.theta[theta_inds] = res.x
+        J1_vals.append(self.compute_J1(X))
         J1s.append(J1_vals)
         J1_grads.append(J1_grad_vals)
 
@@ -861,7 +857,7 @@ class CDOptimiser:
         else:
             self.rng = rng
 
-    def fit(self, X, theta0,  num_gibbs_steps, learning_rate, batch_size):
+    def fit(self, X, theta0, num_gibbs_steps, learning_rate, batch_size, num_epochs=10):
         """ Fit the parameters of the model to the data X.
 
         We fit the data by using the contrastive divergence gradient updates:
@@ -891,6 +887,8 @@ class CDOptimiser:
             learning rate for gradient ascent
         :param batch_size: int
             size of a mini-batch
+        :param num_epochs: int
+            number of times we loop through training data
         :return thetas list of array
             values of model parameters (theta) after each gradient step
         """
@@ -898,26 +896,26 @@ class CDOptimiser:
         # todo: write a get_learning_rate method using decay
         # initialise parameters
         self.phi.theta = deepcopy(theta0)
-        thetas = []  # store model params after each gradient step
-
-        # shuffle data
         n = X.shape[0]
-        perm = self.rng.permutation(n)
-        X = X[perm]
-        for i in range(0, n, batch_size):
-            X_batch = X[i:i+batch_size]
-            Z, X_model, Z_model = self.phi.sample_for_contrastive_divergence(
-                X_batch, num_iter=num_gibbs_steps)
+        thetas = []  # store model params after each gradient step
+        for j in range(num_epochs):
+            # shuffle data
+            perm = self.rng.permutation(n)
+            X = X[perm]
+            for i in range(0, n, batch_size):
+                X_batch = X[i:i+batch_size]
+                Z, X_model, Z_model = self.phi.sample_for_contrastive_divergence(
+                    X_batch, num_iter=num_gibbs_steps)
 
-            data_grad = self.phi.grad_log_wrt_params(X_batch, Z)  # (len(theta), 1, n)
-            data_grad = np.mean(data_grad, axis=(1, 2))  # (len(theta), )
+                data_grad = self.phi.grad_log_wrt_params(X_batch, Z)  # (len(theta), 1, n)
+                data_grad = np.mean(data_grad, axis=(1, 2))  # (len(theta), )
 
-            model_grad = self.phi.grad_log_wrt_params(X_model, Z_model)
-            model_grad = np.mean(model_grad, axis=(1, 2))  # (len(theta), )
+                model_grad = self.phi.grad_log_wrt_params(X_model, Z_model)
+                model_grad = np.mean(model_grad, axis=(1, 2))  # (len(theta), )
 
-            grad = data_grad - model_grad  # (len(theta), )
-            self.phi.theta += learning_rate * grad
-            thetas.append(self.phi.theta)
+                grad = data_grad - model_grad  # (len(theta), )
+                self.phi.theta += learning_rate * grad
+                thetas.append(self.phi.theta)
 
         return thetas
 

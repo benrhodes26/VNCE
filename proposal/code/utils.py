@@ -34,3 +34,14 @@ def sigmoid(u):
     :return: array
     """
     return 1/(1 + np.exp(-u))
+
+def get_true_weights(d, m):
+    true_W = np.zeros((d+1, m+1))
+    num_chosen = 10
+    for i in range(m+1):
+        chosen = rnd.randint(0, d+1, num_chosen)
+        others = [i for i in range(d+1) if i not in chosen]
+        true_W[:, i][chosen] = rnd.uniform(0.5, 1, num_chosen)
+        true_W[:, i][others] = rnd.uniform(-0.1, 0.1, len(others))
+    true_W[0, 0] = 0
+    return true_W

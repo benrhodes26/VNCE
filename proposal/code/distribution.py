@@ -6,7 +6,6 @@ from abc import ABCMeta, abstractmethod
 from numpy import random as rnd
 from pandas import DataFrame
 from pomegranate import BayesianNetwork
-from pyBN import chow_liu, mle, random_sample, Factor
 from scipy.stats import norm, multivariate_normal
 from utils import sigmoid
 
@@ -194,10 +193,7 @@ class RBMLatentPosterior(Distribution):
     # todo: write docstring for class
 
     def __init__(self, W):
-        """Init bernoulli distribution given by
-        the posterior over the latent binary variable
-        in a mixture of 2 gaussians. See __call__
-        method for exact formula.
+        """Initialise P(z|x) for restricted boltzmann machine
 
         :param W: array (d+1, m+1)
             Weight matrix for restricted boltzmann machine.
@@ -215,7 +211,7 @@ class RBMLatentPosterior(Distribution):
         :return: array (n, nz)
             probability of latent variables given data
         """
-        p1 = self.calculate_p(U)  # (n, d+1)
+        p1 = self.calculate_p(U)  # (n, m)
 
         posteriors = (Z == 0)*(1 - p1) + (Z == 1)*p1  # (nz, n, m)
         posterior = np.product(posteriors, axis=-1)  # (nz, n)
@@ -234,7 +230,7 @@ class RBMLatentPosterior(Distribution):
         return U
 
     def calculate_p(self, U):
-        """Return probability that binary latent variable is 1
+        """probability that binary latents equal 1, for each datapoint
         :param U: array (n, d)
             n (visible) data points that we condition on
         :return: array (n, m)
@@ -378,18 +374,17 @@ class ChowLiuTree(Distribution):
     def __init__(self, X):
         """initialise tree structure and estimate the model parameters
 
-        NOTE: this implementation is currently hacky, combining two
-        different bayesian network libraries, since I couldn't find
-        one library that could both evaluate the probability of a
-        set of datapoints AND produce samples.
+        NOTE: this implementation only works for binary vector data. This
+        is because I had to write the sample() method from scratch, since
+        pomegranate has yet to implement this feature.
+
         :param X: array (n, d)
             data used to construct tree
         """
-        self.pybn_model = chow_liu(X)
-        mle.mle_fast(self.pybn_model, DataFrame(X))
-        self.tree_structure = self.get_tree_structure()
-        self.pomegranate_model = BayesianNetwork().from_structure(
-            X, self.tree_structure)
+        bn = BayesianNetwork()
+        self.model = bn.from_samples(X, algorithm='chow-liu')
+        self.child_dict, self.parent_dict = self.get_children_and_parent_dicts()
+        self.top_order = self.get_topological_ordering()
 
     def __call__(self, U):
         """
@@ -398,7 +393,7 @@ class ChowLiuTree(Distribution):
         :return array of shape (n, )
             probability of each input datapoint
         """
-        return self.pomegranate_model.probability(U)
+        return self.model.probability(U)
 
     def sample(self, n):
         """sample n datapoints from the distribution
@@ -408,11 +403,55 @@ class ChowLiuTree(Distribution):
         :return: array (n, )
             data sampled from the distribution
         """
-        return random_sample(self.pybn_model, n)
+        num_nodes = self.model.state_count()
+        sample = np.zeros((n, num_nodes))
+        node_to_parent_id = {c.name: int(p.name) for c, p in self.parent_dict.items()}
 
-    def get_tree_structure(self):
-        tree_structure = []
-        for v in sorted(self.pybn_model.V):
-            parents = tuple(self.pybn_model.F[v]['parents'])
-            tree_structure.append(parents)
-        return tuple(tree_structure)
+        for i in range(n):
+            for node in self.top_order:
+                node_id = int(node.name)
+                if node not in self.parent_dict.keys():
+                    if 1 in node.distribution.parameters[0]:
+                        sample[i, node_id] = rnd.uniform(0, 1) < node.distribution.parameters[0][1]
+                    else:
+                        sample[i, node_id] = rnd.uniform(0, 1) > node.distribution.parameters[0][0]
+                else:
+                    cpt = np.array(node.distribution.parameters[0])
+                    parent_id = node_to_parent_id[node.name]
+                    parent_sample_val = sample[i, parent_id]
+                    sub_table = cpt[cpt[:, 0] == parent_sample_val]
+                    if sub_table[sub_table[:, 1] == 1].size != 0:
+                        sample[i, node_id] = rnd.uniform(0, 1) < sub_table[sub_table[:, 1] == 1][0, -1]
+                    else:
+                        sample[i, node_id] = rnd.uniform(0, 1) > sub_table[sub_table[:, 1] == 0][0, -1]
+
+        return sample
+
+    def get_topological_ordering(self):
+        """Get topological ordering of variables in graph"""
+        topological_order = []
+        top_nodes = [v for v in self.model.states if v not in self.parent_dict.keys()]
+        current_generation = top_nodes
+        keep_going = True
+        while keep_going:
+            topological_order.extend(current_generation)
+
+            next_generation = []
+            for node in current_generation:
+                if node in self.child_dict.keys():
+                    next_generation.extend(self.child_dict[node])
+
+            current_generation = next_generation
+            if not current_generation:
+                keep_going = False
+
+        return topological_order
+
+    def get_children_and_parent_dicts(self):
+        node_to_children_dict = {}
+        node_to_parents_dict = {}
+        for e in self.model.edges:
+            node_to_children_dict[e[0]] = node_to_children_dict.get(e[0], []) + [e[1]]
+            node_to_parents_dict[e[1]] = e[0]
+
+        return node_to_children_dict, node_to_parents_dict
