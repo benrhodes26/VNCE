@@ -435,7 +435,6 @@ class ChowLiuTree(Distribution):
         keep_going = True
         while keep_going:
             topological_order.extend(current_generation)
-
             next_generation = []
             for node in current_generation:
                 if node in self.child_dict.keys():
