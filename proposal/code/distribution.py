@@ -9,6 +9,7 @@ from pomegranate import BayesianNetwork
 from scipy.stats import norm, multivariate_normal
 from utils import sigmoid
 
+DEFAULT_SEED = 1083463236
 
 # noinspection PyPep8Naming
 class Distribution(metaclass=ABCMeta):
@@ -192,7 +193,7 @@ class MixtureOfTwoGaussianBernoulliPosterior(Distribution):
 class RBMLatentPosterior(Distribution):
     # todo: write docstring for class
 
-    def __init__(self, W):
+    def __init__(self, W, rng=None):
         """Initialise P(z|x) for restricted boltzmann machine
 
         :param W: array (d+1, m+1)
@@ -201,6 +202,10 @@ class RBMLatentPosterior(Distribution):
         """
         self.W_shape = W.shape  # (d+1, m+1)
         alpha = W.reshape(-1)
+        if not rng:
+            self.rng = np.random.RandomState(DEFAULT_SEED)
+        else:
+            self.rng = rng
         super().__init__(alpha)
 
     def __call__(self, Z, U):
@@ -259,7 +264,7 @@ class RBMLatentPosterior(Distribution):
         p1 = self.calculate_p(U)  # (n, m)
         Z_shape = (nz, ) + p1.shape
 
-        Z = rnd.uniform(0, 1, Z_shape) < p1  # (nz, n, m)
+        Z = self.rng.uniform(0, 1, Z_shape) < p1  # (nz, n, m)
 
         return Z.astype(int)
 
@@ -298,12 +303,16 @@ class GaussianNoise(Distribution):
 class MultivariateBernoulliNoise(Distribution):
     # todo: specify probability of each configuration of a d-length
     # vector of binary variables and incorporate covariance structure of data
-    def __init__(self, marginals):
+    def __init__(self, marginals, rng=None):
         """
         :param marginals: array (d,)
             probabilities that each of d binary random variables equal 1
         """
         self.p = marginals
+        if not rng:
+            self.rng = np.random.RandomState(DEFAULT_SEED)
+        else:
+            self.rng = rng
 
     def __call__(self, U):
         """evaluate probability of binary data U
@@ -321,7 +330,7 @@ class MultivariateBernoulliNoise(Distribution):
             number of noise samples used in NCE
         :return: array (num_noise_samples, d)
         """
-        return rnd.uniform(0, 1, (num_noise_samples, len(self.p))) < self.p
+        return self.rng.uniform(0, 1, (num_noise_samples, len(self.p))) < self.p
 
 
 # noinspection PyPep8Naming,PyMissingConstructor
@@ -371,7 +380,7 @@ class EmpiricalNoise(Distribution):
 # noinspection PyMissingConstructor
 class ChowLiuTree(Distribution):
 
-    def __init__(self, X):
+    def __init__(self, X, rng=None):
         """initialise tree structure and estimate the model parameters
 
         NOTE: this implementation only works for binary vector data. This
@@ -385,6 +394,10 @@ class ChowLiuTree(Distribution):
         self.model = bn.from_samples(X, algorithm='chow-liu')
         self.child_dict, self.parent_dict = self.get_children_and_parent_dicts()
         self.top_order = self.get_topological_ordering()
+        if not rng:
+            self.rng = np.random.RandomState(DEFAULT_SEED)
+        else:
+            self.rng = rng
 
     def __call__(self, U):
         """
@@ -412,18 +425,18 @@ class ChowLiuTree(Distribution):
                 node_id = int(node.name)
                 if node not in self.parent_dict.keys():
                     if 1 in node.distribution.parameters[0]:
-                        sample[i, node_id] = rnd.uniform(0, 1) < node.distribution.parameters[0][1]
+                        sample[i, node_id] = self.rng.uniform(0, 1) < node.distribution.parameters[0][1]
                     else:
-                        sample[i, node_id] = rnd.uniform(0, 1) > node.distribution.parameters[0][0]
+                        sample[i, node_id] = self.rng.uniform(0, 1) > node.distribution.parameters[0][0]
                 else:
                     cpt = np.array(node.distribution.parameters[0])
                     parent_id = node_to_parent_id[node.name]
                     parent_sample_val = sample[i, parent_id]
                     sub_table = cpt[cpt[:, 0] == parent_sample_val]
                     if sub_table[sub_table[:, 1] == 1].size != 0:
-                        sample[i, node_id] = rnd.uniform(0, 1) < sub_table[sub_table[:, 1] == 1][0, -1]
+                        sample[i, node_id] = self.rng.uniform(0, 1) < sub_table[sub_table[:, 1] == 1][0, -1]
                     else:
-                        sample[i, node_id] = rnd.uniform(0, 1) > sub_table[sub_table[:, 1] == 0][0, -1]
+                        sample[i, node_id] = self.rng.uniform(0, 1) > sub_table[sub_table[:, 1] == 0][0, -1]
 
         return sample
 

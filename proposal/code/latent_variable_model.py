@@ -10,7 +10,7 @@ from scipy.stats import norm
 from sklearn.neighbors import KernelDensity as kd
 from utils import validate_shape, sigmoid
 # noinspection PyPep8Naming
-
+DEFAULT_SEED = 1083463236
 
 # noinspection PyPep8Naming
 class LatentVarModel(metaclass=ABCMeta):
@@ -350,7 +350,7 @@ class RestrictedBoltzmannMachine(LatentVarModel):
     a, b and W are all weights, u is the visible data and z is the latent vector.
     """
 
-    def __init__(self, W):
+    def __init__(self, W, rng=None):
         """Initialise the parameters of the RBM.
 
         Typically, the formula of the RMB is given as:
@@ -367,6 +367,10 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         self.W_shape = W.shape  # (d+1, m+1)
         self.norm_const = None
         theta = W.reshape(-1)
+        if not rng:
+            self.rng = np.random.RandomState(DEFAULT_SEED)
+        else:
+            self.rng = rng
         super().__init__(theta)
 
     def __call__(self, U, Z, normalise=False, reset_norm_const=True):
@@ -383,6 +387,8 @@ class RestrictedBoltzmannMachine(LatentVarModel):
             parameters. If false, use already saved norm const. Note: this
             argument only matters if normalise=True.
         :return array (nz, n)
+            probability of each datapoint & its corresponding latent under
+            the joint distribution of the model
         """
         W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
 
@@ -478,13 +484,13 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         :return X:  array(n, d)
         """
         d, m = np.array(self.W_shape) - 1
-        Z = rnd.uniform(0, 1, (n, m)) < 0.5  # initialise gibbs sample
+        Z = self.rng.uniform(0, 1, (n, m)) < 0.5  # initialise gibbs sample
 
         for _ in range(num_iter):
             pu_given_z = self.p_visibles_given_latents(Z)  # (n, d)
-            U = rnd.uniform(0, 1, pu_given_z.shape) < pu_given_z  # (n, d)
+            U = self.rng.uniform(0, 1, pu_given_z.shape) < pu_given_z  # (n, d)
             pz_given_u = self.p_latents_given_visibles(U)  # (n, m)
-            Z = rnd.uniform(0, 1, pz_given_u.shape) < pz_given_u  # (n, m)
+            Z = self.rng.uniform(0, 1, pz_given_u.shape) < pz_given_u  # (n, m)
 
         return U.astype(int), Z.astype(int)
 
@@ -511,15 +517,15 @@ class RestrictedBoltzmannMachine(LatentVarModel):
                     expected value of latents after k gibbs steps
         """
         p_z0_given_u0 = self.p_latents_given_visibles(U_0)  # (n, m)
-        Z_0 = rnd.uniform(0, 1, p_z0_given_u0.shape) < p_z0_given_u0  # (n, m)
+        Z_0 = self.rng.uniform(0, 1, p_z0_given_u0.shape) < p_z0_given_u0  # (n, m)
 
         Z = Z_0
         for i in range(num_iter):
             p_u_given_z = self.p_visibles_given_latents(Z)  # (n, d)
-            U = rnd.uniform(0, 1, p_u_given_z.shape) < p_u_given_z  # (n, d)
+            U = self.rng.uniform(0, 1, p_u_given_z.shape) < p_u_given_z  # (n, d)
 
             p_z_given_u = self.p_latents_given_visibles(U)  # (n, m)
-            Z = rnd.uniform(0, 1, p_z_given_u.shape) < p_z_given_u  # (n, m)
+            Z = self.rng.uniform(0, 1, p_z_given_u.shape) < p_z_given_u  # (n, m)
 
         return p_z0_given_u0, U.astype(int), p_z_given_u
 

@@ -13,7 +13,7 @@ from numpy import random as rnd
 from scipy.optimize import minimize
 from utils import validate_shape, average_log_likelihood
 
-DEFAULT_SEED = 22012018
+DEFAULT_SEED = 1083463236
 
 
 # noinspection PyMethodMayBeStatic,PyPep8Naming,PyTypeChecker
@@ -78,7 +78,7 @@ class CDOptimiser:
         :return thetas list of array
             values of model parameters (theta) after each gradient step
         """
-        # todo: make it easy to access biases and non-bias weights separately
+        # todo: make it easy to access biases and non-bias weights separately?
         # todo: write a get_learning_rate method using decay
         # initialise parameters
         self.phi.theta = deepcopy(theta0)
@@ -102,7 +102,7 @@ class CDOptimiser:
 
                 grad = data_grad - model_grad  # (len(theta), )
                 self.phi.theta += learning_rate * grad
-                self.thetas.append(self.phi.theta)
+                self.thetas.append(deepcopy(self.phi.theta))
                 self.times.append(time.time())
 
         self.thetas = np.array(self.thetas)
@@ -111,18 +111,24 @@ class CDOptimiser:
 
         return np.array(self.thetas), np.array(self.times)
 
-    def av_log_like_for_each_iter(self, X):
+    def av_log_like_for_each_iter(self, X, maxiter=None):
         """Calculate average log-likelihood at each iteration
 
         NOTE: this method can only be applied to small models, where
         computing the partition function is not too costly
         """
-        t = len(self.times)
-        av_log_likelihoods = np.zeros(t)
-        for i in range(t):
+        theta = deepcopy(self.phi.theta)
+        if maxiter is None:
+            maxiter = len(self.times)
+        else:
+            maxiter = min(maxiter, len(self.times))
+
+        av_log_likelihoods = np.zeros(maxiter)
+        for i in np.arange(0, maxiter):
             self.phi.theta = self.thetas[i]
             av_log_likelihoods[i] = average_log_likelihood(self.phi, X)
 
+        self.phi.theta = theta  # reset theta to its original value
         return av_log_likelihoods
 
     def __repr__(self):

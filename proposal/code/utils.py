@@ -1,5 +1,5 @@
 """ Module containing useful functions for experimenting with
-the latent NCE code
+the latent NCE code. In particular, multiple plotting functions.
 """
 import numpy as np
 from bisect import bisect_left
@@ -94,26 +94,26 @@ def plot_rbm_parameters(params, titles, d, m, with_bias=False, figsize=(15, 25))
     return fig
 
 
-def plot_rbm_log_likelihood_training_curves(lnce_ll, cd_ll, lnce_times, cd_times,
-                                            init_ll=None, true_ll=None, end=None):
-    """plot log-likelihood training curves for latent nce and cd applied to rbm"""
-    if end:
-        lnce_i = takeClosest(lnce_times, end)
-        lnce_times = lnce_times[:lnce_i]
-        lnce_ll = lnce_ll[:lnce_i]
-        cd_i = takeClosest(cd_times, end)
-        cd_times = cd_times[:cd_i]
-        cd_ll = cd_ll[:cd_i]
+def plot_log_likelihood_training_curves(training_curves, static_lines):
+    """plot log-likelihood training curves
 
+    :param training_curves: list of lists
+        each inner list is of the form: [times, log-likelihoods, label]
+        where times & log-likelihoods are arrays for plotting
+    :param static_lines: list of lists
+        each inner list is of the form [log-likelihood, label] where
+        log-likelihood is a single value that will plotted as a
+        horizontal line
+    :param maxiter: int
+        index of final time in seconds to plot on x-axis
+    :param fig_ax: tuple
+        figure, axes
+    """
     fig, ax = plt.subplots(1, 1, figsize=(10, 7))
-    ax.plot(lnce_times, lnce_ll, label='Latent NCE')
-    ax.plot(cd_times, cd_ll, label='CD')
-    if init_ll is not None:
-            ax.plot(plt.get(ax, 'xlim'), (init_ll, init_ll),
-                    'r--', label='initial model')
-    if true_ll is not None:
-        ax.plot(plt.get(ax, 'xlim'), (true_ll, true_ll),
-                'b--', label='True distribution')
+    for triple in training_curves:
+        ax.plot(triple[0], triple[1], label=triple[2])
+    for pair in static_lines:
+        ax.plot(plt.get(ax, 'xlim'), (pair[0], pair[0]), label=pair[1])
     ax.set_xlabel('time (seconds)', fontsize=16)
     ax.set_ylabel('log likelihood', fontsize=16)
     ax.legend()
@@ -126,35 +126,36 @@ def average_log_likelihood(model, X):
     return np.mean(np.log(likelihoods))
 
 
-def rescale_cd_times(lnce_times, cd_times):
-    """get cd timings on comparable scale (by default they are more freq)"""
-    new_cd_time_ids = []
+def rescale_times(times1, times2):
+    """make the resolution of the second array of times match the first array"""
+    times2_new_ids = []
     # extract the indices for those elements of cd_times closest to those in lnce_times
-    for i, theta in enumerate(lnce_times):
-        if theta > cd_times[-1]:
+    for i, theta in enumerate(times1):
+        if theta > times2[-1]:
             break
         else:
-            new_cd_time_ids.append(takeClosest(cd_times, theta))
+            times2_new_ids.append(takeClosest(times2, theta))
 
-    new_cd_times = cd_times[new_cd_time_ids]
+    times2_new = times2[times2_new_ids]
     # if cd lasted longer, we need to get the remaining time ids
-    cd_longer = cd_times[-1] > lnce_times[-1]
+    cd_longer = times2[-1] > times1[-1]
     if cd_longer:
-        gaps = [new_cd_times[i+1] - new_cd_times[i] for i in range(len(new_cd_times) - 1)]
+        gaps = [times2_new[i+1] - times2_new[i] for i in range(len(times2_new) - 1)]
         av_gap = np.mean(np.array(gaps))
-        remaining_duration = cd_times[-1] - new_cd_times[-1]
-        remaining_time_ids = [takeClosest(cd_times, new_cd_times[-1] + av_gap*i)
+        remaining_duration = times2[-1] - times2_new[-1]
+        remaining_time_ids = [takeClosest(times2, times2_new[-1] + av_gap*i)
                               for i in range(int(remaining_duration / av_gap))]
-        new_cd_time_ids.extend(remaining_time_ids)
-        new_cd_times = np.concatenate((new_cd_times, cd_times[remaining_time_ids]))
+        times2_new_ids.extend(remaining_time_ids)
+        times2_new = np.concatenate((times2_new, times2[remaining_time_ids]))
 
-    return new_cd_times, new_cd_time_ids
+    return times2_new, times2_new_ids
 
 
 def takeClosest(myList, myNumber):
     """Get index of element closest to myNumber, but smaller than it
 
     If myNumber is smaller than all elements, return 0.
+
     :param myList: List
     :param myNumber: float
     :return closest element : float

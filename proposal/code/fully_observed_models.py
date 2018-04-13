@@ -3,10 +3,13 @@
 import numpy as np
 
 from abc import ABCMeta, abstractmethod
+from itertools import product
 from numpy import random as rnd
 from matplotlib import pyplot as plt
 from scipy.stats import norm
 from sklearn.neighbors import KernelDensity as kd
+from utils import sigmoid, validate_shape
+DEFAULT_SEED = 1083463236
 
 
 # noinspection PyPep8Naming
@@ -91,11 +94,11 @@ class SumOfTwoUnnormalisedGaussians(Model):
         return a*(term_1 + term_2)
 
     def grad_log_wrt_params(self, U):
-        """ Nabla_theta(log(phi(x,z; theta))) where phi is the unnormalised model
+        """ Nabla_theta(log(phi(u; theta))) where phi is the unnormalised model
 
         :param U: array (n, 1)
              either data or noise for NCE
-        :return grad: array (len(theta)=2, nz, n)
+        :return grad: array (len(theta)=2, n)
         """
         n = U.shape[0]
         grad = np.zeros((len(self.theta), n))
@@ -164,3 +167,136 @@ class SumOfTwoUnnormalisedGaussians(Model):
 
         plt.legend()
         plt.grid()
+
+
+class VisibleRestrictedBoltzmannMachine(Model):
+
+    def __init__(self, W, rng=None):
+        """RBM with hidden units summed out
+
+        The sum over the hidden states of an RBM contains
+        2^m terms. However, this sum can be broken into
+        a product of sums over each hidden unit, which can
+        be computed in O(m) time, which is what we do here.
+
+        :param W: array (d+1, m+1)
+            Weight matrix. d=num_visibles, m=num_hiddens
+        """
+        if not rng:
+            self.rng = np.random.RandomState(DEFAULT_SEED)
+        else:
+            self.rng = rng
+
+        self.norm_const = None
+        self.W_shape = W.shape  # (d+1, m+1)
+        super().__init__(W.reshape(-1))
+
+    def __call__(self, U,  normalise=False, reset_norm_const=True):
+        """ Evaluate model for each data point U[i, :]
+
+        :param U: array (n, d)
+             either data or noise for NCE
+        :return array (n, )
+            probability of each datapoint under the model
+        :param normalise: bool
+            if true, first normalise the distribution.
+        :param reset_norm_const: bool
+            if True, recalculate the normalisation constant using current
+            parameters. If false, use already saved norm const. Note: this
+            argument only matters if normalise=True.
+        :return: array (n, )
+            probability of each datapoint under the model
+        """
+        W = self.theta.reshape(self.W_shape)
+        d, m = np.array(W.shape) - 1
+        U = self.add_bias_terms(U)
+        uW = np.dot(U, W)  # (n, m+1)
+        exp_uW = np.exp(uW)
+        exp_uW += np.concatenate((np.zeros((len(U), 1)), np.ones((len(U), m))), axis=1)
+        val = np.product(exp_uW, axis=1)  # (n, )
+        if normalise:
+            if (not self.norm_const) or reset_norm_const:
+                self.reset_norm_const()
+            val /= self.norm_const
+
+        return val
+
+    def grad_log_wrt_params(self, U):
+        """ Nabla_theta(log(phi(u; theta))) where phi is the unnormalised model
+
+        :param U: array (n, d)
+             either data or noise for NCE
+        :return grad: array (len(theta), n)
+        """
+        W = self.theta.reshape(self.W_shape)
+        d_add_1, m_add_1 = np.array(W.shape)
+        n = len(U)
+        U = self.add_bias_terms(U)
+
+        W_1 = W[:, 1:]  # (d+1, m)
+        W_2 = sigmoid(np.dot(U, W_1))  # (n, m)
+        W_3 = np.concatenate((np.ones((n, 1)), W_2), axis=1)  # (n, m+1)
+
+        U = np.repeat(U, m_add_1, axis=-1)  # (n, [d+1]*[m+1])
+        W_4 = np.tile(W_3, d_add_1)  # (n, [d+1]*[m+1])
+
+        grad = U * W_4
+        grad = grad.T  # ([d+1]*[m+1], n)
+        validate_shape(grad.shape, self.theta_shape + (n, ))
+
+        return grad
+
+    def add_bias_terms(self, V):
+        """prepend 1s along final dimension
+        :param V: array (..., k)
+        :return: array (..., k+1)
+        """
+        # add bias terms
+        V_bias = np.ones(V.shape[:-1] + (1, ))
+        V = np.concatenate((V_bias, V), axis=-1)
+        return V
+
+    def reset_norm_const(self):
+        """Reset normalisation constant using current theta"""
+        W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
+        d, m = W.shape[0] - 1, W.shape[1] - 1
+        assert d*(2**m) <= 10**7, "Calculating the normalisation" \
+            "constant has O(d 2**m) cost. Assertion raised since d*2^m " \
+            "equal to {}, which exceeds the current limit of 10^7,".format(d*(2**m))
+
+        W_times_all_latents = self.get_z_marginalization_matrix(W)  # (d+1, 2**m)
+        W_times_all_latents = np.exp(W_times_all_latents)
+        W_times_all_latents += np.concatenate((np.zeros((1, 2**m)),
+                                               np.ones((d, 2**m))), axis=0)
+        self.norm_const = np.sum(np.product(W_times_all_latents, axis=0))
+
+    def get_z_marginalization_matrix(self, W):
+        """Stack each of the 2**m possible binary latent vectors into a
+        (m+1, 2**m) matrix Z, and then return the matrix multiply WZ
+
+        :param W: array (d+1, m+1)
+            weight matrix of RBM
+        :return: array (d+1, 2**m)
+            WZ, where Z contains all possible m-length binary vectors
+        """
+        m = W.shape[1] - 1
+        Z = self.get_all_binary_vectors(m)  # (2**m, m)
+        Z = self.add_bias_terms(Z)  # (2**m, m+1)
+        Wz = np.dot(W, Z.T)  # (d+1, 2**m)
+
+        return Wz
+
+    def get_all_binary_vectors(self, k):
+        """Return matrix of all k-length binary vectors
+
+        :param k: int
+        :return: array (2**k, k)
+        """
+        assert k <= 20, "Won't construct all binary vectors with dimension {}. " \
+            "maximum dimension is 20, since this operation has O(2**k) cost".format(k)
+
+        binary_pairs = [[0, 1] for _ in range(k)]
+        all_binary_vectors = np.array(list(product(*binary_pairs)))  # (2**k, k)
+
+        return all_binary_vectors
+

@@ -13,8 +13,6 @@ from numpy import random as rnd
 from scipy.optimize import minimize
 from utils import validate_shape
 
-DEFAULT_SEED = 22012018
-
 
 # noinspection PyMethodMayBeStatic,PyPep8Naming,PyTypeChecker
 class NCEOptimiser:
@@ -24,18 +22,16 @@ class NCEOptimiser:
     This class wraps together the NCE objective function, its gradients with respect
     to the parameters of the unnormalised model and a method for performing the
     optimisation: self.fit().
-
     """
-    def __init__(self, model, noise, sample_size, nu=1, eps=1e-15):
+    def __init__(self, model, noise, sample_size, nu=1, eps=1e-15, rng=None):
         """ Initialise unnormalised model and noise distribution
 
-        :param model: LatentVariableModel
+        :param model: FullyObservedModel
             unnormalised model whose parameters theta we want to optimise.
-            Has arguments (U, theta) where:
-            - U is (n, d) array of data
+            see fully_observed_models.py for examples.
         :param noise: Distribution
-            noise distribution required for NCE. Has argument U where:
-            - U is (n*nu, d) array of noise
+            noise distribution required for NCE.
+            see distribution.py for examples
         :param nu: ratio of noise to model samples
         :param eps: small constant needed to avoid division by zero
         """
@@ -45,6 +41,9 @@ class NCEOptimiser:
         self.sample_size = sample_size
         self.eps = eps
         self.Y = self.pn.sample(int(sample_size * nu))  # generate noise
+        self.thetas = []  # for storing values of parameters during optimisation
+        self.Js = []  # for storing values of objective function during optimisation
+        self.times = []  # seconds spent to reach each iteration during optimisation
 
     def h(self, U):
         """ Compute log(phi(U)) - log(pn(U).
@@ -55,8 +54,8 @@ class NCEOptimiser:
         """
         return np.log(self.phi(U)) - np.log(self.pn(U))
 
-    def compute_J1(self, X):
-        """Return MC estimate of Lower bound of NCE objective
+    def compute_J(self, X):
+        """Return value of objective at current parameters
 
         :param X: array (N, d)
             data sample we are training our model on
@@ -73,8 +72,8 @@ class NCEOptimiser:
 
         return first_term + second_term
 
-    def compute_J1_grad(self, X):
-        """Computes J1_grad w.r.t theta using Monte-Carlo
+    def compute_J_grad(self, X):
+        """Computes the NCE objective function, J.
 
         :param X: array (N, d)
             data sample we are training our model on.
@@ -103,11 +102,12 @@ class NCEOptimiser:
                                                                   grad.shape)
         return grad
 
-    def fit(self, X, theta0=np.array([0.5]), disp=True, plot=True, gtol=1e-4):
-        """ Fit the parameters of the model to the data X by optimising
-        the objective function defined in self.compute_J1(). To do this,
-        we use a gradient-based optimiser and define the gradient of J1
-        with respect to its parameters theta in self.compute_J1_grad().
+    def fit(self, X, theta0=np.array([0.5]), disp=True, plot=True, gtol=1e-4, ftol=1e-9, maxiter=100):
+        """ Fit the parameters of the model to the data X
+
+        optimise the objective function defined in self.compute_J().
+        To do this, we use a gradient-based optimiser and define the gradient of J
+        with respect to its parameters theta in self.compute_J_grad().
 
         :param X: Array of shape (num_data, data_dim)
             data that we want to fit the model to
@@ -122,26 +122,33 @@ class NCEOptimiser:
             when max{|proj g_i | i = 1, ..., n} <= gtol where
             pg_i is the i-th component of the projected gradient.
         :return
-            thetas_after_em_step: (?, num_em_steps),
-            J1s: list of lists
-                each inner list contains the fevals computed for a
-                single step (loop) in the EM-type optimisation
-            J1_grads: list of lists
-                each inner list contains the grad fevals computed for a
-                single step (loop) in the EM-type optimisation
+            thetas_after_em_step: array
+                values of parameters during optimisation
+            Js: array
+                values of objective function during optimisation
+            times: array
+                ith element is time until ith iteration in seconds
         """
         # initialise parameters
         self.phi.theta = deepcopy(theta0)
+        self.thetas.append(deepcopy(theta0))
+        self.Js.append(self.compute_J(X))
+        self.times.append(time.time())
 
         # optimise w.r.t to theta
-        J1s, J1_grads = self.maximize_J1_wrt_theta(X, disp, gtol)
+        self.maximize_J1_wrt_theta(X, disp, gtol=gtol, ftol=ftol, maxiter=maxiter)
 
         if plot:
-            self.plot_loss_curve(J1s)
+            self.plot_loss_curve()
 
-        return np.array(J1s), np.array(J1_grads)
+        self.thetas = np.array(self.thetas)
+        self.Js = np.array(self.Js)
+        self.times = np.array(self.times)
+        self.times -= self.times[0]  # count seconds from 0
 
-    def maximize_J1_wrt_theta(self, X, disp, gtol=1e-4):
+        return np.array(self.thetas), np.array(self.Js), np.array(self.times)
+
+    def maximize_J1_wrt_theta(self, X, disp, gtol=1e-4, ftol=1e-9, maxiter=100):
         """Return theta that maximises J1
 
         :param X: array (n, 1)
@@ -152,36 +159,61 @@ class NCEOptimiser:
             parameter passed to scipy.minimize. An iteration will stop
             when max{|proj g_i | i = 1, ..., n} <= gtol where
             pg_i is the i-th component of the projected gradient.
-        :return J1s: list
-            function evaluations during optimisation
-                J1_grads: list
-            gradient evaluations during optimisation
         """
-        J1s, J1_grads = [], []
+        thetas, Js, times = [], [], []
+
+        def callback(_):
+            times.append(time.time())
+            thetas.append(deepcopy(self.phi.theta))
+            Js.append(self.compute_J(X))
 
         def J1_k_neg(theta):
             self.phi.theta = theta
-            val = -self.compute_J1(X)
-            J1s.append(-val)
-            return val
+            return -self.compute_J(X)
 
         def J1_k_grad_neg(theta):
             self.phi.theta = theta
-            grad_val = -self.compute_J1_grad(X)
-            J1_grads.append(-grad_val)
-            return grad_val
+            return -self.compute_J_grad(X)
 
         _ = minimize(J1_k_neg, self.phi.theta, method='L-BFGS-B', jac=J1_k_grad_neg,
-                     options={'gtol': gtol, 'disp': disp})
+                     callback=callback, options={'ftol': ftol, 'gtol': gtol, 'maxiter': maxiter, 'disp': disp})
 
-        return J1s, J1_grads
+        self.thetas.extend(thetas)
+        self.Js.extend(Js)
+        self.times.extend(times)
 
-    def plot_loss_curve(self, J1s):
+    def plot_loss_curve(self):
         fig, axs = plt.subplots(1, 1, figsize=(10, 7))
-        t = np.arange(len(J1s))
-        axs.plot(t, J1s, c='k')
+        axs.plot(self.times, self.Js, c='k')
 
         return fig, axs
+
+    def av_log_like_for_each_iter(self, X, maxiter=None):
+        """Calculate average log-likelihood at each iteration
+
+        NOTE: this method can only be applied to small models, where
+        computing the partition function is not too costly
+        """
+        theta = deepcopy(self.phi.theta)
+        if maxiter is None:
+            maxiter = len(self.times)
+        else:
+            maxiter = min(maxiter, len(self.times))
+
+        av_log_likelihoods = np.zeros(maxiter)
+        for i in np.arange(0, maxiter):
+            self.phi.theta = self.thetas[i]
+            likelihoods = self.phi(X, normalise=True)
+            av_log_likelihoods[i] = np.mean(np.log(likelihoods))
+
+        self.phi.theta = theta  # reset theta to its original value
+
+        return av_log_likelihoods
+
+    def reduce_optimisation_results(self, time_step_size):
+        self.times = self.times[::time_step_size]
+        self.Js = self.Js[::time_step_size]
+        self.thetas = self.thetas[::time_step_size]
 
     def __repr__(self):
         return "NCEOptimiser"
