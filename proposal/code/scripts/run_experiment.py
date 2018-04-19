@@ -86,12 +86,12 @@ parser.set_defaults(compute_log_like=True)
 parser.add_argument('--num_log_like_steps', type=int, default=5, help='Number of time-steps for which we calculate log-likelihoods')
 parser.add_argument('--separate_terms', dest='separate_terms', action='store_true', help='separate the two terms that make up J1/J objective functions')
 parser.add_argument('--no-separate_terms', dest='separate_terms', action='store_false')
-parser.set_defaults(separate_terms=False)
+parser.set_defaults(separate_terms=True)
 
 args = parser.parse_args()
 
 SAVE_DIR = os.path.join(args.save_dir, args.exp_name, args.name)
-os.mkdir(SAVE_DIR)
+os.makedirs(SAVE_DIR)
 
 """
 ==========================================================================================================

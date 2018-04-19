@@ -64,22 +64,39 @@ def create_J_plot(X, nce_optimiser, optimiser, true_theta, separate_terms):
     nce_optimiser.phi.theta = cur_theta
 
     # plot J (NCE objective function) and J1 (lower bound to NCE objective) during training
-    J_plot = optimiser.plot_loss_curve(separate_terms=separate_terms)
-    ax = J_plot.gca()
     if separate_terms:
-        ax.plot(optimiser.times, Js_for_lnce_thetas[:, 0], label='term 1 of J at J1 params')
-        ax.plot(optimiser.times, Js_for_lnce_thetas[:, 1], label='term 2 of J at J1 params')
-        ax.plot((optimiser.times[0], optimiser.times[-1]), (optimal_J[0], optimal_J[0]),
-                label='term 1 of J at true theta')
-        ax.plot((optimiser.times[0], optimiser.times[-1]), (optimal_J[1], optimal_J[1]),
-                label='term 2 of J at true theta')
-    else:
-        ax.plot(nce_optimiser.times, nce_optimiser.Js, label='J')
-        ax.plot(optimiser.times, Js_for_lnce_thetas, label='J evaluated at J1 params')
-        ax.plot((optimiser.times[0], optimiser.times[-1]), (optimal_J, optimal_J), label='J evaluated at true theta')
-    ax.legend()
+        fig, axs = plt.subplots(3, 1, figsize=(15, 20))
+        axs = axs.ravel()
 
-    return J_plot, Js_for_lnce_thetas
+        ax = axs[0]
+        diff1 = Js_for_lnce_thetas[:, 0] - optimiser.J1s[:, 0]
+        ax.plot(optimiser.times, diff1, c='k', label='term1: J - J1')
+
+        ax = axs[1]
+        diff2 = Js_for_lnce_thetas[:, 1] - optimiser.J1s[:, 1]
+        ax.plot(optimiser.times, diff2, c='k', label='term2: J - J1')
+
+        J1s = np.sum(optimiser.J1s, axis=1)
+        sum_Js_for_lnce_thetas = np.sum(Js_for_lnce_thetas, axis=1)
+        optimal_J = np.sum(optimal_J)
+    else:
+        fig, axs = plt.subplots(1, 1, figsize=(15, 20))
+        axs = [axs]
+        J1s = optimiser.J1s
+        sum_Js_for_lnce_thetas = Js_for_lnce_thetas
+
+    ax = axs[-1]
+    ax.plot(optimiser.times, J1s, c='k', label='J1')
+    ax.plot(nce_optimiser.times, nce_optimiser.Js, label='J')
+    ax.plot(optimiser.times, sum_Js_for_lnce_thetas, label='J evaluated at J1 params')
+    ax.plot((optimiser.times[0], optimiser.times[-1]), (optimal_J, optimal_J), label='J evaluated at true theta')
+    ax.set_ylabel('J1/J', fontsize=16)
+
+    for ax in axs:
+        ax.set_xlabel('time (seconds)', fontsize=16)
+        ax.legend()
+
+    return fig, Js_for_lnce_thetas
 
 
 def plot_rbm_parameters(params, titles, d, m, with_bias=False, figsize=(15, 25)):

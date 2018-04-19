@@ -125,7 +125,7 @@ class LatentNCEOptimiser:
         validate_shape(b.shape, (self.n * self.nu, ))
         second_term = -nu * np.mean(np.log(1 + b))
         if separate_terms:
-            return [first_term, second_term]
+            return np.array([first_term, second_term])
 
         return first_term + second_term
 
@@ -184,20 +184,9 @@ class LatentNCEOptimiser:
         # return 1 + (1/self.nu) * np.mean(self.r(U, Z), axis=0)
         return 1 + (1/self.nu) * np.mean(np.exp(self.r(U, Z)), axis=0)
 
-    def fit_using_analytic_q(self,
-                             X,
-                             theta_inds=None,
-                             theta0=np.array([0.5]),
-                             opt_method='L-BFGS-B',
-                             ftol=1e-5,
-                             maxiter=10,
-                             stop_threshold=1e-5,
-                             max_num_em_steps=20,
-                             learning_rate=0.01,
-                             batch_size=10,
-                             disp=True,
-                             plot=True,
-                             separate_terms=False):
+    def fit_using_analytic_q(self, X, theta_ids=None, theta0=np.array([0.5]), opt_method='L-BFGS-B', ftol=1e-5,
+                             maxiter=10, stop_threshold=1e-5, max_num_em_steps=20, learning_rate=0.01, batch_size=10,
+                             disp=True, plot=True, separate_terms=False):
         """ Fit the parameters of the model to the data X with an
         EM-type algorithm that switches between optimising the model
         params to produce theta_k and then resetting the variational distribution
@@ -213,7 +202,7 @@ class LatentNCEOptimiser:
 
         :param X: Array of shape (num_data, data_dim)
             data that we want to fit the model to
-        :param theta_inds: array
+        :param theta_ids: array
             indices of elements of theta we want to optimise. By default
             this get populated with all indices.
         :param theta0: array of shape (1, )
@@ -243,60 +232,44 @@ class LatentNCEOptimiser:
                 ith element contains time in seconds until ith iteration
         """
         # by default, optimise all elements of theta
-        if theta_inds is None:
-            theta_inds = np.arange(len(self.phi.theta))
-
+        if theta_ids is None:
+            theta_ids = np.arange(len(self.phi.theta))
         # initialise parameters
         self.phi.theta, self.q.alpha = deepcopy(theta0), deepcopy(theta0)
-
-        # save theta and J1(theta) after every iteration of scipy.minimize
-        self.thetas.append(theta0)
-        self.J1s.append(self.compute_J1(X, separate_terms=separate_terms))
+        # save time (in seconds), theta and J1(theta) after every iteration/epoch
+        self.update_opt_results(X, theta_ids, separate_terms)
 
         num_em_steps = 0
         prev_J1, current_J1 = -99, -9  # arbitrary distinct numbers
-        self.times.append(time.time())
         while np.abs(prev_J1 - current_J1) > stop_threshold \
                 and num_em_steps < max_num_em_steps:
 
             # M-step
             if opt_method == 'SGD':
-                self.maximize_J1_wrt_theta_SGD(X,
-                                               learning_rate=learning_rate,
-                                               batch_size=batch_size,
-                                               num_em_steps=num_em_steps)
+                self.maximize_J1_wrt_theta_SGD(X, learning_rate=learning_rate, batch_size=batch_size, num_em_steps=num_em_steps)
             else:
-                self.maximize_J1_wrt_theta(theta_inds,
-                                           X,
-                                           opt_method=opt_method,
-                                           ftol=ftol,
-                                           maxiter=maxiter,
-                                           disp=disp,
-                                           separate_terms=separate_terms)
+                self.maximize_J1_wrt_theta(theta_ids, X, opt_method=opt_method, ftol=ftol, maxiter=maxiter, disp=disp, separate_terms=separate_terms)
+
             # E-step
-            self.q.alpha[theta_inds] = self.phi.theta[theta_inds]
+            self.q.alpha[theta_ids] = self.phi.theta[theta_ids]
+            self.update_opt_results(X, theta_ids, separate_terms)
 
             prev_J1 = current_J1
-            current_J1 = self.compute_J1(X, ZX=self.ZX, ZY=self.ZY)
+            current_J1 = np.sum(deepcopy(self.J1s[-1])) if separate_terms else deepcopy(self.J1s[-1])
             num_em_steps += 1
             if opt_method != 'SGD':
                 print('{} EM step: J1 = {}'.format(num_em_steps, current_J1))
 
         if plot:
             self.plot_loss_curve()
-
-        self.thetas = np.array(self.thetas)
-        self.J1s = np.array(self.J1s)
-        self.times = np.array(self.times)
-        self.times -= self.times[0]  # count seconds from 0
+        self.make_opt_res_arrays()
 
         return np.array(self.thetas), np.array(self.J1s), np.array(self.times)
 
-    def maximize_J1_wrt_theta(self, theta_inds, X, opt_method='L-BFGS-B',
-                              ftol=1e-5, maxiter=10, disp=True, separate_terms=False):
+    def maximize_J1_wrt_theta(self, theta_ids, X, opt_method='L-BFGS-B', ftol=1e-5, maxiter=10, disp=True, separate_terms=False):
         """Maximise objective function using one of the scipy.minimize methods
 
-        :param theta_inds: array
+        :param theta_ids: array
             indices of elements of theta we want to optimise
         :param X: array (n, 1)
             data
@@ -316,27 +289,20 @@ class LatentNCEOptimiser:
         """
         self.ZX = self.q.sample(self.nz, X)
         self.ZY = self.q.sample(self.nz, self.Y)
-        thetas, J1s, times = [], [], []
 
         def callback(_):
-            times.append(time.time())
-            thetas.append(self.phi.theta[theta_inds])
-            J1s.append(self.compute_J1(X, ZX=self.ZX, ZY=self.ZY, separate_terms=separate_terms))
+            self.update_opt_results(X, theta_ids, separate_terms)
 
         def J1_k_neg(theta_subset):
-            self.phi.theta[theta_inds] = theta_subset
+            self.phi.theta[theta_ids] = theta_subset
             return -self.compute_J1(X, ZX=self.ZX, ZY=self.ZY)
 
         def J1_k_grad_neg(theta_subset):
-            self.phi.theta[theta_inds] = theta_subset
-            return -self.compute_J1_grad(X, ZX=self.ZX, ZY=self.ZY)[theta_inds]
+            self.phi.theta[theta_ids] = theta_subset
+            return -self.compute_J1_grad(X, ZX=self.ZX, ZY=self.ZY)[theta_ids]
 
-        _ = minimize(J1_k_neg, self.phi.theta[theta_inds], method=opt_method, jac=J1_k_grad_neg,
+        _ = minimize(J1_k_neg, self.phi.theta[theta_ids], method=opt_method, jac=J1_k_grad_neg,
                      callback=callback, options={'ftol': ftol, 'maxiter': maxiter, 'disp': disp})
-
-        self.thetas.extend(thetas)
-        self.J1s.extend(J1s)
-        self.times.extend(times)
 
     def maximize_J1_wrt_theta_SGD(self, X, learning_rate, batch_size, num_em_steps):
             """Maximise objective function using stochastic gradient descent
@@ -382,20 +348,34 @@ class LatentNCEOptimiser:
         :return X: array
             shuffled_data
         """
+        # shuffle data
         perm = self.rng.permutation(len(X))
         noise_perm = self.rng.permutation(len(self.Y))
         X = X[perm]
         self.Y = self.Y[noise_perm]
         self.ZX = self.q.sample(self.nz, X)
         self.ZY = self.q.sample(self.nz, self.Y)
+
         # store results obtained at end of last epoch
-        self.thetas.append(deepcopy(self.phi.theta))
-        self.times.append(time.time())
-        current_J1 = self.compute_J1(X, ZX=self.ZX, ZY=self.ZY, separate_terms=separate_terms)
-        self.J1s.append(current_J1)
-        current_J1 = np.sum(np.array(current_J1)) if separate_terms else current_J1
+        self.update_opt_results(X, np.arange(len(self.phi.theta)), separate_terms)
+        current_J1 = np.sum(deepcopy(self.J1s[-1])) if separate_terms else deepcopy(self.J1s[-1])
         print('epoch {}: J1 = {}'.format(int(num_em_steps / int(len(X) / batch_size)), current_J1))
+
         return X
+
+    def make_opt_res_arrays(self):
+        self.thetas = np.array(self.thetas)
+        self.J1s = np.array(self.J1s)
+        self.times = np.array(self.times)
+        self.times -= self.times[0]  # count seconds from 0
+
+    def update_opt_results(self, X, theta_inds, separate_terms):
+        self.times.append(time.time())
+        self.thetas.append(deepcopy(self.phi.theta[theta_inds]))
+        if self.ZX is None:
+            self.J1s.append(self.compute_J1(X, separate_terms=separate_terms))
+        else:
+            self.J1s.append(self.compute_J1(X, ZX=self.ZX, ZY=self.ZY, separate_terms=separate_terms))
 
     def av_log_like_for_each_iter(self, X, thetas=None):
         """Calculate average log-likelihood at each iteration

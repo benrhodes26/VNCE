@@ -70,7 +70,7 @@ class NCEOptimiser:
         first_term = - np.mean(np.log(a0))
         second_term = - nu*np.mean(np.log(a1))
         if separate_terms:
-            return [first_term, second_term]
+            return np.array([first_term, second_term])
 
         return first_term + second_term
 
