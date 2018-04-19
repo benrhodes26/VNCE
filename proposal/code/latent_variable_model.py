@@ -494,32 +494,69 @@ class RestrictedBoltzmannMachine(LatentVarModel):
 
         return U.astype(int), Z.astype(int)
 
+    """
+        # noinspection PyUnboundLocalVariable
+        def sample_for_contrastive_divergence(self, U_0, num_iter=100):
+            Sample the random variables needed for CD learning
+
+            Contrastive divergence learning (see optimisers class)
+            needs two things:
+            - E(Z|U_0). The expected value of latents given data
+            - (V_k, Z_k) sampled from the *model*, which requires gibbs
+            sampling. In fact, it is recommended not to directly sample
+            the final Z_k, but to return E(Z_k | V_k), so we do this.
+
+            :param U_0 array (n, d)
+                data vectors used to initialise gibbs sampling
+            :param num_iter: int
+                number of steps to take in gibbs sampling
+            :return p_z0_given_u0 array (n, m)
+                        expected value of latents given U_0
+                    U: array (n, d)
+                        binary sample of visibles after k gibbs steps
+                    p_z_given_u: array (n, m)
+                        expected value of latents after k gibbs steps
+
+            p_z0_given_u0 = self.p_latents_given_visibles(U_0)  # (n, m)
+            Z_0 = self.rng.uniform(0, 1, p_z0_given_u0.shape) < p_z0_given_u0  # (n, m)
+
+            Z = Z_0
+            for i in range(num_iter):
+                p_u_given_z = self.p_visibles_given_latents(Z)  # (n, d)
+                U = self.rng.uniform(0, 1, p_u_given_z.shape) < p_u_given_z  # (n, d)
+
+                p_z_given_u = self.p_latents_given_visibles(U)  # (n, m)
+                Z = self.rng.uniform(0, 1, p_z_given_u.shape) < p_z_given_u  # (n, m)
+
+            return p_z0_given_u0, U.astype(int), p_z_given_u
+    """
+
     # noinspection PyUnboundLocalVariable
-    def sample_for_contrastive_divergence(self, U_0, num_iter=100):
-        """ Sample the random variables needed for CD learning
+    def sample_for_contrastive_divergence(self, U0, num_iter=100):
+        """Sample the random variables needed for CD learning
 
         Contrastive divergence learning (see optimisers class)
         needs two things:
-        - E(Z|U_0). The expected value of latents given data
+        - a sample Z0 ~ P(Z|U0). where U0 is the data
         - (V_k, Z_k) sampled from the *model*, which requires gibbs
-        sampling. In fact, it is recommended not to directly sample
-        the final Z_k, but to return E(Z_k | V_k), so we do this.
+        sampling.
 
-        :param U_0 array (n, d)
+        :param U0 array (n, d)
             data vectors used to initialise gibbs sampling
         :param num_iter: int
             number of steps to take in gibbs sampling
-        :return p_z0_given_u0 array (n, m)
-                    expected value of latents given U_0
+        :return Z0 array (n, m)
+                    sample of latents given U0 (the data)
                 U: array (n, d)
                     binary sample of visibles after k gibbs steps
-                p_z_given_u: array (n, m)
-                    expected value of latents after k gibbs steps
+                Z: array (n, m)
+                    sample of latents after k gibbs steps
         """
-        p_z0_given_u0 = self.p_latents_given_visibles(U_0)  # (n, m)
-        Z_0 = self.rng.uniform(0, 1, p_z0_given_u0.shape) < p_z0_given_u0  # (n, m)
 
-        Z = Z_0
+        p_z0_given_u0 = self.p_latents_given_visibles(U0)  # (n, m)
+        Z0 = self.rng.uniform(0, 1, p_z0_given_u0.shape) < p_z0_given_u0  # (n, m)
+
+        Z = Z0
         for i in range(num_iter):
             p_u_given_z = self.p_visibles_given_latents(Z)  # (n, d)
             U = self.rng.uniform(0, 1, p_u_given_z.shape) < p_u_given_z  # (n, d)
@@ -527,7 +564,7 @@ class RestrictedBoltzmannMachine(LatentVarModel):
             p_z_given_u = self.p_latents_given_visibles(U)  # (n, m)
             Z = self.rng.uniform(0, 1, p_z_given_u.shape) < p_z_given_u  # (n, m)
 
-        return p_z0_given_u0, U.astype(int), p_z_given_u
+        return Z0.astype(int), U.astype(int), Z.astype(int)
 
     def reset_norm_const(self):
         """Reset normalisation constant using current theta"""

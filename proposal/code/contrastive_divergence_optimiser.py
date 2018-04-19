@@ -11,7 +11,7 @@ from copy import deepcopy
 from matplotlib import pyplot as plt
 from numpy import random as rnd
 from scipy.optimize import minimize
-from utils import validate_shape, average_log_likelihood
+from utils import validate_shape, average_log_likelihood, takeClosest
 
 DEFAULT_SEED = 1083463236
 
@@ -78,8 +78,8 @@ class CDOptimiser:
         :return thetas list of array
             values of model parameters (theta) after each gradient step
         """
-        # todo: make it easy to access biases and non-bias weights separately?
-        # todo: write a get_learning_rate method using decay
+        # todo: make it easy to access biases and non-bias weights separately? (model-specific hack...)
+        # todo: write a get_learning_rate method using decay (this is more important)
         # initialise parameters
         self.phi.theta = deepcopy(theta0)
         self.thetas.append(deepcopy(theta0))
@@ -111,25 +111,32 @@ class CDOptimiser:
 
         return np.array(self.thetas), np.array(self.times)
 
-    def av_log_like_for_each_iter(self, X, maxiter=None):
+    def av_log_like_for_each_iter(self, X, thetas=None):
         """Calculate average log-likelihood at each iteration
 
         NOTE: this method can only be applied to small models, where
         computing the partition function is not too costly
         """
         theta = deepcopy(self.phi.theta)
-        if maxiter is None:
-            maxiter = len(self.times)
-        else:
-            maxiter = min(maxiter, len(self.times))
+        if thetas is None:
+            thetas = self.thetas
 
-        av_log_likelihoods = np.zeros(maxiter)
-        for i in np.arange(0, maxiter):
-            self.phi.theta = self.thetas[i]
+        av_log_likelihoods = np.zeros(len(thetas))
+        for i in np.arange(0, len(thetas)):
+            self.phi.theta = deepcopy(thetas[i])
             av_log_likelihoods[i] = average_log_likelihood(self.phi, X)
 
         self.phi.theta = theta  # reset theta to its original value
         return av_log_likelihoods
+
+    def reduce_optimisation_results(self, time_step_size):
+        """reduce to #time_step_size results, evenly spaced on a log scale"""
+        log_times = np.exp(np.linspace(-3, np.log(self.times[-1]), num=time_step_size))
+        log_time_ids = [takeClosest(self.times, t) for t in log_times]
+        reduced_times = deepcopy(self.times[log_time_ids])
+        reduced_thetas = deepcopy(self.thetas[log_time_ids])
+
+        return reduced_times, reduced_thetas
 
     def __repr__(self):
         return "CDOptimiser"

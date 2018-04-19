@@ -11,7 +11,7 @@ from copy import deepcopy
 from matplotlib import pyplot as plt
 from numpy import random as rnd
 from scipy.optimize import minimize
-from utils import validate_shape
+from utils import validate_shape, takeClosest
 
 
 # noinspection PyMethodMayBeStatic,PyPep8Naming,PyTypeChecker
@@ -23,7 +23,7 @@ class NCEOptimiser:
     to the parameters of the unnormalised model and a method for performing the
     optimisation: self.fit().
     """
-    def __init__(self, model, noise, sample_size, nu=1, eps=1e-15, rng=None):
+    def __init__(self, model, noise, noise_samples, sample_size, nu=1, eps=1e-15):
         """ Initialise unnormalised model and noise distribution
 
         :param model: FullyObservedModel
@@ -40,7 +40,7 @@ class NCEOptimiser:
         self.nu = nu
         self.sample_size = sample_size
         self.eps = eps
-        self.Y = self.pn.sample(int(sample_size * nu))  # generate noise
+        self.Y = noise_samples
         self.thetas = []  # for storing values of parameters during optimisation
         self.Js = []  # for storing values of objective function during optimisation
         self.times = []  # seconds spent to reach each iteration during optimisation
@@ -54,7 +54,7 @@ class NCEOptimiser:
         """
         return np.log(self.phi(U)) - np.log(self.pn(U))
 
-    def compute_J(self, X):
+    def compute_J(self, X, separate_terms=False):
         """Return value of objective at current parameters
 
         :param X: array (N, d)
@@ -69,6 +69,8 @@ class NCEOptimiser:
 
         first_term = - np.mean(np.log(a0))
         second_term = - nu*np.mean(np.log(a1))
+        if separate_terms:
+            return [first_term, second_term]
 
         return first_term + second_term
 
@@ -102,7 +104,7 @@ class NCEOptimiser:
                                                                   grad.shape)
         return grad
 
-    def fit(self, X, theta0=np.array([0.5]), disp=True, plot=True, gtol=1e-4, ftol=1e-9, maxiter=100):
+    def fit(self, X, theta0=np.array([0.5]), disp=True, plot=True, gtol=1e-4, ftol=1e-9, maxiter=100, separate_terms=False):
         """ Fit the parameters of the model to the data X
 
         optimise the objective function defined in self.compute_J().
@@ -132,11 +134,11 @@ class NCEOptimiser:
         # initialise parameters
         self.phi.theta = deepcopy(theta0)
         self.thetas.append(deepcopy(theta0))
-        self.Js.append(self.compute_J(X))
+        self.Js.append(self.compute_J(X, separate_terms=separate_terms))
         self.times.append(time.time())
 
         # optimise w.r.t to theta
-        self.maximize_J1_wrt_theta(X, disp, gtol=gtol, ftol=ftol, maxiter=maxiter)
+        self.maximize_J1_wrt_theta(X, disp, gtol=gtol, ftol=ftol, maxiter=maxiter, separate_terms=separate_terms)
 
         if plot:
             self.plot_loss_curve()
@@ -148,7 +150,7 @@ class NCEOptimiser:
 
         return np.array(self.thetas), np.array(self.Js), np.array(self.times)
 
-    def maximize_J1_wrt_theta(self, X, disp, gtol=1e-4, ftol=1e-9, maxiter=100):
+    def maximize_J1_wrt_theta(self, X, disp, gtol=1e-4, ftol=1e-9, maxiter=100, separate_terms=False):
         """Return theta that maximises J1
 
         :param X: array (n, 1)
@@ -165,7 +167,7 @@ class NCEOptimiser:
         def callback(_):
             times.append(time.time())
             thetas.append(deepcopy(self.phi.theta))
-            Js.append(self.compute_J(X))
+            Js.append(self.compute_J(X, separate_terms=separate_terms))
 
         def J1_k_neg(theta):
             self.phi.theta = theta
@@ -188,32 +190,45 @@ class NCEOptimiser:
 
         return fig, axs
 
-    def av_log_like_for_each_iter(self, X, maxiter=None):
+    def av_log_like_for_each_iter(self, X, thetas=None):
         """Calculate average log-likelihood at each iteration
 
         NOTE: this method can only be applied to small models, where
         computing the partition function is not too costly
         """
         theta = deepcopy(self.phi.theta)
-        if maxiter is None:
-            maxiter = len(self.times)
-        else:
-            maxiter = min(maxiter, len(self.times))
+        if thetas is None:
+            thetas = self.thetas
 
-        av_log_likelihoods = np.zeros(maxiter)
-        for i in np.arange(0, maxiter):
-            self.phi.theta = self.thetas[i]
-            likelihoods = self.phi(X, normalise=True)
-            av_log_likelihoods[i] = np.mean(np.log(likelihoods))
+        av_log_likelihoods = np.zeros(len(thetas))
+        for i in np.arange(0, len(thetas)):
+            self.phi.theta = deepcopy(thetas[i])
+            av_log_likelihoods[i] = np.mean(np.log(self.phi(X)))
 
         self.phi.theta = theta  # reset theta to its original value
-
         return av_log_likelihoods
 
     def reduce_optimisation_results(self, time_step_size):
-        self.times = self.times[::time_step_size]
-        self.Js = self.Js[::time_step_size]
-        self.thetas = self.thetas[::time_step_size]
+        """reduce to #time_step_size results, evenly spaced on a log scale"""
+        log_times = np.exp(np.linspace(-3, np.log(self.times[-1]), num=time_step_size))
+        log_time_ids = [takeClosest(self.times, t) for t in log_times]
+        reduced_times = deepcopy(self.times[log_time_ids])
+        reduced_thetas = deepcopy(self.thetas[log_time_ids])
+
+        return reduced_times, reduced_thetas
+
+    def evaluate_J_at_param(self, theta, X, separate_terms=False):
+        """
+        :param theta: array
+            model parameter setting
+        :param X: array (n, d)
+            data needed to compute objective function at true_theta.
+        """
+        current_theta = deepcopy(self.phi.theta)
+        self.phi.theta = theta
+        J = self.compute_J(X, separate_terms)
+        self.phi.theta = current_theta
+        return J
 
     def __repr__(self):
         return "NCEOptimiser"

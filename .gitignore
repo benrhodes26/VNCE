@@ -1,4 +1,5 @@
 proposal.pdf
+*.pyc
 *.aux
 *.glo
 *.idx

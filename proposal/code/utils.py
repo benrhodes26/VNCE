@@ -49,6 +49,39 @@ def get_true_weights(d, m):
     return true_W
 
 
+def create_J_plot(X, nce_optimiser, optimiser, true_theta, separate_terms):
+    cur_theta = deepcopy(nce_optimiser.phi.theta)
+
+    Js_for_lnce_thetas = []
+    for i, theta_k in enumerate(optimiser.thetas):
+        nce_optimiser.phi.theta = deepcopy(theta_k)
+        Js_for_lnce_thetas.append(nce_optimiser.compute_J(X, separate_terms=separate_terms))
+    Js_for_lnce_thetas = np.array(Js_for_lnce_thetas)
+
+    # calculate optimal J (i.e at true theta)
+    nce_optimiser.phi.theta = deepcopy(true_theta.reshape(-1))
+    optimal_J = nce_optimiser.compute_J(X, separate_terms=separate_terms)
+    nce_optimiser.phi.theta = cur_theta
+
+    # plot J (NCE objective function) and J1 (lower bound to NCE objective) during training
+    J_plot = optimiser.plot_loss_curve(separate_terms=separate_terms)
+    ax = J_plot.gca()
+    if separate_terms:
+        ax.plot(optimiser.times, Js_for_lnce_thetas[:, 0], label='term 1 of J at J1 params')
+        ax.plot(optimiser.times, Js_for_lnce_thetas[:, 1], label='term 2 of J at J1 params')
+        ax.plot((optimiser.times[0], optimiser.times[-1]), (optimal_J[0], optimal_J[0]),
+                label='term 1 of J at true theta')
+        ax.plot((optimiser.times[0], optimiser.times[-1]), (optimal_J[1], optimal_J[1]),
+                label='term 2 of J at true theta')
+    else:
+        ax.plot(nce_optimiser.times, nce_optimiser.Js, label='J')
+        ax.plot(optimiser.times, Js_for_lnce_thetas, label='J evaluated at J1 params')
+        ax.plot((optimiser.times[0], optimiser.times[-1]), (optimal_J, optimal_J), label='J evaluated at true theta')
+    ax.legend()
+
+    return J_plot, Js_for_lnce_thetas
+
+
 def plot_rbm_parameters(params, titles, d, m, with_bias=False, figsize=(15, 25)):
     """plot heatmaps of restricted boltzmann machine weights
 
@@ -119,6 +152,7 @@ def plot_log_likelihood_training_curves(training_curves, static_lines):
     ax.legend()
 
     return fig
+
 
 def average_log_likelihood(model, X):
     """average log-likelihood for unnormalised, latent variable model"""
