@@ -61,7 +61,7 @@ parser.add_argument('--maxiter', type=int, default=5,
                     help='number of iterations performed by L-BFGS-B optimiser inside each M step of EM')
 parser.add_argument('--stop_threshold', type=float, default=1e-09,
                     help='Tolerance used as stopping criterion in EM loop')
-parser.add_argument('--max_num_em_steps', type=int, default=100,
+parser.add_argument('--max_num_em_steps', type=int, default=500,
                     help='Maximum number of EM steps to perform')
 parser.add_argument('--learn_rate', type=float, default=0.01,
                     help='if opt_method=SGD, this is the learning rate used')
@@ -71,10 +71,9 @@ parser.add_argument('--batch_size', type=int, default=10,
 # Contrastive divergence optimisation arguments
 parser.add_argument('--cd_num_steps', type=int, default=1, help='number of gibbs steps used to sample from '
                                                                 'model during learning with CD')
-parser.add_argument('--cd_learn_rate', type=float, default=0.01,
-                    help='Initial learning rate for contrastive divergence')
-parser.add_argument('--cd_batch_size', type=int, default=10, help='number of datapoints used per gradient update')
-parser.add_argument('--cd_num_epochs', type=int, default=100, help='number of passes through data set')
+parser.add_argument('--cd_learn_rate', type=float, default=0.01, help='Initial learning rate for contrastive divergence')
+parser.add_argument('--cd_batch_size', type=int, default=100, help='number of datapoints used per gradient update')
+parser.add_argument('--cd_num_epochs', type=int, default=500, help='number of passes through data set')
 
 # nce optimisation arguments
 parser.add_argument('--maxiter_nce', type=int, default=500, help='number of passes through data set')
@@ -83,7 +82,7 @@ parser.add_argument('--maxiter_nce', type=int, default=500, help='number of pass
 parser.add_argument('--compute_log_like', dest='compute_log_like', action='store_true')
 parser.add_argument('--no-compute_log_like', dest='compute_log_like', action='store_false')
 parser.set_defaults(compute_log_like=True)
-parser.add_argument('--num_log_like_steps', type=int, default=5, help='Number of time-steps for which we calculate log-likelihoods')
+parser.add_argument('--num_log_like_steps', type=int, default=20, help='Number of time-steps for which we calculate log-likelihoods')
 parser.add_argument('--separate_terms', dest='separate_terms', action='store_true', help='separate the two terms that make up J1/J objective functions')
 parser.add_argument('--no-separate_terms', dest='separate_terms', action='store_false')
 parser.set_defaults(separate_terms=True)

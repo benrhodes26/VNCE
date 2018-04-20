@@ -49,14 +49,15 @@ def get_true_weights(d, m):
     return true_W
 
 
-def create_J_plot(X, nce_optimiser, optimiser, true_theta, separate_terms):
+def create_J_plot(X, nce_optimiser, optimiser, true_theta, separate_terms, Js_for_lnce_thetas=None):
     cur_theta = deepcopy(nce_optimiser.phi.theta)
 
-    Js_for_lnce_thetas = []
-    for i, theta_k in enumerate(optimiser.thetas):
-        nce_optimiser.phi.theta = deepcopy(theta_k)
-        Js_for_lnce_thetas.append(nce_optimiser.compute_J(X, separate_terms=separate_terms))
-    Js_for_lnce_thetas = np.array(Js_for_lnce_thetas)
+    if Js_for_lnce_thetas is None:
+        Js_for_lnce_thetas = []
+        for i, theta_k in enumerate(optimiser.thetas):
+            nce_optimiser.phi.theta = deepcopy(theta_k)
+            Js_for_lnce_thetas.append(nce_optimiser.compute_J(X, separate_terms=separate_terms))
+        Js_for_lnce_thetas = np.array(Js_for_lnce_thetas)
 
     # calculate optimal J (i.e at true theta)
     nce_optimiser.phi.theta = deepcopy(true_theta.reshape(-1))

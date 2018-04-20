@@ -246,7 +246,7 @@ class LatentNCEOptimiser:
 
             # M-step
             if opt_method == 'SGD':
-                self.maximize_J1_wrt_theta_SGD(X, learning_rate=learning_rate, batch_size=batch_size, num_em_steps=num_em_steps)
+                self.maximize_J1_wrt_theta_SGD(X, learning_rate=learning_rate, batch_size=batch_size, num_em_steps=num_em_steps, separate_terms=separate_terms)
             else:
                 self.maximize_J1_wrt_theta(theta_ids, X, opt_method=opt_method, ftol=ftol, maxiter=maxiter, disp=disp, separate_terms=separate_terms)
 
@@ -304,7 +304,7 @@ class LatentNCEOptimiser:
         _ = minimize(J1_k_neg, self.phi.theta[theta_ids], method=opt_method, jac=J1_k_grad_neg,
                      callback=callback, options={'ftol': ftol, 'maxiter': maxiter, 'disp': disp})
 
-    def maximize_J1_wrt_theta_SGD(self, X, learning_rate, batch_size, num_em_steps):
+    def maximize_J1_wrt_theta_SGD(self, X, learning_rate, batch_size, num_em_steps, separate_terms=False):
             """Maximise objective function using stochastic gradient descent
 
             :param X: array (n, 1)
@@ -318,7 +318,7 @@ class LatentNCEOptimiser:
             """
             # Each epoch, shuffle data and save current results
             if num_em_steps % int(len(X)/batch_size) == 0:
-                X = self.begin_epoch(X, batch_size, num_em_steps)
+                X = self.begin_epoch(X, batch_size, num_em_steps, separate_terms=separate_terms)
 
             # get batches
             num_batches = int(len(X) / batch_size)
