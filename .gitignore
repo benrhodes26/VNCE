@@ -1,4 +1,5 @@
 proposal.pdf
+*.sh
 *.pyc
 *.aux
 *.glo

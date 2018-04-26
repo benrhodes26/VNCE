@@ -1,0 +1,17 @@
+n: 10000
+nz: 1
+nu: 1.0
+d: 20
+m: 15
+true_sd: 1.0
+num_gibbs_steps: 1000
+opt_method: L-BFGS-B
+noise: marginal
+ftol: 2.220446049250313e-09
+***maxiter: 5/20/50***
+stop_threshold: 1e-05
+cd_num_steps: 1
+cd_learn_rate: 0.01
+cd_batch_size: 10
+cd_num_epochs: 100
+random_seed: 1083463236

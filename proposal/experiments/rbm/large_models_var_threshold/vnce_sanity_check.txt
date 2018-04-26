@@ -1,0 +1,30 @@
+file: no-var. Percentage of iters for which J1 increases: 91.75%
+          Percentage of iters for which J increases: 65.9%
+          Percentage of iters for which J1 is less than J: 3.616%
+file: no-IS. Percentage of iters for which J1 increases: 91.72%
+          Percentage of iters for which J increases: 67.18%
+          Percentage of iters for which J1 is less than J: 10.01%
+file: m1-v=0.1. Percentage of iters for which J1 increases: 99.02%
+          Percentage of iters for which J increases: 56.22%
+          Percentage of iters for which J1 is less than J: 1.357%
+file: m1-v=0.01. Percentage of iters for which J1 increases: 97.98%
+          Percentage of iters for which J increases: 56.26%
+          Percentage of iters for which J1 is less than J: 1.276%
+file: m1-v=0.001. Percentage of iters for which J1 increases: 83.14%
+          Percentage of iters for which J increases: 60.23%
+          Percentage of iters for which J1 is less than J: 9.439%
+file: m1-v=0.001. Percentage of iters for which J1 increases: 83.14%
+          Percentage of iters for which J increases: 60.23%
+          Percentage of iters for which J1 is less than J: 9.439%
+file: m1-v=0.01. Percentage of iters for which J1 increases: 97.98%
+          Percentage of iters for which J increases: 56.26%
+          Percentage of iters for which J1 is less than J: 1.276%
+file: no-IS. Percentage of iters for which J1 increases: 91.72%
+          Percentage of iters for which J increases: 67.18%
+          Percentage of iters for which J1 is less than J: 10.01%
+file: m1-v=0.1. Percentage of iters for which J1 increases: 99.02%
+          Percentage of iters for which J increases: 56.22%
+          Percentage of iters for which J1 is less than J: 1.357%
+file: no-var. Percentage of iters for which J1 increases: 91.75%
+          Percentage of iters for which J increases: 65.9%
+          Percentage of iters for which J1 is less than J: 3.616%
