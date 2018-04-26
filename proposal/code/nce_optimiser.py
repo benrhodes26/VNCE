@@ -23,11 +23,11 @@ class NCEOptimiser:
     to the parameters of the unnormalised model and a method for performing the
     optimisation: self.fit().
     """
-    def __init__(self, model, noise, noise_samples, sample_size, nu=1, eps=1e-15):
+    def __init__(self, model, noise, noise_samples, nu=1, eps=1e-15):
         """ Initialise unnormalised model and noise distribution
 
         :param model: FullyObservedModel
-            unnormalised model whose parameters theta we want to optimise.
+            normalised model whose parameters theta we want to optimise.
             see fully_observed_models.py for examples.
         :param noise: Distribution
             noise distribution required for NCE.
@@ -38,7 +38,6 @@ class NCEOptimiser:
         self.phi = model
         self.pn = noise
         self.nu = nu
-        self.sample_size = sample_size
         self.eps = eps
         self.Y = noise_samples
         self.thetas = []  # for storing values of parameters during optimisation
@@ -104,7 +103,7 @@ class NCEOptimiser:
                                                                   grad.shape)
         return grad
 
-    def fit(self, X, theta0=np.array([0.5]), disp=True, plot=True, gtol=1e-4, ftol=1e-9, maxiter=100, separate_terms=False):
+    def fit(self, X, theta0=np.array([0.5]), disp=True, ftol=1e-9, maxiter=100, separate_terms=False):
         """ Fit the parameters of the model to the data X
 
         optimise the objective function defined in self.compute_J().
@@ -138,11 +137,9 @@ class NCEOptimiser:
         self.times.append(time.time())
 
         # optimise w.r.t to theta
-        self.maximize_J1_wrt_theta(X, disp, gtol=gtol, ftol=ftol, maxiter=maxiter, separate_terms=separate_terms)
+        self.maximize_J1_wrt_theta(X, disp, ftol=ftol, maxiter=maxiter, separate_terms=separate_terms)
 
-        if plot:
-            self.plot_loss_curve()
-
+        # todo: have an 'unfreeze' method that turns arrays back to lists for continued optimisationmaximize_L_wrt_theta
         self.thetas = np.array(self.thetas)
         self.Js = np.array(self.Js)
         self.times = np.array(self.times)
@@ -150,7 +147,7 @@ class NCEOptimiser:
 
         return np.array(self.thetas), np.array(self.Js), np.array(self.times)
 
-    def maximize_J1_wrt_theta(self, X, disp, gtol=1e-4, ftol=1e-9, maxiter=100, separate_terms=False):
+    def maximize_J1_wrt_theta(self, X, disp, ftol=1e-9, maxiter=100, separate_terms=False):
         """Return theta that maximises J1
 
         :param X: array (n, 1)
@@ -178,7 +175,7 @@ class NCEOptimiser:
             return -self.compute_J_grad(X)
 
         _ = minimize(J1_k_neg, self.phi.theta, method='L-BFGS-B', jac=J1_k_grad_neg,
-                     callback=callback, options={'ftol': ftol, 'gtol': gtol, 'maxiter': maxiter, 'disp': disp})
+                     callback=callback, options={'ftol': ftol, 'maxiter': maxiter, 'disp': disp})
 
         self.thetas.extend(thetas)
         self.Js.extend(Js)

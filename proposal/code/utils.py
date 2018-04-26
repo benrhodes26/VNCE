@@ -6,9 +6,9 @@ from bisect import bisect_left
 from copy import deepcopy
 from matplotlib import pyplot as plt
 
-def mean_square_error(estimates, true_value, plot=True):
-    true_values = np.ones_like(estimates)*true_value
-    error = estimates - true_values
+def mean_square_error(estimate, true_value, plot=True):
+    true_values = np.ones_like(estimate)*true_value
+    error = estimate - true_values
     square_error = error**2
 
     if plot:
@@ -49,56 +49,54 @@ def get_true_weights(d, m):
     return true_W
 
 
-def create_J_plot(X, nce_optimiser, optimiser, true_theta, separate_terms, Js_for_lnce_thetas=None):
-    cur_theta = deepcopy(nce_optimiser.phi.theta)
-
-    if Js_for_lnce_thetas is None:
-        Js_for_lnce_thetas = []
-        for i, theta_k in enumerate(optimiser.thetas):
-            nce_optimiser.phi.theta = deepcopy(theta_k)
-            Js_for_lnce_thetas.append(nce_optimiser.compute_J(X, separate_terms=separate_terms))
-        Js_for_lnce_thetas = np.array(Js_for_lnce_thetas)
-
-    # calculate optimal J (i.e at true theta)
-    nce_optimiser.phi.theta = deepcopy(true_theta.reshape(-1))
-    optimal_J = nce_optimiser.compute_J(X, separate_terms=separate_terms)
-    nce_optimiser.phi.theta = cur_theta
-
-    # plot J (NCE objective function) and J1 (lower bound to NCE objective) during training
-    if separate_terms:
-        fig, axs = plt.subplots(3, 1, figsize=(15, 20))
+def create_J_diff_plot(optimiser, Js_for_lnce_thetas, plot_posterior_ratio=False):
+    """plot J (NCE objective function) minus J1 (lower bound to NCE objective)"""
+    if plot_posterior_ratio:
+        fig, axs = plt.subplots(2, 1, figsize=(15, 20))
         axs = axs.ravel()
-
-        ax = axs[0]
-        diff1 = Js_for_lnce_thetas[:, 0] - optimiser.J1s[:, 0]
-        ax.plot(optimiser.times, diff1, c='k', label='term1: J - J1')
-
-        ax = axs[1]
-        diff2 = Js_for_lnce_thetas[:, 1] - optimiser.J1s[:, 1]
-        ax.plot(optimiser.times, diff2, c='k', label='term2: J - J1')
-
-        J1s = np.sum(optimiser.J1s, axis=1)
-        sum_Js_for_lnce_thetas = np.sum(Js_for_lnce_thetas, axis=1)
-        optimal_J = np.sum(optimal_J)
     else:
         fig, axs = plt.subplots(1, 1, figsize=(15, 20))
         axs = [axs]
-        J1s = optimiser.J1s
-        sum_Js_for_lnce_thetas = Js_for_lnce_thetas
 
-    ax = axs[-1]
-    ax.plot(optimiser.times, J1s, c='k', label='J1')
-    ax.plot(nce_optimiser.times, nce_optimiser.Js, label='J')
-    ax.plot(optimiser.times, sum_Js_for_lnce_thetas, label='J evaluated at J1 params')
-    ax.plot((optimiser.times[0], optimiser.times[-1]), (optimal_J, optimal_J), label='J evaluated at true theta')
-    ax.set_ylabel('J1/J', fontsize=16)
+    ax = axs[0]
+    diff = np.sum(Js_for_lnce_thetas, axis=1) - np.sum(optimiser.J1s, axis=1)
+    ax.plot(optimiser.times, diff, c='k', label='J - J1')
+    diff1 = Js_for_lnce_thetas[:, 0] - optimiser.J1s[:, 0]
+    ax.plot(optimiser.times, diff1, c='r', label='term1: J - J1')
+    diff2 = Js_for_lnce_thetas[:, 1] - optimiser.J1s[:, 1]
+    ax.plot(optimiser.times, diff2, c='b', label='term2: J - J1')
+
+    if plot_posterior_ratio:
+        ax = axs[1]
+        ax.plot(optimiser.times, optimiser.posterior_ratio_vars, c='k', label='V(p(z|y)/q(z|y))')
 
     for ax in axs:
+        for time_id in optimiser.E_step_ids:
+            time = optimiser.times[time_id]
+            ax.plot((time, time), ax.get_ylim(), c='0.5')
         ax.set_xlabel('time (seconds)', fontsize=16)
         ax.legend()
 
     return fig, Js_for_lnce_thetas
 
+def get_Js_for_vnce_thetas(X, nce_optimiser, optimiser, separate_terms):
+    cur_theta = deepcopy(nce_optimiser.phi.theta)
+    Js_for_vnce_thetas = []
+    for i, theta_k in enumerate(optimiser.thetas):
+        nce_optimiser.phi.theta = deepcopy(theta_k)
+        Js_for_vnce_thetas.append(nce_optimiser.compute_J(X, separate_terms=separate_terms))
+    Js_for_vnce_thetas = np.array(Js_for_vnce_thetas)
+    nce_optimiser.phi.theta = cur_theta
+
+    return Js_for_vnce_thetas
+
+def get_optimal_J(X, nce_optimiser, true_theta, separate_terms):
+    """calculate optimal J (i.e at true theta)"""
+    nce_optimiser.phi.theta = deepcopy(true_theta.reshape(-1))
+    optimal_J = nce_optimiser.compute_J(X, separate_terms=separate_terms)
+    nce_optimiser.phi.theta = cur_theta
+
+    return optimal_J
 
 def plot_rbm_parameters(params, titles, d, m, with_bias=False, figsize=(15, 25)):
     """plot heatmaps of restricted boltzmann machine weights

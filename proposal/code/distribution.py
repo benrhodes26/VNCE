@@ -11,10 +11,11 @@ from utils import sigmoid
 
 DEFAULT_SEED = 1083463236
 
+
 # noinspection PyPep8Naming
 class Distribution(metaclass=ABCMeta):
 
-    def __init__(self, alpha):
+    def __init__(self, alpha, rng=None):
         """
         :param alpha: float or array
             parameter(s) of distribution
@@ -23,6 +24,10 @@ class Distribution(metaclass=ABCMeta):
             alpha = np.array([alpha])
         self._alpha = alpha
         self.alpha_shape = alpha.shape
+        if not rng:
+            self.rng = rnd.RandomState(DEFAULT_SEED)
+        else:
+            self.rng = rng
 
     @property
     def alpha(self):
@@ -63,7 +68,7 @@ class Distribution(metaclass=ABCMeta):
 # noinspection PyPep8Naming,PyMissingConstructor,PyMethodOverriding,PyMethodMayBeStatic
 class PolynomialSigmoidBernoulli(Distribution):
 
-    def __init__(self, alpha):
+    def __init__(self, alpha, rng=None):
         """Init bernoulli distribution Ber(p)
         where p is parametrised by a sigmoid where:
         U = poly(u, degree) = [1, u, u^2, ..., u^degree]
@@ -71,7 +76,7 @@ class PolynomialSigmoidBernoulli(Distribution):
 
         :param alpha: array (degree + 1, )
         """
-        super().__init__(alpha)
+        super().__init__(alpha, rng=rng)
         self.degree = self.alpha.shape[0] - 1
 
     def __call__(self, Z, U):
@@ -130,9 +135,9 @@ class PolynomialSigmoidBernoulli(Distribution):
             n data points with dimension 1
         :return array of shape (nz, n, 1)
         """
-        Z = np.zeros((nz, len(U),  1))
+        Z = np.zeros((nz, len(U), 1))
         for i in range(len(U)):
-            Z[:, i, 0] = rnd.uniform(0, 1, nz) < self.calculate_p(U[i])
+            Z[:, i, 0] = self.rng.uniform(0, 1, nz) < self.calculate_p(U[i])
 
         return Z
 
@@ -140,7 +145,7 @@ class PolynomialSigmoidBernoulli(Distribution):
 # noinspection PyPep8Naming,PyMissingConstructor,PyMethodOverriding
 class MixtureOfTwoGaussianBernoulliPosterior(Distribution):
 
-    def __init__(self, alpha, sigma1):
+    def __init__(self, alpha, sigma1, rng=None):
         """Init bernoulli distribution given by
         the posterior over the latent binary variable
         in a mixture of 2 gaussians. See __call__
@@ -150,7 +155,7 @@ class MixtureOfTwoGaussianBernoulliPosterior(Distribution):
             note: must be an array, NOT a float.
         """
         self.sigma1 = sigma1
-        super().__init__(alpha)
+        super().__init__(alpha, rng=rng)
 
     def __call__(self, Z, u):
         """
@@ -182,9 +187,9 @@ class MixtureOfTwoGaussianBernoulliPosterior(Distribution):
             n data points with dimension 1
         :return array of shape (nz, n, 1)
         """
-        Z = np.zeros((nz, len(U),  1))
+        Z = np.zeros((nz, len(U), 1))
         for i in range(len(U)):
-            Z[:, i, 0] = rnd.uniform(0, 1, nz) < self.calculate_p(U[i])
+            Z[:, i, 0] = self.rng.uniform(0, 1, nz) < self.calculate_p(U[i])
 
         return Z
 
@@ -202,18 +207,14 @@ class RBMLatentPosterior(Distribution):
         """
         self.W_shape = W.shape  # (d+1, m+1)
         alpha = W.reshape(-1)
-        if not rng:
-            self.rng = np.random.RandomState(DEFAULT_SEED)
-        else:
-            self.rng = rng
-        super().__init__(alpha)
+        super().__init__(alpha, rng=rng)
 
     def __call__(self, Z, U):
         """
         :param Z: array (nz, n, m)
         :param U: array (n, d)
             n data points with dimension d
-        :return: array (n, nz)
+        :return: array (nz, n)
             probability of latent variables given data
         """
         p1 = self.calculate_p(U)  # (n, m)
@@ -271,13 +272,17 @@ class RBMLatentPosterior(Distribution):
 
 # noinspection PyPep8Naming,PyMissingConstructor
 class GaussianNoise(Distribution):
-    def __init__(self, mean=0, cov=1):
+    def __init__(self, mean=0, cov=1, rng=None):
         if isinstance(mean, float) or isinstance(mean, int):
             mean = np.array([mean])
         if isinstance(cov, float) or isinstance(cov, int):
             cov = np.array([[cov]])
         self.mean = mean
         self.cov = cov
+        if not rng:
+            self.rng = np.random.RandomState(DEFAULT_SEED)
+        else:
+            self.rng = rng
 
     def __call__(self, U):
         """evaluate probability of data U
@@ -296,13 +301,12 @@ class GaussianNoise(Distribution):
             number of noise samples used in NCE
         :return: array (num_noise_samples, d)
         """
-        return rnd.multivariate_normal(self.mean, self.cov, num_noise_samples)
+        return self.rng.multivariate_normal(self.mean, self.cov, num_noise_samples)
 
 
 # noinspection PyPep8Naming,PyMissingConstructor
 class MultivariateBernoulliNoise(Distribution):
-    # todo: specify probability of each configuration of a d-length
-    # vector of binary variables and incorporate covariance structure of data
+
     def __init__(self, marginals, rng=None):
         """
         :param marginals: array (d,)
@@ -336,11 +340,15 @@ class MultivariateBernoulliNoise(Distribution):
 # noinspection PyPep8Naming,PyMissingConstructor
 class EmpiricalNoise(Distribution):
 
-    def __init__(self, X):
+    def __init__(self, X, rng=None):
         """
         :param X: array
             data that defines empirical distribution
         """
+        if not rng:
+            self.rng = np.random.RandomState(DEFAULT_SEED)
+        else:
+            self.rng = rng
         self.X = X
         self.sample_size = len(X)
         self.freqs = self.construct_freqs()
@@ -365,7 +373,7 @@ class EmpiricalNoise(Distribution):
             number of noise samples used in NCE
         :return: array (num_noise_samples, d)
         """
-        sample_inds = np.random.randint(0, self.sample_size, num_noise_samples)
+        sample_inds = self.rng.randint(0, self.sample_size, num_noise_samples)
         return self.X[sample_inds]
 
     def construct_freqs(self):

@@ -15,7 +15,7 @@ DEFAULT_SEED = 1083463236
 # noinspection PyPep8Naming
 class Model(metaclass=ABCMeta):
 
-    def __init__(self, theta):
+    def __init__(self, theta, rng=None):
         """ Initialise parameters of model: theta.
 
         Theta should be a one-dimensional array or int/float"""
@@ -25,6 +25,10 @@ class Model(metaclass=ABCMeta):
                                 'not {}'.format(theta.ndim)
         self._theta = theta
         self.theta_shape = theta.shape
+        if not rng:
+            self.rng = rnd.RandomState(DEFAULT_SEED)
+        else:
+            self.rng = rng
 
     @property
     def theta(self):
@@ -69,14 +73,14 @@ class SumOfTwoUnnormalisedGaussians(Model):
     where sigma = np.exp(theta[1]), c = theta[0]
     """
 
-    def __init__(self, theta, sigma1=1):
+    def __init__(self, theta, sigma1=1, rng=None):
         """Initialise std deviations of gaussians
 
         :param theta: array of shape (1, )
         :param sigma1: float
         """
         self.sigma1 = sigma1
-        super().__init__(theta)
+        super().__init__(theta, rng=rng)
 
     def __call__(self, U):
         """ Evaluate model for each data point U[i, :]
@@ -115,8 +119,8 @@ class SumOfTwoUnnormalisedGaussians(Model):
 
         correct_shape = self.theta_shape + (n, )
         assert grad.shape == correct_shape, ' ' \
-                                            'gradient should have shape {}, got {} instead'.format(correct_shape,
-                                                                                                   grad.shape)
+            'gradient should have shape {}, got {} instead'.format(correct_shape,
+                                                                   grad.shape)
         return grad
 
     def sample(self, n):
@@ -128,7 +132,7 @@ class SumOfTwoUnnormalisedGaussians(Model):
         sigma = np.exp(self.theta[1])
         a = self.sigma1 / (sigma + self.sigma1)
         w = rnd.uniform(0, 1, n) < a
-        x = (w == 0)*(rnd.randn(n)*sigma) + (w == 1)*(rnd.randn(n)*self.sigma1)
+        x = (w == 0)*(self.rng.randn(n)*sigma) + (w == 1)*(self.rng.randn(n)*self.sigma1)
         return x.reshape(-1, 1)
 
     def normalised(self, U):
@@ -182,16 +186,11 @@ class VisibleRestrictedBoltzmannMachine(Model):
         :param W: array (d+1, m+1)
             Weight matrix. d=num_visibles, m=num_hiddens
         """
-        if not rng:
-            self.rng = np.random.RandomState(DEFAULT_SEED)
-        else:
-            self.rng = rng
-
         self.norm_const = None
         self.W_shape = W.shape  # (d+1, m+1)
-        super().__init__(W.reshape(-1))
+        super().__init__(W.reshape(-1), rng=rng)
 
-    def __call__(self, U,  normalise=False, reset_norm_const=True):
+    def __call__(self, U, normalise=False, reset_norm_const=True):
         """ Evaluate model for each data point U[i, :]
 
         :param U: array (n, d)
@@ -299,4 +298,3 @@ class VisibleRestrictedBoltzmannMachine(Model):
         all_binary_vectors = np.array(list(product(*binary_pairs)))  # (2**k, k)
 
         return all_binary_vectors
-

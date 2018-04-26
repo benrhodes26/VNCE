@@ -15,7 +15,7 @@ DEFAULT_SEED = 1083463236
 # noinspection PyPep8Naming
 class LatentVarModel(metaclass=ABCMeta):
 
-    def __init__(self, theta):
+    def __init__(self, theta, rng=None):
         """ Initialise parameters of model: theta.
 
         Theta should be a one-dimensional array or int/float"""
@@ -25,6 +25,10 @@ class LatentVarModel(metaclass=ABCMeta):
                                 'not {}'.format(theta.ndim)
         self._theta = theta
         self.theta_shape = theta.shape
+        if not rng:
+            self.rng = rnd.RandomState(DEFAULT_SEED)
+        else:
+            self.rng = rng
 
     @property
     def theta(self):
@@ -72,7 +76,7 @@ class MixtureOfTwoGaussians(LatentVarModel):
     phi(u; theta) = (1/2)*Z*N(u; 0, sigma(theta)) + (1/2)*(1-Z)N(u; 0, sigma1)
     where Z is a binary latent variable and sigma = exp(theta)
     """
-    def __init__(self, theta, sigma1=1):
+    def __init__(self, theta, sigma1=1, rng=None):
         """Initialise std deviations of gaussians
 
         :param theta: array of shape (1, )
@@ -81,7 +85,7 @@ class MixtureOfTwoGaussians(LatentVarModel):
         :param sigma1: float
         """
         self.sigma1 = sigma1
-        super().__init__(theta)
+        super().__init__(theta, rng=rng)
 
     def __call__(self, U, Z):
         """ Evaluate model for each data point U[i, :]
@@ -163,8 +167,8 @@ class MixtureOfTwoGaussians(LatentVarModel):
         :return: data array of shape (n, )
         """
         sigma = np.exp(self.theta)
-        w = rnd.uniform(0, 1, n) > 0.5
-        x = (w == 0)*(rnd.randn(n)*sigma) + (w == 1)*(rnd.randn(n)*self.sigma1)
+        w = self.rng.uniform(0, 1, n) > 0.5
+        x = (w == 0)*(self.rng.randn(n)*sigma) + (w == 1)*(self.rng.randn(n)*self.sigma1)
         return x.reshape(-1, 1)
 
     # noinspection PyUnusedLocal
@@ -202,7 +206,7 @@ class MixtureOfTwoUnnormalisedGaussians(LatentVarModel):
     lost its normalising constant.
     """
 
-    def __init__(self, theta, sigma1=1):
+    def __init__(self, theta, sigma1=1, rng=None):
         """Initialise theta and stdevs of gaussians
         :param theta: array (2, )
             theta[0] is a scaling parameter. See the formula
@@ -212,7 +216,7 @@ class MixtureOfTwoUnnormalisedGaussians(LatentVarModel):
             standard deviation of one of the gaussians
         """
         self.sigma1 = sigma1
-        super().__init__(theta)
+        super().__init__(theta, rng=rng)
 
     def __call__(self, U, Z):
         """ Evaluate model for each data point U[i, :]
@@ -296,8 +300,8 @@ class MixtureOfTwoUnnormalisedGaussians(LatentVarModel):
         """
         sigma = np.exp(self.theta[1])
         a = self.sigma1 / (sigma + self.sigma1)
-        w = rnd.uniform(0, 1, n) < a
-        x = (w == 0)*(rnd.randn(n)*sigma) + (w == 1)*(rnd.randn(n)*self.sigma1)
+        w = self.rng.uniform(0, 1, n) < a
+        x = (w == 0)*(self.rng.randn(n)*sigma) + (w == 1)*(self.rng.randn(n)*self.sigma1)
         return x.reshape(-1, 1)
 
     def normalised_and_marginalised_over_z(self, U):
@@ -314,6 +318,7 @@ class MixtureOfTwoUnnormalisedGaussians(LatentVarModel):
         return a*norm.pdf(U.reshape(-1), 0, sigma) + (1 - a)*norm.pdf(U.reshape(-1), 0, self.sigma1)
 
         # noinspection PyUnusedLocal
+
     def plot_sample_density_against_true_density(self, X, figsize=(10, 7), bandwidth=0.2):
         """Compare kernel density estimate of sample X to true density
 
@@ -324,7 +329,7 @@ class MixtureOfTwoUnnormalisedGaussians(LatentVarModel):
         :param bandwidth:
             bandwidth parameter passed to sklearn.KernelDensity
         """
-        _ = plt.figure(figsize=figsize)
+        fig = plt.figure(figsize=figsize)
         u = np.arange(-10, 10, 0.01)
 
         x_density = kd(bandwidth=bandwidth).fit(X.reshape(-1, 1))
@@ -336,6 +341,8 @@ class MixtureOfTwoUnnormalisedGaussians(LatentVarModel):
 
         plt.legend()
         plt.grid()
+
+        return fig
 
 
 # noinspection PyPep8Naming,PyMissingConstructor,PyArgumentList,PyTypeChecker
@@ -367,11 +374,7 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         self.W_shape = W.shape  # (d+1, m+1)
         self.norm_const = None
         theta = W.reshape(-1)
-        if not rng:
-            self.rng = np.random.RandomState(DEFAULT_SEED)
-        else:
-            self.rng = rng
-        super().__init__(theta)
+        super().__init__(theta, rng=rng)
 
     def __call__(self, U, Z, normalise=False, reset_norm_const=True):
         """ Evaluate model for each data point U[i, :]
@@ -441,6 +444,31 @@ class RestrictedBoltzmannMachine(LatentVarModel):
 
         return grad
 
+    def grad_log_visible_marginal_wrt_params(self, U):
+        """ Nabla_theta(log(phi(u; theta))), where we have summed out the latents
+
+        :param U: array (n, d)
+             either data or noise for NCE
+        :return grad: array (len(theta), n)
+        """
+        W = self.theta.reshape(self.W_shape)
+        d_add_1, m_add_1 = np.array(W.shape)
+        n = len(U)
+        U = self.add_bias_terms(U)
+
+        W_1 = W[:, 1:]  # (d+1, m)
+        W_2 = sigmoid(np.dot(U, W_1))  # (n, m)
+        W_3 = np.concatenate((np.ones((n, 1)), W_2), axis=1)  # (n, m+1)
+
+        U = np.repeat(U, m_add_1, axis=-1)  # (n, [d+1]*[m+1])
+        W_4 = np.tile(W_3, d_add_1)  # (n, [d+1]*[m+1])
+
+        grad = U * W_4
+        grad = grad.T  # ([d+1]*[m+1], n)
+        validate_shape(grad.shape, self.theta_shape + (n, ))
+
+        return grad
+
     def p_visibles_given_latents(self, Z):
         """Return probability binary (visible) variable is 1 given latent Z
         :param Z: array (n, m)
@@ -459,7 +487,7 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         return p1
 
     def p_latents_given_visibles(self, U):
-        """Return probability that the binary latent variable is 1
+        """Return probabilities that each binary latent variable is 1
         :param U: array (n, d)
             n (visible) data points that we condition on
         :return: array (n, m)
@@ -474,6 +502,21 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         p1 = sigmoid(a)
 
         return p1
+
+    def p_latent_samples_given_visibles(self, Z, U):
+        """
+        :param Z: array (nz, n, m)
+        :param U: array (n, d)
+            n data points with dimension d
+        :return: array (nz, n)
+            probability of latent variables given data
+        """
+        p1 = self.p_latents_given_visibles(U)  # (n, m)
+
+        posteriors = (Z == 0)*(1 - p1) + (Z == 1)*p1  # (nz, n, m)
+        posterior = np.product(posteriors, axis=-1)  # (nz, n)
+
+        return posterior
 
     def sample(self, n, num_iter=100):
         """ Sample n 'visible' and latent datapoints using gibbs sampling
@@ -601,7 +644,7 @@ class RestrictedBoltzmannMachine(LatentVarModel):
             "constant has O(d 2**m) cost. Assertion raised since d*2^m " \
             "equal to {}, which exceeds the current limit of 10^7,".format(d*(2**m))
 
-        phi_u, Wz = self.marginalised_over_z(U)  # (n, ), (d+1, 2**m)
+        phi_u = self.marginalised_over_z(U)  # (n, ), (d+1, 2**m)
 
         if reset_norm_const:
             self.reset_norm_const()
@@ -614,27 +657,18 @@ class RestrictedBoltzmannMachine(LatentVarModel):
              either data or noise for NCE
         :return
         val: array (n, )
-            probabilities of datapoints under p(x) i.e with z marginalised out
-            and the distribution has been normalised
-        marginalisation_matrix: array (d+1, 2**m)
-            WZ, where Z contains all possible m-length binary vectors
-            vertically stacked, and W is the RBM weight matrix
+            probabilities of datapoints under phi(x) i.e with z marginalised out
         """
-        W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
-
+        W = self.theta.reshape(self.W_shape)
+        d, m = np.array(W.shape) - 1
         U = self.add_bias_terms(U)  # (n, d+1)
-        Wz = self.get_z_marginalization_matrix(W)  # (d+1, 2**m)
-        uWz = np.dot(U, Wz)  # (n, 2**m)
-
-        # For each datapoint and setting of the latent variable, compute value of RBM
-        val = np.exp(uWz)  # (n, 2**m)
-
-        # For each datapoint, marginalize (i.e sum) over the latents
-        val = np.sum(val, axis=-1)   # (n,)
-
+        uW = np.dot(U, W)  # (n, m+1)
+        exp_uW = np.exp(uW)
+        exp_uW += np.concatenate((np.zeros((len(U), 1)), np.ones((len(U), m))), axis=1)
+        val = np.product(exp_uW, axis=1)  # (n, )
         validate_shape(val.shape, (U.shape[0], ))
 
-        return val, Wz
+        return val
 
     def get_z_marginalization_matrix(self, W):
         """Stack each of the 2**m possible binary latent vectors into a
