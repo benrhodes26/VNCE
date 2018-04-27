@@ -172,6 +172,105 @@ class SumOfTwoUnnormalisedGaussians(Model):
         plt.legend()
         plt.grid()
 
+# noinspection PyPep8Naming,PyArgumentList,PyTypeChecker
+class SumOfTwoNormalisedGaussians(Model):
+    """Sum of two unnormalisedGaussians (no latent variable)
+
+    The form of the model is given by :
+    phi(u; theta) = ((sigma/(sigma+sigma1))N(u; 0, sigma) + (sigma1/(sigma+sigma1))N(u; 0, sigma1)),
+    where sigma = np.exp(theta)
+    """
+
+    def __init__(self, theta, sigma1=1, rng=None):
+        """Initialise std deviations of gaussians
+
+        :param theta: array of shape (1, )
+        :param sigma1: float
+        """
+        self.sigma1 = sigma1
+        super().__init__(theta, rng=rng)
+
+    def __call__(self, U):
+        """ Evaluate model for each data point U[i, :]
+
+        :param U: array (n, 1)
+             either data or noise for NCE
+        :return array (n)
+        """
+        return self.term1(U) + self.term2(U)
+
+    def term1(self, U):
+        U = U.reshape(-1)
+        sigma = np.exp(self.theta)  # stdev parameter
+        a = sigma / (sigma + self.sigma1)
+        return a*norm.pdf(U.reshape(-1), 0, sigma)
+
+    def term2(self, U):
+        U = U.reshape(-1)
+        sigma = np.exp(self.theta)  # stdev parameter
+        a = sigma / (sigma + self.sigma1)
+        return (1 - a)*norm.pdf(U.reshape(-1), 0, self.sigma1)
+
+    def grad_log_wrt_params(self, U):
+        """ Nabla_theta(log(phi(u; theta))) where phi is the unnormalised model
+
+        :param U: array (n, 1)
+             either data or noise for NCE
+        :return grad: array (len(theta)=1, n)
+        """
+        n = U.shape[0]
+
+        sigma = np.exp(self.theta)
+        a = -1/(sigma + self.sigma1)
+        b = ((U**2/sigma**3) + a).reshape(-1)  # (n, )
+
+        numerator = self.term1(U)*b + self.term2(U)*a  # (n, )
+        denominator = self.term1(U) + self.term2(U)  # (n, )
+
+        grad = (numerator / denominator).reshape(1, n)  # (1, n)
+
+        correct_shape = self.theta_shape + (n, )
+        assert grad.shape == correct_shape, ' ' \
+            'gradient should have shape {}, got {} instead'.format(correct_shape,
+                                                                   grad.shape)
+        return grad
+
+    def sample(self, n):
+        """ Sample n values from the model, with uniform(0,1) dist over latent vars
+
+        :param n: number of data points to sample
+        :return: data array of shape (n, 1)
+        """
+        sigma = np.exp(self.theta)
+        a = self.sigma1 / (sigma + self.sigma1)
+        w = rnd.uniform(0, 1, n) < a
+        x = (w == 0)*(self.rng.randn(n)*sigma) + (w == 1)*(self.rng.randn(n)*self.sigma1)
+        return x.reshape(-1, 1)
+
+        # noinspection PyUnusedLocal
+    def plot_sample_density_against_true_density(self, X, figsize=(10, 7), bandwidth=0.2):
+        """Compare kernel density estimate of sample X to true density
+
+        :param X: array (N, 1)
+            X is a sample, possibly generated from self.sample
+        :param figsize: tuple
+            size of figure
+        :param bandwidth:
+            bandwidth parameter passed to sklearn.KernelDensity
+        """
+        _ = plt.figure(figsize=figsize)
+        u = np.arange(-10, 10, 0.01)
+
+        x_density = kd(bandwidth=bandwidth).fit(X.reshape(-1, 1))
+        x_density_samples = np.exp(x_density.score_samples(u.reshape(-1, 1)))
+        plt.plot(u, x_density_samples, label='kde')
+
+        px = self.normalised(u)
+        plt.plot(u, px, label='true', c='r', linestyle='--')
+
+        plt.legend()
+        plt.grid()
+
 
 class VisibleRestrictedBoltzmannMachine(Model):
 

@@ -109,8 +109,7 @@ E5 = grad_wrt_alpha_of_E_log_psi_1
 
 model = MixtureOfTwoUnnormalisedGaussians(np.array([0, 0]), sigma1=args.sigma1, rng=rng)
 nce_model = SumOfTwoUnnormalisedGaussians(np.array([0, 0]), sigma1=sigma1, rng=rng)  # for comparison
-# todo: need the normalised sum for mle!
-mle_model = SumOfTwoUnnormalisedGaussians(np.array([0]), sigma1=sigma1, rng=rng)  # for comparison
+mle_model = SumOfTwoNormalisedGaussians(np.array([0]), sigma1=sigma1, rng=rng)  # for comparison
 var_dist = PolynomialSigmoidBernoulli(alpha=np.array([0, 0, 0]), rng=rng)
 
 
@@ -210,10 +209,22 @@ for i in range(args.num_runs):
             # maximum likelihood optimisation
             mle_optimiser.fit(X, theta0=theta0, disp=False, ftol=args.ftol, maxiter=args.maxiter)
 
+            # convert stdev & normalising parameters back from log-domain
+            true_theta[0] = np.exp(-true_theta[0])
+            true_theta[1] = np.exp(true_theta[1])
+
+            optimiser.thetas[:, 0] = np.exp(-optimiser.thetas[:, 0])
+            optimiser.thetas[:, 1] = np.exp(optimiser.thetas[:, 1])
+
+            nce_optimiser.thetas[:, 0] = np.exp(-nce_optimiser.thetas[:, 0])
+            nce_optimiser.thetas[:, 1] = np.exp(nce_optimiser.thetas[:, 1])
+
+            mle_optimiser.thetas = np.exp(mle_optimiser.thetas)
+
             # save all optimisation results to temp store
             vnce_rnd_init_runs.append((optimiser.thetas, optimiser.times, true_theta))
             nce_rnd_init_runs.append((nce_optimiser.thetas, nce_optimiser.times, true_theta))
-            mle_rnd_init_runs.append((mle_model.thetas, mle_optimiser.times, true_theta))
+            mle_rnd_init_runs.append((mle_optimiser.thetas, mle_optimiser.times, true_theta))
 
             max_run_time = max(max_run_time, optimiser.times[-1], nce_optimiser.times[-1], mle_optimiser.times[-1])
 

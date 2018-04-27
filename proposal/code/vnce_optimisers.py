@@ -1170,7 +1170,7 @@ class VNCEOptimiserWithAnalyticExpectations:
                 self.maximize_J1_wrt_theta(X, opt_method=opt_method, ftol=ftol, maxiter=maxiter, disp=disp, separate_terms=separate_terms)
 
             # E-step: optimise w.r.t alpha
-            self.maximize_J1_wrt_alpha(X, J1s, J1_grads, disp, gtol)
+            self.maximize_J1_wrt_alpha(X, opt_method=opt_method, ftol=ftol, maxiter=maxiter, disp=disp, separate_terms=separate_terms)
 
             prev_J1 = current_J1
             current_J1 = np.sum(deepcopy(self.J1s[-1])) if separate_terms else deepcopy(self.J1s[-1])
@@ -1332,20 +1332,36 @@ class VNCEOptimiserWithAnalyticExpectations:
         self.times = np.array(self.times)
         self.times -= self.times[0]  # count seconds from 0
 
-    def plot_loss_curve(self, J1s):
-        num_fevals_per_step = [len(i) for i in J1s]
-        cum_fevals = [sum(num_fevals_per_step[:i + 1]) for i in range(len(num_fevals_per_step))]
-        fig, axs = plt.subplots(1, 1, figsize=(10, 7))
-        J1s = [i for sublist in J1s for i in sublist]
-        t = np.arange(len(J1s))
-        axs.plot(t, J1s, c='k')
-        for i in range(len(cum_fevals)):
-            if i % 2 == 0:
-                axs.plot(cum_fevals[i] * np.array([1, 1]), plt.get(axs, 'ylim'), 'r--')
-            else:
-                axs.plot(cum_fevals[i] * np.array([1, 1]), plt.get(axs, 'ylim'), 'b--')
+    def plot_loss_curve(self, optimal_J1=None, separate_terms=False):
+        """plot of objective function during optimisation
 
-        return fig, axs
+        :param maxiter: int
+            index of final time in seconds to plot on x-axis
+        :return:
+            fig, ax
+                plot of objective function during optimisation
+        """
+        fig, ax = plt.subplots(1, 1, figsize=(10, 7))
+        t = self.times
+        J1 = self.J1s
+
+        # plot optimisation curve
+        if separate_terms:
+            ax.plot(t, J1[:, 0], c='k', label='term 1 of J1')
+            ax.plot(t, J1[:, 1], c='k', label='term 2 of J1')
+        else:
+            ax.plot(t, J1, c='k', label='J1')
+
+        # plot J1(true_theta) which should upper bound our training curve.
+        if optimal_J1:
+            ax.plot((t[0], t[-1]), (optimal_J1, optimal_J1), 'b--',
+                    label='J1 evaluated at true theta')
+
+        ax.set_xlabel('time (seconds)', fontsize=16)
+        ax.set_ylabel('J1', fontsize=16)
+        ax.legend()
+
+        return fig, ax
 
     def __repr__(self):
         return "VNCEOptimiserWithAnalyticExpectations"
