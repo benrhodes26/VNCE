@@ -102,8 +102,9 @@ class CDOptimiser:
 
                 grad = data_grad - model_grad  # (len(theta), )
                 self.phi.theta += learning_rate * grad
-                self.thetas.append(deepcopy(self.phi.theta))
-                self.times.append(time.time())
+
+            self.thetas.append(deepcopy(self.phi.theta))
+            self.times.append(time.time())
 
         self.thetas = np.array(self.thetas)
         self.times = np.array(self.times)
@@ -132,7 +133,7 @@ class CDOptimiser:
     def reduce_optimisation_results(self, time_step_size):
         """reduce to #time_step_size results, evenly spaced on a log scale"""
         log_times = np.exp(np.linspace(-3, np.log(self.times[-1]), num=time_step_size))
-        log_time_ids = [takeClosest(self.times, t) for t in log_times]
+        log_time_ids = np.unique(np.array([takeClosest(self.times, t) for t in log_times]))
         reduced_times = deepcopy(self.times[log_time_ids])
         reduced_thetas = deepcopy(self.thetas[log_time_ids])
 

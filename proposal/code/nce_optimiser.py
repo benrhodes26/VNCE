@@ -53,7 +53,7 @@ class NCEOptimiser:
         """
         return np.log(self.phi(U)) - np.log(self.pn(U))
 
-    def compute_J(self, X, separate_terms=False):
+    def compute_J(self, X, Y=None, separate_terms=False):
         """Return value of objective at current parameters
 
         :param X: array (N, d)
@@ -61,7 +61,9 @@ class NCEOptimiser:
         :return: float
             Value of objective for current parameters
         """
-        Y, nu = self.Y, self.nu
+        if Y is None:
+            Y = self.Y
+        nu = self.nu
 
         a0 = 1 + nu*np.exp(-self.h(X))
         a1 = 1 + (1 / nu)*np.exp(self.h(Y))
@@ -73,14 +75,16 @@ class NCEOptimiser:
 
         return first_term + second_term
 
-    def compute_J_grad(self, X):
+    def compute_J_grad(self, X, Y=None):
         """Computes the NCE objective function, J.
 
         :param X: array (N, d)
             data sample we are training our model on.
         :return grad: array of shape (len(phi.theta), )
         """
-        Y, nu = self.Y, self.nu
+        if Y is None:
+            Y = self.Y
+        nu = self.nu
 
         gradX = self.phi.grad_log_wrt_params(X)  # (len(theta), n)
         # a0 = 1 / (1 + (1 / nu)*np.exp(self.h(X)))  # (n,)
@@ -103,7 +107,16 @@ class NCEOptimiser:
                                                                   grad.shape)
         return grad
 
-    def fit(self, X, theta0=np.array([0.5]), disp=True, ftol=1e-9, maxiter=100, separate_terms=False):
+    def fit(self,
+            X,
+            theta0=np.array([0.5]),
+            opt_method='L-BFGS-B',
+            disp=True, ftol=1e-9,
+            maxiter=100,
+            learning_rate=0.3,
+            batch_size=100,
+            num_epochs=1000,
+            separate_terms=False):
         """ Fit the parameters of the model to the data X
 
         optimise the objective function defined in self.compute_J().
@@ -130,14 +143,16 @@ class NCEOptimiser:
             times: array
                 ith element is time until ith iteration in seconds
         """
+
         # initialise parameters
         self.phi.theta = deepcopy(theta0)
-        self.thetas.append(deepcopy(theta0))
-        self.Js.append(self.compute_J(X, separate_terms=separate_terms))
-        self.times.append(time.time())
+        self.update_opt_results(self.compute_J(X, separate_terms=separate_terms))
 
         # optimise w.r.t to theta
-        self.maximize_J1_wrt_theta(X, disp, ftol=ftol, maxiter=maxiter, separate_terms=separate_terms)
+        if opt_method == 'SGD':
+            self.maximize_J1_wrt_theta_SGD(X, learning_rate=learning_rate, batch_size=batch_size, num_epochs=num_epochs, separate_terms=separate_terms)
+        else:
+            self.maximize_J1_wrt_theta(X, disp=disp, opt_method=opt_method, ftol=ftol, maxiter=maxiter, separate_terms=separate_terms)
 
         # todo: have an 'unfreeze' method that turns arrays back to lists for continued optimisationmaximize_L_wrt_theta
         self.thetas = np.array(self.thetas)
@@ -147,7 +162,7 @@ class NCEOptimiser:
 
         return np.array(self.thetas), np.array(self.Js), np.array(self.times)
 
-    def maximize_J1_wrt_theta(self, X, disp, ftol=1e-9, maxiter=100, separate_terms=False):
+    def maximize_J1_wrt_theta(self, X, disp, opt_method='L-BFGS-B', ftol=1e-9, maxiter=100, separate_terms=False):
         """Return theta that maximises J1
 
         :param X: array (n, 1)
@@ -162,9 +177,7 @@ class NCEOptimiser:
         thetas, Js, times = [], [], []
 
         def callback(_):
-            times.append(time.time())
-            thetas.append(deepcopy(self.phi.theta))
-            Js.append(self.compute_J(X, separate_terms=separate_terms))
+            self.update_opt_results(self.compute_J(X, separate_terms=separate_terms))
 
         def J1_k_neg(theta):
             self.phi.theta = theta
@@ -174,12 +187,74 @@ class NCEOptimiser:
             self.phi.theta = theta
             return -self.compute_J_grad(X)
 
-        _ = minimize(J1_k_neg, self.phi.theta, method='L-BFGS-B', jac=J1_k_grad_neg,
+        _ = minimize(J1_k_neg, self.phi.theta, method=opt_method, jac=J1_k_grad_neg,
                      callback=callback, options={'ftol': ftol, 'maxiter': maxiter, 'disp': disp})
 
         self.thetas.extend(thetas)
         self.Js.extend(Js)
         self.times.extend(times)
+
+    def maximize_J1_wrt_theta_SGD(self, X, learning_rate, batch_size, num_epochs, separate_terms=False):
+            """Maximise objective function using stochastic gradient descent
+
+            :param X: array (n, d)
+                data
+            :param learning rate: float
+                learning rate for gradient ascent
+            :param batch_size: int
+                size of a mini-batch
+            :param num_em_steps int
+                number of times we've been through the outer EM loop
+            """
+            n = X.shape[0]
+            for i in range(num_epochs):
+                for j in range(0, n, batch_size):
+                    # get minibatch
+                    X_batch, Y_batch = self.get_minibatch(X, batch_size, j)
+
+                    # compute gradient
+                    grad = self.compute_J_grad(X_batch, Y_batch)
+
+                    # update params
+                    self.phi.theta += learning_rate * grad
+
+                # store results
+                current_J = self.compute_J(X_batch, Y=Y_batch, separate_terms=separate_terms)
+                self.update_opt_results(current_J)
+
+                sum_current_J = np.sum(current_J) if separate_terms else current_J
+                print('epoch {}: J = {}'.format(i, sum_current_J))
+
+    def get_minibatch(self, X, batch_size, batch_start):
+        """Return a minibatch of data (X), noise (Y) and latents for SGD"""
+
+        batch_slice = slice(batch_start, batch_start + batch_size)
+        noise_batch_start = int(batch_start * self.nu)
+        noise_batch_slice = slice(noise_batch_start, noise_batch_start + int(batch_size * self.nu))
+
+        X_batch = X[batch_slice]
+        Y_batch = self.Y[noise_batch_slice]
+
+        return X_batch, Y_batch
+
+    def begin_epoch(self, X):
+        """shuffle data and noise and save current results
+
+        :return X: array
+            shuffled_data
+        """
+        # shuffle data
+        perm = self.rng.permutation(len(X))
+        noise_perm = self.rng.permutation(len(self.Y))
+        X = X[perm]
+        self.Y = self.Y[noise_perm]
+
+        return X
+
+    def update_opt_results(self, J):
+        self.times.append(time.time())
+        self.thetas.append(deepcopy(self.phi.theta))
+        self.Js.append(deepcopy(J))
 
     def plot_loss_curve(self):
         fig, axs = plt.subplots(1, 1, figsize=(10, 7))
@@ -208,7 +283,7 @@ class NCEOptimiser:
     def reduce_optimisation_results(self, time_step_size):
         """reduce to #time_step_size results, evenly spaced on a log scale"""
         log_times = np.exp(np.linspace(-3, np.log(self.times[-1]), num=time_step_size))
-        log_time_ids = [takeClosest(self.times, t) for t in log_times]
+        log_time_ids = np.unique(np.array([takeClosest(self.times, t) for t in log_times]))
         reduced_times = deepcopy(self.times[log_time_ids])
         reduced_thetas = deepcopy(self.thetas[log_time_ids])
 

@@ -32,8 +32,8 @@ class VNCEOptimiser:
     of these expectations, consider using LatentNCEOptimiserWithAnalyticExpectations.
     """
 
-    def __init__(self, model, noise, variational_dist, noise_samples, sample_size, nu=1, latent_samples_per_datapoint=1,
-                 eps=1e-15, rng=None, pos_var_threshold=0.01, ratio_variance_method_1=True):
+    def __init__(self, model, noise, variational_dist, noise_samples, nu=1, latent_samples_per_datapoint=1,
+                 eps=1e-7, rng=None, pos_var_threshold=0.01, ratio_variance_method_1=True):
         """ Initialise unnormalised model and distributions.
 
         :param model: LatentVariableModel
@@ -57,14 +57,17 @@ class VNCEOptimiser:
         self.pn = noise
         self.q = variational_dist
         self.nu = nu
-        self.n = sample_size
         self.nz = latent_samples_per_datapoint
         self.eps = eps
         self.Y = noise_samples
         self.posterior_variance_threshold = pos_var_threshold
         self.ratio_variance_method_1 = ratio_variance_method_1
+        self.J1 = None
         self.ZX = None  # array of latent vars used during optimisation
         self.ZY = None  # array of latent vars used during optimisation
+        self.control_variates = np.ones(len(self.Y))
+        self.posterior_ratios = np.ones((self.nz, len(self.Y)))
+        self.c = 0.01  # control variate coefficient
         if not rng:
             self.rng = np.random.RandomState(DEFAULT_SEED)
         else:
@@ -100,7 +103,7 @@ class VNCEOptimiser:
 
         return val
 
-    def compute_J1(self, X, ZX=None, ZY=None, separate_terms=False):
+    def compute_J1(self, X, ZX=None, ZY=None, Y=None, separate_terms=False, save_J1=False):
         """Return MC estimate of Lower bound of NCE objective
 
         :param X: array (N, d)
@@ -114,28 +117,38 @@ class VNCEOptimiser:
         :return: float
             Value of objective for current parameters
         """
-        Y, nu = self.Y, self.nu
+        nu = self.nu
+        if Y is None:
+            Y = self.Y
         if ZX is None:
             ZX = self.q.sample(self.nz, X)
         if ZY is None:
             ZY = self.q.sample(self.nz, Y)
 
         r_x = self.r(X, ZX)
-        # a = nu / (r_x + self.eps)  # (nz, n)
         a = nu * np.exp(-r_x)  # (nz, n)
-        validate_shape(a.shape, (self.nz, self.n))
+        validate_shape(a.shape, (self.nz, len(X)))
         first_term = -np.mean(np.log(1 + a))
 
         r_y = self.r(Y, ZY)
-        # b = (1 / nu) * np.mean(r_y, axis=0)  # (n*nu, )
-        b = (1 / nu) * np.mean(np.exp(r_y), axis=0)  # (n*nu, )
-        validate_shape(b.shape, (self.n * self.nu, ))
+        # b = (1 / nu) * np.mean(np.exp(r_y), axis=0)  # (n*nu, )
+        expectation = np.mean(np.exp(r_y), axis=0)
+
+        # control_vars = self.posterior_ratios.mean(axis=0)
+        # control_coef = self.get_control_coefficient(self.posterior_ratios, np.exp(r_y))
+        # b = (1 / nu) * (expectation - control_coef*control_vars + control_coef)  # (n*nu, )
+        b = (1 / nu) * expectation  # (n*nu, )
+        validate_shape(b.shape, (len(Y), ))
+        # second_term = -nu * np.mean(np.log(1 + b) - (control_coef * (np.log(1 + control_vars) - np.log(2))))
         second_term = -nu * np.mean(np.log(1 + b))
 
         if separate_terms:
-            return np.array([first_term, second_term])
-
-        return first_term + second_term
+            val = np.array([first_term, second_term])
+        else:
+            val = first_term + second_term
+        if save_J1:
+            self.J1 = val
+        return val
 
     def compute_J1_grad(self, X, ZX=None, ZY=None, Y=None):
         """Computes J1_grad w.r.t theta using Monte-Carlo
@@ -165,9 +178,9 @@ class VNCEOptimiser:
         term_1 = np.mean(gradX * a, axis=(1, 2))  # (len(theta), )
 
         gradY = self.phi.grad_log_wrt_params(Y, ZY)  # (len(theta), nz, n)
-        # r = self.r(Y, ZY)  # (nz, n)
         r = np.exp(self.r(Y, ZY))  # (nz, n)
         # Expectation over ZY
+        # E_ZY = np.mean(gradY * r - self.c*self.control_variates + self.c, axis=1)  # (len(theta), n)
         E_ZY = np.mean(gradY * r, axis=1)  # (len(theta), n)
         one_over_psi2 = 1/self._psi_2(Y, ZY)  # (n, )
         # Expectation over Y
@@ -184,17 +197,32 @@ class VNCEOptimiser:
 
     def _psi_1(self, U, Z):
         """Return array (nz, n)"""
-        # return 1 + (self.nu / self.r(U, Z))
         return 1 + (self.nu * np.exp(-self.r(U, Z)))
 
     def _psi_2(self, U, Z):
         """Return array (n, )"""
-        # return 1 + (1/self.nu) * np.mean(self.r(U, Z), axis=0)
-        return 1 + (1/self.nu) * np.mean(np.exp(self.r(U, Z)), axis=0)
+        return 1 + ((1/self.nu) * np.mean(np.exp(self.r(U, Z)), axis=0))
+        # r_u = np.exp(self.r(U, Z))
+        # control_vars = self.posterior_ratios.mean(axis=0)
+        # control_coef = self.get_control_coefficient(self.posterior_ratios, r_u)
+        # return 1 + (1/self.nu) * np.mean(r_u - control_coef*control_vars + control_coef, axis=0)
 
-    def fit(self, X, theta_ids=None, theta0=np.array([0.5]), opt_method='L-BFGS-B', ftol=1e-5,
-            maxiter=10, stop_threshold=1e-5, max_num_em_steps=20, learning_rate=0.01, batch_size=10,
-            disp=True, plot=True, separate_terms=False, save_dir=None):
+    def fit(self,
+            X,
+            theta_ids=None,
+            theta0=np.array([0.5]),
+            opt_method='L-BFGS-B',
+            ftol=1e-9,
+            maxiter=10,
+            stop_threshold=1e-9,
+            max_num_em_steps=100,
+            learning_rate=0.01,
+            batch_size=100,
+            disp=True,
+            plot=True,
+            separate_terms=False,
+            save_dir=None,
+            use_control_vars=False):
         """ Fit the parameters of the model to the data X with an
         EM-type algorithm that switches between optimising the model
         params to produce theta_k and then resetting the variational distribution
@@ -248,7 +276,8 @@ class VNCEOptimiser:
         self.phi.theta, self.q.alpha = deepcopy(theta0), deepcopy(theta0)
 
         # save time (in seconds), theta and J1(theta) after every iteration/epoch
-        self.update_opt_results(X, theta_ids, separate_terms, E_step=True)
+        self.compute_J1(X, separate_terms=separate_terms, save_J1=True)
+        self.update_opt_results(theta_ids, E_step=True)
 
         num_em_steps = 0
         prev_J1, current_J1 = -99, -9  # arbitrary distinct numbers
@@ -257,27 +286,21 @@ class VNCEOptimiser:
 
             # M-step
             if opt_method == 'SGD':
+                # if its a new epoch, shuffle data and save current results
+                if num_em_steps % int(len(X)/batch_size) == 0:
+                    X = self.begin_epoch(X)
                 self.maximize_J1_wrt_theta_SGD(X, learning_rate=learning_rate, batch_size=batch_size, num_em_steps=num_em_steps, separate_terms=separate_terms)
             else:
-                self.maximize_J1_wrt_theta(theta_ids, X, opt_method=opt_method, ftol=ftol, maxiter=maxiter, disp=disp, separate_terms=separate_terms)
+                self.maximize_J1_wrt_theta(theta_ids, X, opt_method=opt_method, ftol=ftol, maxiter=maxiter, disp=disp, separate_terms=separate_terms, use_control_vars=use_control_vars)
 
             # E-step
             self.q.alpha[theta_ids] = self.phi.theta[theta_ids]
-            self.update_opt_results(X, theta_ids, separate_terms, E_step=True)
 
             prev_J1 = current_J1
-            current_J1 = np.sum(deepcopy(self.J1s[-1])) if separate_terms else deepcopy(self.J1s[-1])
+            current_J1 = np.sum(deepcopy(self.J1)) if separate_terms else deepcopy(self.J1)
             num_em_steps += 1
-            if opt_method != 'SGD':
-                print('{} EM step: J1 = {}'.format(num_em_steps, current_J1))
-
-            # todo: delete when no longer needed
-            if num_em_steps % 5 == 0:
-                fig, axs = plt.subplots(2, 1, figsize=(15, 20))
-                axs = axs.ravel()
-                axs[0].plot(self.times, self.posterior_ratio_vars, c='k', label='V(p(z|y)/q(z|y))')
-                axs[1].hist(self.posterior_ratio_vars, bins=int(len(self.posterior_ratio_vars)/10), )
-                fig.savefig('{}/J-J1_tracking.pdf'.format(save_dir))
+            # if opt_method != 'SGD':
+            #     print('{} EM step: J1 = {}'.format(num_em_steps, current_J1))
 
         if plot:
             self.plot_loss_curve()
@@ -285,7 +308,15 @@ class VNCEOptimiser:
 
         return self.thetas, self.J1s, self.times
 
-    def maximize_J1_wrt_theta(self, theta_ids, X, opt_method='L-BFGS-B', ftol=1e-5, maxiter=10, disp=True, separate_terms=False):
+    def maximize_J1_wrt_theta(self,
+                              theta_ids,
+                              X,
+                              opt_method='L-BFGS-B',
+                              ftol=1e-5,
+                              maxiter=10,
+                              disp=True,
+                              separate_terms=False,
+                              use_control_vars=False):
         """Maximise objective function using one of the scipy.minimize methods
 
         :param theta_ids: array
@@ -308,30 +339,38 @@ class VNCEOptimiser:
         """
         self.ZX = self.q.sample(self.nz, X)
         self.ZY = self.q.sample(self.nz, self.Y)
+        self.compute_J1(X, ZX=self.ZX, ZY=self.ZY, separate_terms=separate_terms, save_J1=True)
+        self.update_opt_results(theta_ids, E_step=True)
+        self.posterior_ratios = np.ones((self.nz, len(self.Y)))
 
         def callback(_):
-            self.update_opt_results(X, theta_ids, separate_terms)
+            self.update_opt_results(theta_ids)
+            if use_control_vars:
+                self.posterior_ratios = self.get_posterior_ratio()
+
             if self.ratio_variance_method_1:
                 av_ratio_variance = self.get_posterior_ratio_variance_1()
             else:
                 av_ratio_variance = self.get_posterior_ratio_variance_2()
 
-            if av_ratio_variance > self.posterior_variance_threshold:
-                raise RuntimeError
+            # if av_ratio_variance > self.posterior_variance_threshold:
+            #     raise RuntimeError
 
         def J1_k_neg(theta_subset):
             self.phi.theta[theta_ids] = theta_subset
-            return -self.compute_J1(X, ZX=self.ZX, ZY=self.ZY)
+            return -np.sum(self.compute_J1(X, ZX=self.ZX, ZY=self.ZY, separate_terms=separate_terms, save_J1=True))
 
         def J1_k_grad_neg(theta_subset):
             self.phi.theta[theta_ids] = theta_subset
             return -self.compute_J1_grad(X, ZX=self.ZX, ZY=self.ZY)[theta_ids]
 
         try:
-            _ = minimize(J1_k_neg, self.phi.theta[theta_ids], method=opt_method, jac=J1_k_grad_neg,
-                         callback=callback, options={'ftol': ftol, 'maxiter': maxiter, 'disp': disp})
+            res = minimize(J1_k_neg, self.phi.theta[theta_ids], method=opt_method, jac=J1_k_grad_neg,
+                           callback=callback, options={'ftol': ftol, 'maxiter': maxiter, 'disp': disp})
         except RuntimeError:
             pass
+        finally:
+            print(res.message)
 
     def get_posterior_ratio_variance_1(self):
         """ E_y(V_z(p(z|u)/q(z|u)) where E=expectation, V=variance."""
@@ -353,6 +392,20 @@ class VNCEOptimiser:
 
         return av_ratio_variance
 
+    def get_posterior_ratio(self):
+        model_posterior = self.phi.p_latent_samples_given_visibles(self.ZY, self.Y)  # (nz, n*nu)
+        variational_posterior = self.q(self.ZY, self.Y)  # (nz, n*nu)
+        ratio = model_posterior / variational_posterior
+
+        return ratio
+
+    def get_control_coefficient(self, posterior_ratio, r):
+        covar = np.nan_to_num(np.mean(posterior_ratio * r, axis=0) - np.mean(posterior_ratio, axis=0) * np.mean(r, axis=0))
+        posterior_ratio_var = posterior_ratio.var(axis=0)
+
+        return 0.2
+        # return - (covar / (posterior_ratio_var + self.eps))
+
     def maximize_J1_wrt_theta_SGD(self, X, learning_rate, batch_size, num_em_steps, separate_terms=False):
             """Maximise objective function using stochastic gradient descent
 
@@ -366,10 +419,6 @@ class VNCEOptimiser:
                 number of times we've been through the outer EM loop
             """
 
-            # Each epoch, shuffle data and save current results
-            if num_em_steps % int(len(X)/batch_size) == 0:
-                X = self.begin_epoch(X, batch_size, num_em_steps, separate_terms=separate_terms)
-
             # get minibatch
             X_batch, Y_batch, ZX_batch, ZY_batch = self.get_minibatch(X, batch_size, num_em_steps)
 
@@ -379,38 +428,45 @@ class VNCEOptimiser:
             # update params
             self.phi.theta += learning_rate * grad
 
+            # store results
+            current_J1 = self.compute_J1(X_batch, ZX=ZX_batch, ZY=ZY_batch, Y=Y_batch, separate_terms=separate_terms, save_J1=True)
+            self.J1 = current_J1
+
+            # print progress each epoch
+            sum_current_J1 = np.sum(current_J1) if separate_terms else current_J1
+            if num_em_steps % int(len(X)/batch_size) == 0:
+                print('epoch {}: J1 = {}'.format(int(num_em_steps / int(len(X) / batch_size)), sum_current_J1))
+
     def get_minibatch(self, X, batch_size, num_em_steps):
         """Return a minibatch of data (X), noise (Y) and latents for SGD"""
         num_batches = int(len(X) / batch_size)
         batch_start = (num_em_steps % num_batches) * batch_size
         batch_slice = slice(batch_start, batch_start + batch_size)
+
         noise_batch_start = int(batch_start * self.nu)
         noise_batch_slice = slice(noise_batch_start, noise_batch_start + int(batch_size * self.nu))
+
         X_batch = X[batch_slice]
         Y_batch = self.Y[noise_batch_slice]
-        ZX_batch = self.ZX[:, batch_slice, :]
-        ZY_batch = self.ZY[:, noise_batch_slice, :]
+
+        ZX_batch = self.q.sample(self.nz, X_batch)
+        ZY_batch = self.q.sample(self.nz, Y_batch)
 
         return X_batch, Y_batch, ZX_batch, ZY_batch
 
-    def begin_epoch(self, X, batch_size, num_em_steps, separate_terms=False):
+    def begin_epoch(self, X):
         """shuffle data and noise and save current results
 
         :return X: array
             shuffled_data
         """
+
+        self.update_opt_results(np.arange(len(self.phi.theta)))
         # shuffle data
         perm = self.rng.permutation(len(X))
         noise_perm = self.rng.permutation(len(self.Y))
         X = X[perm]
         self.Y = self.Y[noise_perm]
-        self.ZX = self.q.sample(self.nz, X)
-        self.ZY = self.q.sample(self.nz, self.Y)
-
-        # store results obtained at end of last epoch
-        self.update_opt_results(X, np.arange(len(self.phi.theta)), separate_terms)
-        current_J1 = np.sum(deepcopy(self.J1s[-1])) if separate_terms else deepcopy(self.J1s[-1])
-        print('epoch {}: J1 = {}'.format(int(num_em_steps / int(len(X) / batch_size)), current_J1))
 
         return X
 
@@ -420,13 +476,10 @@ class VNCEOptimiser:
         self.times = np.array(self.times)
         self.times -= self.times[0]  # count seconds from 0
 
-    def update_opt_results(self, X, theta_inds, separate_terms, E_step=False):
+    def update_opt_results(self, theta_inds, E_step=False):
         self.times.append(time.time())
         self.thetas.append(deepcopy(self.phi.theta[theta_inds]))
-        if self.ZX is None:
-            self.J1s.append(self.compute_J1(X, separate_terms=separate_terms))
-        else:
-            self.J1s.append(self.compute_J1(X, ZX=self.ZX, ZY=self.ZY, separate_terms=separate_terms))
+        self.J1s.append(deepcopy(self.J1))
         if E_step:
             self.E_step_ids.append(deepcopy(len(self.times))-1)
             self.posterior_ratio_vars.append(0)
@@ -493,6 +546,7 @@ class VNCEOptimiser:
         current_nz = deepcopy(self.nz)
         self.phi.theta, self.q.alpha = theta, theta
         self.nz = nz  # increase accuracy of approximation
+        self.posterior_ratios = np.ones((self.nz, len(self.Y)))
         J1 = self.compute_J1(X, separate_terms=separate_terms)
         # reset parameters to how they were before
         self.phi.theta, self.q.alpha = current_theta, current_theta
@@ -503,7 +557,7 @@ class VNCEOptimiser:
     def reduce_optimisation_results(self, time_step_size):
         """reduce to #time_step_size results, evenly spaced on a log scale"""
         log_times = np.exp(np.linspace(-3, np.log(self.times[-1]), num=time_step_size))
-        log_time_ids = [takeClosest(self.times, t) for t in log_times]
+        log_time_ids = np.unique(np.array([takeClosest(self.times, t) for t in log_times]))
         reduced_times = deepcopy(self.times[log_time_ids])
         reduced_thetas = deepcopy(self.thetas[log_time_ids])
 
@@ -511,6 +565,7 @@ class VNCEOptimiser:
 
     def __repr__(self):
         return "VNCEOptimiser"
+
 
 # noinspection PyPep8Naming,PyTypeChecker,PyMethodMayBeStatic
 class VNCEOptimiserWithoutImportanceSampling:
@@ -526,7 +581,7 @@ class VNCEOptimiserWithoutImportanceSampling:
     of these expectations, consider using VNCEOptimiserWithAnalyticExpectations.
     """
 
-    def __init__(self, model, noise, variational_dist, noise_samples, sample_size, nu=1, latent_samples_per_datapoint=1, eps=1e-15, rng=None):
+    def __init__(self, model, noise, variational_dist, noise_samples, nu=1, latent_samples_per_datapoint=1, eps=1e-15, rng=None):
         """ Initialise unnormalised model and distributions.
 
         :param model: LatentVariableModel
@@ -550,14 +605,14 @@ class VNCEOptimiserWithoutImportanceSampling:
         self.pn = noise
         self.q = variational_dist
         self.nu = nu
-        self.n = sample_size
         self.nz = latent_samples_per_datapoint
         self.eps = eps
         self.Y = noise_samples
+        self.J1 = None
+        self.ZX = None
         self.thetas = []  # for storing values of parameters during optimisation
         self.J1s = []  # for storing values of objective function during optimisation
         self.times = []  # seconds spent to reach each iteration during optimisation
-        self.ZX = None  # array of latent vars used during optimisation
         self.E_step_ids = []  # list to track when we perform E step during optimisation
         if not rng:
             self.rng = np.random.RandomState(DEFAULT_SEED)
@@ -600,7 +655,7 @@ class VNCEOptimiserWithoutImportanceSampling:
 
         return val
 
-    def compute_J1(self, X, ZX=None, separate_terms=False):
+    def compute_J1(self, X, ZX=None, Y=None, separate_terms=False, save_J1=False):
         """Return MC estimate of Lower bound of NCE objective
 
         :param X: array (N, d)
@@ -614,24 +669,29 @@ class VNCEOptimiserWithoutImportanceSampling:
         :return: float
             Value of objective for current parameters
         """
-        Y, nu = self.Y, self.nu
+        nu = self.nu
+        if Y is None:
+            Y = self.Y
         if ZX is None:
             ZX = self.q.sample(self.nz, X)
 
         r_x = self.r1(X, ZX)
         a = nu * np.exp(-r_x)  # (nz, n)
-        validate_shape(a.shape, (self.nz, self.n))
+        validate_shape(a.shape, (self.nz, len(X)))
         first_term = -np.mean(np.log(1 + a))
 
         r_y = self.r2(Y)
         b = (1 / nu) * np.exp(r_y)  # (n*nu, )
-        validate_shape(b.shape, (int(self.n * self.nu), ))
+        validate_shape(b.shape, (len(Y), ))
         second_term = -nu * np.mean(np.log(1 + b))
 
         if separate_terms:
-            return np.array([first_term, second_term])
-
-        return first_term + second_term
+            val = np.array([first_term, second_term])
+        else:
+            val = first_term + second_term
+        if save_J1:
+            self.J1 = val
+        return val
 
     def compute_J1_grad(self, X, ZX=None, Y=None):
         """Computes J1_grad w.r.t theta using Monte-Carlo
@@ -678,9 +738,23 @@ class VNCEOptimiserWithoutImportanceSampling:
         # return 1 + (self.nu / self.r(U, Z))
         return 1 + (self.nu * np.exp(-self.r1(U, Z)))
 
-    def fit(self, X, theta_ids=None, theta0=np.array([0.5]), opt_method='L-BFGS-B', ftol=1e-5,
-            maxiter=10, stop_threshold=1e-5, max_num_em_steps=20, learning_rate=0.01, batch_size=10,
-            disp=True, plot=True, separate_terms=False, posterior_variance_threshold=0.01, save_dir=None):
+    def fit(self,
+            X,
+            theta_ids=None,
+            theta0=np.array([0.5]),
+            opt_method='L-BFGS-B',
+            ftol=1e-5,
+            maxiter=10,
+            stop_threshold=1e-5,
+            max_num_em_steps=20,
+            learning_rate=0.01,
+            batch_size=10,
+            disp=True,
+            plot=True,
+            separate_terms=False,
+            posterior_variance_threshold=0.01,
+            save_dir=None,
+            use_control_vars=None):
         """ Fit the parameters of the model to the data X with an
         EM-type algorithm that switches between optimising the model
         params to produce theta_k and then resetting the variational distribution
@@ -731,7 +805,8 @@ class VNCEOptimiserWithoutImportanceSampling:
         # initialise parameters
         self.phi.theta, self.q.alpha = deepcopy(theta0), deepcopy(theta0)
         # save time (in seconds), theta and J1(theta) after every iteration/epoch
-        self.update_opt_results(X, theta_ids, separate_terms, E_step=True)
+        self.compute_J1(X, separate_terms=separate_terms, save_J1=True)
+        self.update_opt_results(theta_ids, E_step=True)
 
         num_em_steps = 0
         prev_J1, current_J1 = -99, -9  # arbitrary distinct numbers
@@ -740,20 +815,21 @@ class VNCEOptimiserWithoutImportanceSampling:
 
             # M-step
             if opt_method == 'SGD':
+                # if its a new epoch, shuffle data and save current results
+                if num_em_steps % int(len(X)/batch_size) == 0:
+                    X = self.begin_epoch(X)
                 self.maximize_J1_wrt_theta_SGD(X, learning_rate=learning_rate, batch_size=batch_size, num_em_steps=num_em_steps, separate_terms=separate_terms)
             else:
-                self.maximize_J1_wrt_theta(theta_ids, X, opt_method=opt_method, ftol=ftol, maxiter=maxiter, disp=disp,
-                                           separate_terms=separate_terms, posterior_variance_threshold=posterior_variance_threshold)
+                self.maximize_J1_wrt_theta(theta_ids, X, opt_method=opt_method, ftol=ftol, maxiter=maxiter, disp=disp)
 
             # E-step
             self.q.alpha[theta_ids] = self.phi.theta[theta_ids]
-            self.update_opt_results(X, theta_ids, separate_terms, E_step=True)
 
             prev_J1 = current_J1
             current_J1 = np.sum(deepcopy(self.J1s[-1])) if separate_terms else deepcopy(self.J1s[-1])
             num_em_steps += 1
-            if opt_method != 'SGD':
-                print('{} EM step: J1 = {}'.format(num_em_steps, current_J1))
+            # if opt_method != 'SGD':
+            #     print('{} EM step: J1 = {}'.format(num_em_steps, current_J1))
 
         if plot:
             self.plot_loss_curve()
@@ -761,8 +837,7 @@ class VNCEOptimiserWithoutImportanceSampling:
 
         return np.array(self.thetas), np.array(self.J1s), np.array(self.times)
 
-    def maximize_J1_wrt_theta(self, theta_ids, X, opt_method='L-BFGS-B', ftol=1e-5, maxiter=10, disp=True,
-                              separate_terms=False, posterior_variance_threshold=0.01):
+    def maximize_J1_wrt_theta(self, theta_ids, X, opt_method='L-BFGS-B', ftol=1e-5, maxiter=10, disp=True):
         """Maximise objective function using one of the scipy.minimize methods
 
         :param theta_ids: array
@@ -784,13 +859,14 @@ class VNCEOptimiserWithoutImportanceSampling:
             display optimisation results for each iteration
         """
         self.ZX = self.q.sample(self.nz, X)
+        self.update_opt_results(theta_ids, E_step=True)
 
         def callback(_):
-            self.update_opt_results(X, theta_ids, separate_terms)
+            self.update_opt_results(theta_ids)
 
         def J1_k_neg(theta_subset):
             self.phi.theta[theta_ids] = theta_subset
-            return -self.compute_J1(X, ZX=self.ZX)
+            return -np.sum(self.compute_J1(X, ZX=self.ZX, separate_terms=True, save_J1=True))
 
         def J1_k_grad_neg(theta_subset):
             self.phi.theta[theta_ids] = theta_subset
@@ -812,31 +888,38 @@ class VNCEOptimiserWithoutImportanceSampling:
                 number of times we've been through the outer EM loop
             """
 
-            # Each epoch, shuffle data and save current results
-            if num_em_steps % int(len(X)/batch_size) == 0:
-                X = self.begin_epoch(X, batch_size, num_em_steps, separate_terms=separate_terms)
             # get minibatch
-            X_batch, Y_batch, ZX_batch, ZY_batch = self.get_minibatch(X, batch_size, num_em_steps)
+            X_batch, Y_batch, ZX_batch = self.get_minibatch(X, batch_size, num_em_steps)
+
             # compute gradient
             grad = self.compute_J1_grad(X_batch, ZX=ZX_batch, Y=Y_batch)
+
             # update params
             self.phi.theta += learning_rate * grad
+
+            current_J1 = self.compute_J1(X_batch, ZX=ZX_batch, Y=Y_batch, separate_terms=separate_terms, save_J1=True)
+            current_J1 = np.sum(current_J1) if separate_terms else current_J1
+            self.update_opt_results(np.arange(len(self.phi.theta)))
+            if num_em_steps % int(len(X)/batch_size) == 0:
+                print('epoch {}: J1 = {}'.format(int(num_em_steps / int(len(X) / batch_size)), current_J1))
 
     def get_minibatch(self, X, batch_size, num_em_steps):
         """Return a minibatch of data (X), noise (Y) and latents for SGD"""
         num_batches = int(len(X) / batch_size)
         batch_start = (num_em_steps % num_batches) * batch_size
         batch_slice = slice(batch_start, batch_start + batch_size)
+
         noise_batch_start = int(batch_start * self.nu)
         noise_batch_slice = slice(noise_batch_start, noise_batch_start + int(batch_size * self.nu))
+
         X_batch = X[batch_slice]
         Y_batch = self.Y[noise_batch_slice]
-        ZX_batch = self.ZX[:, batch_slice, :]
-        ZY_batch = self.ZY[:, noise_batch_slice, :]
 
-        return X_batch, Y_batch, ZX_batch, ZY_batch
+        ZX_batch = self.q.sample(self.nz, X_batch)
 
-    def begin_epoch(self, X, batch_size, num_em_steps, separate_terms=False):
+        return X_batch, Y_batch, ZX_batch
+
+    def begin_epoch(self, X):
         """shuffle data and noise and save current results
 
         :return X: array
@@ -847,13 +930,6 @@ class VNCEOptimiserWithoutImportanceSampling:
         noise_perm = self.rng.permutation(len(self.Y))
         X = X[perm]
         self.Y = self.Y[noise_perm]
-        self.ZX = self.q.sample(self.nz, X)
-        self.ZY = self.q.sample(self.nz, self.Y)
-
-        # store results obtained at end of last epoch
-        self.update_opt_results(X, np.arange(len(self.phi.theta)), separate_terms)
-        current_J1 = np.sum(deepcopy(self.J1s[-1])) if separate_terms else deepcopy(self.J1s[-1])
-        print('epoch {}: J1 = {}'.format(int(num_em_steps / int(len(X) / batch_size)), current_J1))
 
         return X
 
@@ -863,13 +939,10 @@ class VNCEOptimiserWithoutImportanceSampling:
         self.times = np.array(self.times)
         self.times -= self.times[0]  # count seconds from 0
 
-    def update_opt_results(self, X, theta_inds, separate_terms, E_step=False):
+    def update_opt_results(self, theta_inds, E_step=False):
         self.times.append(time.time())
         self.thetas.append(deepcopy(self.phi.theta[theta_inds]))
-        if self.ZX is None:
-            self.J1s.append(self.compute_J1(X, separate_terms=separate_terms))
-        else:
-            self.J1s.append(self.compute_J1(X, ZX=self.ZX, separate_terms=separate_terms))
+        self.J1s.append(deepcopy(self.J1))
         if E_step:
             self.E_step_ids.append(deepcopy(len(self.times))-1)
 
@@ -954,6 +1027,7 @@ class VNCEOptimiserWithoutImportanceSampling:
     def __repr__(self):
         return "VNCEOptimiserWithoutImportanceSampling"
 
+
 # noinspection PyPep8Naming,PyTypeChecker,PyMethodMayBeStatic
 class VNCEOptimiserWithAnalyticExpectations:
     """ Optimiser for estimating/learning the parameters of an unnormalised
@@ -976,9 +1050,7 @@ class VNCEOptimiserWithAnalyticExpectations:
     psi_1(u, z) = 1 + (nu/r(u, z))
     """
 
-    def __init__(self, model, noise, noise_samples, variational_dist, sample_size,
-                 E1, E2, E3, E4, E5, nu=1, latent_samples_per_datapoint=1,
-                 eps=1e-15, rng=None):
+    def __init__(self, model, noise, noise_samples, variational_dist, E1, E2, E3, E4, E5, nu=1, eps=1e-15, rng=None):
         """ Initialise unnormalised model and distributions.
 
         :param model: LatentVariableModel
@@ -1022,8 +1094,6 @@ class VNCEOptimiserWithAnalyticExpectations:
         self.E4 = E4
         self.E5 = E5
         self.nu = nu
-        self.sample_size = sample_size
-        self.nz = latent_samples_per_datapoint
         self.eps = eps
         self.Y = noise_samples
         if not rng:
@@ -1107,8 +1177,19 @@ class VNCEOptimiserWithAnalyticExpectations:
                                                     grad.shape)
         return grad
 
-    def fit(self, X, theta0, alpha0, opt_method='L-BFGS-B', ftol=1e-5, maxiter=10, stop_threshold=1e-5,
-            max_num_em_steps=20, learning_rate=0.01, batch_size=10, disp=True, separate_terms=False):
+    def fit(self,
+            X,
+            theta0,
+            alpha0,
+            opt_method='L-BFGS-B',
+            ftol=1e-9,
+            maxiter=10,
+            stop_threshold=1e-9,
+            max_num_em_steps=20,
+            learning_rate=0.01,
+            batch_size=10,
+            disp=True,
+            separate_terms=False):
         """ Fit the parameters theta to the data X with a variational EM-type algorithm
 
         The algorithm alternates between optimising the model
@@ -1155,8 +1236,7 @@ class VNCEOptimiserWithAnalyticExpectations:
 
         # save time (in seconds), theta and J1(theta) after every iteration/epoch
         self.update_opt_results(X, separate_terms=separate_terms, E_step=False)
-        self.E_step_ids.append(deepcopy(len(self.times))-1)
-        self.alphas.append(deepcopy(self.q.alpha))
+        self.update_opt_results(X, separate_terms=separate_terms, E_step=True)
 
         num_em_steps = 0
         prev_J1, current_J1 = -999, -9999  # arbitrary negative numbers
@@ -1167,22 +1247,22 @@ class VNCEOptimiserWithAnalyticExpectations:
             if opt_method == 'SGD':
                 self.maximize_J1_wrt_theta_SGD(X, learning_rate=learning_rate, batch_size=batch_size, num_em_steps=num_em_steps, separate_terms=separate_terms)
             else:
-                self.maximize_J1_wrt_theta(X, opt_method=opt_method, ftol=ftol, maxiter=maxiter, disp=disp, separate_terms=separate_terms)
+                self.maximize_J1_wrt_theta(X, opt_method=opt_method, maxiter=maxiter, disp=disp, separate_terms=separate_terms)
 
             # E-step: optimise w.r.t alpha
-            self.maximize_J1_wrt_alpha(X, opt_method=opt_method, ftol=ftol, maxiter=maxiter, disp=disp, separate_terms=separate_terms)
+            self.maximize_J1_wrt_alpha(X, opt_method=opt_method, maxiter=maxiter, disp=disp, separate_terms=separate_terms)
 
             prev_J1 = current_J1
             current_J1 = np.sum(deepcopy(self.J1s[-1])) if separate_terms else deepcopy(self.J1s[-1])
             num_em_steps += 1
-            if opt_method != 'SGD':
-                print('{} EM step: J1 = {}'.format(num_em_steps, current_J1))
+            # if opt_method != 'SGD':
+            #     print('{} EM step: J1 = {}'.format(num_em_steps, current_J1))
 
         self.make_opt_res_arrays()
 
         return self.thetas, self.alphas, self.J1s, self.times
 
-    def maximize_J1_wrt_theta(self, X, opt_method='L-BFGS-B', ftol=1e-9, maxiter=10, disp=True, separate_terms=False):
+    def maximize_J1_wrt_theta(self, X, opt_method='L-BFGS-B', maxiter=10, disp=True, separate_terms=False):
         """Return theta that maximises J1
 
         :param X: array (n, 1)
@@ -1213,9 +1293,9 @@ class VNCEOptimiserWithAnalyticExpectations:
             return -self.compute_J1_grad_theta(X)
 
         _ = minimize(J1_k_neg, self.phi.theta, method=opt_method, jac=J1_k_grad_neg, callback=callback,
-                     options={'ftol': ftol, 'maxiter': maxiter, 'disp': disp})
+                     options={'maxiter': maxiter, 'disp': disp})
 
-    def maximize_J1_wrt_alpha(self, X, opt_method='L-BFGS-B', ftol=1e-9, maxiter=10, disp=True, separate_terms=False):
+    def maximize_J1_wrt_alpha(self, X, opt_method='L-BFGS-B', maxiter=10, disp=True, separate_terms=False):
         """Return alpha that maximises J1
 
         :param X: array (n, 1)
@@ -1246,7 +1326,7 @@ class VNCEOptimiserWithAnalyticExpectations:
             return -self.compute_J1_grad_alpha(X)
 
         _ = minimize(J1_k_neg, self.q.alpha, method=opt_method, jac=J1_k_grad_neg, callback=callback,
-                     options={'ftol': ftol, 'maxiter': maxiter, 'disp': disp})
+                     options={'maxiter': maxiter, 'disp': disp})
 
     def maximize_J1_wrt_theta_SGD(self, X, learning_rate, batch_size, num_em_steps, separate_terms=False):
         """Maximise objective function using stochastic gradient descent

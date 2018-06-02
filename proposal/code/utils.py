@@ -7,8 +7,30 @@ from copy import deepcopy
 from matplotlib import pyplot as plt
 
 def mean_square_error(estimate, true_value, plot=True):
-    true_values = np.ones_like(estimate)*true_value
-    error = estimate - true_values
+
+    estimate_float_or_int = isinstance(estimate, float) | isinstance(estimate, int)
+    true_val_float_or_int = isinstance(true_value, float) | isinstance(true_value, int)
+
+    if estimate_float_or_int:
+        if true_val_float_or_int:
+            pass
+        elif true_value.ndim == 1:
+            estimate = np.array([estimate])
+        elif true_value.ndim > 1:
+            print('ground truth has dim {}, but estimate is an int or float'.format(true_value.ndim))
+            raise TypeError
+
+    elif isinstance(estimate, np.ndarray):
+        if estimate.ndim == 1 and true_val_float_or_int:
+            true_value = np.array([true_value])
+        elif estimate.ndim > 1 and true_val_float_or_int:
+            print('estimate has dim {}, but ground truth is an int or float'.format(estimate.ndim))
+            raise TypeError
+        elif estimate.ndim != true_value.ndim:
+            print('estimate has dim {}, but ground truth has dim {}'.format(estimate.ndim, true_value.ndim))
+            raise TypeError
+
+    error = estimate - true_value
     square_error = error**2
 
     if plot:
@@ -49,7 +71,7 @@ def get_true_weights(d, m):
     return true_W
 
 
-def create_J_diff_plot(optimiser, Js_for_lnce_thetas, plot_posterior_ratio=False):
+def create_J_diff_plot(J1s, times, E_step_ids, Js_for_vnce_thetas, posterior_ratio_vars=None, plot_posterior_ratio=False):
     """plot J (NCE objective function) minus J1 (lower bound to NCE objective)"""
     if plot_posterior_ratio:
         fig, axs = plt.subplots(2, 1, figsize=(15, 20))
@@ -59,25 +81,25 @@ def create_J_diff_plot(optimiser, Js_for_lnce_thetas, plot_posterior_ratio=False
         axs = [axs]
 
     ax = axs[0]
-    diff = np.sum(Js_for_lnce_thetas, axis=1) - np.sum(optimiser.J1s, axis=1)
-    ax.plot(optimiser.times, diff, c='k', label='J - J1')
-    diff1 = Js_for_lnce_thetas[:, 0] - optimiser.J1s[:, 0]
-    ax.plot(optimiser.times, diff1, c='r', label='term1: J - J1')
-    diff2 = Js_for_lnce_thetas[:, 1] - optimiser.J1s[:, 1]
-    ax.plot(optimiser.times, diff2, c='b', label='term2: J - J1')
+    diff = np.sum(Js_for_vnce_thetas, axis=1) - np.sum(J1s, axis=1)
+    ax.plot(times, diff, c='k', label='J - J1')
+    diff1 = Js_for_vnce_thetas[:, 0] - J1s[:, 0]
+    ax.plot(times, diff1, c='r', label='term1: J - J1')
+    diff2 = Js_for_vnce_thetas[:, 1] - J1s[:, 1]
+    ax.plot(times, diff2, c='b', label='term2: J - J1')
 
     if plot_posterior_ratio:
         ax = axs[1]
-        ax.plot(optimiser.times, optimiser.posterior_ratio_vars, c='k', label='V(p(z|y)/q(z|y))')
+        ax.plot(times, posterior_ratio_vars, c='k', label='V(p(z|y)/q(z|y))')
 
     for ax in axs:
-        for time_id in optimiser.E_step_ids:
-            time = optimiser.times[time_id]
+        for time_id in E_step_ids:
+            time = times[time_id]
             ax.plot((time, time), ax.get_ylim(), c='0.5')
         ax.set_xlabel('time (seconds)', fontsize=16)
         ax.legend()
 
-    return fig, Js_for_lnce_thetas
+    return fig, Js_for_vnce_thetas
 
 def get_Js_for_vnce_thetas(X, nce_optimiser, optimiser, separate_terms):
     cur_theta = deepcopy(nce_optimiser.phi.theta)

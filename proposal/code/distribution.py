@@ -338,7 +338,7 @@ class MultivariateBernoulliNoise(Distribution):
 
 
 # noinspection PyPep8Naming,PyMissingConstructor
-class EmpiricalNoise(Distribution):
+class EmpiricalDist(Distribution):
 
     def __init__(self, X, rng=None):
         """
@@ -363,7 +363,7 @@ class EmpiricalNoise(Distribution):
         """
         probs = np.zeros(U.shape[0])
         for i, u in enumerate(U):
-            probs[i] = self.freqs.get(str(u), 0) / self.sample_size
+            probs[i] = self.freqs.get(str(u), 0)
 
         return probs
 
@@ -378,11 +378,22 @@ class EmpiricalNoise(Distribution):
 
     def construct_freqs(self):
         """Construct dict of binary vector to frequency in data X"""
-        test_dict = {}
-        for i in self.X:
-            test_dict[str(i)] = test_dict.get(str(i), 0) + 1
+        # Count number of instances of each unique datapoint
+        unique_X = np.unique(self.X, axis=0)
+        emp_dist = {str(patch): 0 for patch in unique_X}
+        for i, x in enumerate(unique_X):
+            emp_dist[str(x)] = np.sum(np.all(self.X == x, axis=1))
 
-        return test_dict
+        # normalise the counts
+        emp_dist = {x: count/self.sample_size for x, count in emp_dist.items()}
+        total_prob = np.sum(np.array(list(emp_dist.values())))
+        assert np.allclose(total_prob, 1), 'Expected probability empirical distribution to ' \
+                                           'sum to 1. Instead it sums to {}'.format(total_prob)
+
+        return emp_dist
+
+    def __repr__(self):
+        return "empirical distribution"
 
 
 # noinspection PyMissingConstructor
@@ -475,3 +486,4 @@ class ChowLiuTree(Distribution):
             node_to_parents_dict[e[1]] = e[0]
 
         return node_to_children_dict, node_to_parents_dict
+

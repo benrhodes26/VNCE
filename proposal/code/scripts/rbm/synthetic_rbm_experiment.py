@@ -3,13 +3,11 @@ two methods: latent nce and contrastive divergence.
 """
 import os
 import sys
-cur_dir = os.path.split(os.getcwd())[0]
-if cur_dir not in sys.path:
-    sys.path.append(cur_dir)
+code_dir = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/code'
+if code_dir not in sys.path:
+    sys.path.append(code_dir)
 
 import numpy as np
-import os
-import pdb
 import pickle
 
 # my code
@@ -33,8 +31,9 @@ START_TIME = strftime('%Y%m%d-%H%M', gmtime())
 parser = ArgumentParser(description='Experimental comparison of training an RBM using latent nce and contrastive divergence',
                         formatter_class=ArgumentDefaultsHelpFormatter)
 # Read/write arguments
-parser.add_argument('--save_dir', type=str, default='/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/'
-                                                    'ben-rhodes-masters-project/experimental-results/rbm',
+parser.add_argument('--data_dir', type=str, default='/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/data',
+                    help='Path to directory where data is loaded and saved')
+parser.add_argument('--save_dir', type=str, default='/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/experimental-results/rbm',
                     help='Path to directory where model will be saved')
 parser.add_argument('--exp_name', type=str, default='test', help='name of set of experiments this one belongs to')
 parser.add_argument('--name', type=str, default=START_TIME, help='name of this exact experiment')
@@ -58,12 +57,6 @@ parser.add_argument('--opt_method', type=str, default='L-BFGS-B',
                     help='optimisation method. L-BFGS-B and CG both seem to work')
 parser.add_argument('--ftol', type=float, default=2.220446049250313e-09,
                     help='Tolerance used as stopping criterion in scipy.minimize')
-parser.add_argument('--pos_var_threshold', type=float, default=0.01,
-                    help='if ratio: (model_posterior/variational_posterior) exceeds this threshold during the M-step'
-                         'of optimisation, then terminate the M-step')
-parser.add_argument('--ratio_variance_method_1', dest='ratio_variance_method_1', action='store_true')
-parser.add_argument('--no-ratio_variance_method_1', dest='ratio_variance_method_1', action='store_false')
-parser.set_defaults(ratio_variance_method_1=True)
 parser.add_argument('--maxiter', type=int, default=5,
                     help='number of iterations performed by L-BFGS-B optimiser inside each M step of EM')
 parser.add_argument('--stop_threshold', type=float, default=1e-09,
@@ -72,16 +65,25 @@ parser.add_argument('--max_num_em_steps', type=int, default=500,
                     help='Maximum number of EM steps to perform')
 parser.add_argument('--learn_rate', type=float, default=0.01,
                     help='if opt_method=SGD, this is the learning rate used')
-parser.add_argument('--batch_size', type=int, default=10,
+parser.add_argument('--batch_size', type=int, default=100,
                     help='if opt_method=SGD, this is the size of a minibatch')
 
+parser.add_argument('--pos_var_threshold', type=float, default=0.01,
+                    help='if ratio: (model_posterior/variational_posterior) exceeds this threshold during the M-step'
+                         'of optimisation, then terminate the M-step')
+parser.add_argument('--ratio_variance_method_1', dest='ratio_variance_method_1', action='store_true')
+parser.add_argument('--no-ratio_variance_method_1', dest='ratio_variance_method_1', action='store_false')
+parser.set_defaults(ratio_variance_method_1=True)
+parser.add_argument('--use_control_vars', dest='use_control_vars', action='store_true')
+parser.add_argument('--no-use_control_vars', dest='use_control_vars', action='store_false')
+parser.set_defaults(use_control_vars=False)
 
 # Contrastive divergence optimisation arguments
 parser.add_argument('--cd_num_steps', type=int, default=1, help='number of gibbs steps used to sample from '
                                                                 'model during learning with CD')
 parser.add_argument('--cd_learn_rate', type=float, default=0.01, help='Initial learning rate for contrastive divergence')
 parser.add_argument('--cd_batch_size', type=int, default=100, help='number of datapoints used per gradient update')
-parser.add_argument('--cd_num_epochs', type=int, default=2000, help='number of passes through data set')
+parser.add_argument('--cd_num_epochs', type=int, default=10000, help='number of passes through data set')
 
 # nce optimisation arguments
 parser.add_argument('--maxiter_nce', type=int, default=500, help='number of passes through data set')
@@ -118,9 +120,10 @@ true_sd = args.true_sd
 true_theta = rng.randn(d + 1, m + 1) * true_sd
 true_theta[0, 0] = 0
 
-# generate synthetic dataset
+# generate synthetic training and test sets
 true_data_dist = RestrictedBoltzmannMachine(true_theta, rng=rng)
 X, Z = true_data_dist.sample(n, num_iter=args.num_gibbs_steps)
+X_test, _ = true_data_dist.sample(n, num_iter=args.num_gibbs_steps)
 X_mean = np.mean(X, axis=0)
 
 # initialise noise distributions for VNCE & sample from it
@@ -153,15 +156,14 @@ var_dist = RBMLatentPosterior(theta0, rng=rng)
 
 # initialise optimisers
 if args.optimiser == 'VNCEOptimiser':
-    optimiser = VNCEOptimiser(model=model, noise=noise_dist, noise_samples=Y, variational_dist=var_dist,
-                              sample_size=n, nu=nu, latent_samples_per_datapoint=nz, rng=rng,
-                              pos_var_threshold=args.pos_var_threshold, ratio_variance_method_1=args.ratio_variance_method_1)
-if args.optimiser == 'VNCEOptimiserWithoutImportanceSampling':
+    optimiser = VNCEOptimiser(model=model, noise=noise_dist, noise_samples=Y, variational_dist=var_dist, nu=nu, latent_samples_per_datapoint=nz,
+                              rng=rng, pos_var_threshold=args.pos_var_threshold, ratio_variance_method_1=args.ratio_variance_method_1)
+elif args.optimiser == 'VNCEOptimiserWithoutImportanceSampling':
     optimiser = VNCEOptimiserWithoutImportanceSampling(model=model, noise=noise_dist, noise_samples=Y, variational_dist=var_dist,
-                                                       sample_size=n, nu=nu, latent_samples_per_datapoint=nz, rng=rng)
+                                                       nu=nu, latent_samples_per_datapoint=nz, rng=rng)
 
 cd_optimiser = CDOptimiser(cd_model, rng=rng)
-nce_optimiser = NCEOptimiser(model=nce_model, noise=noise_dist, noise_samples=Y, sample_size=n, nu=nu)
+nce_optimiser = NCEOptimiser(model=nce_model, noise=noise_dist, noise_samples=Y, nu=nu)
 
 # calculate normalisation constant of true model
 true_data_dist.reset_norm_const()
@@ -185,10 +187,11 @@ _ = optimiser.fit(X=X,
                   max_num_em_steps=args.max_num_em_steps,
                   learning_rate=args.learn_rate,
                   batch_size=args.batch_size,
-                  disp=False,
+                  disp=True,
                   plot=False,
                   separate_terms=args.separate_terms,
-                  save_dir=SAVE_DIR)
+                  save_dir=SAVE_DIR,
+                  use_control_vars=args.use_control_vars)
 print('finished!')
 optimal_J1 = optimiser.evaluate_J1_at_param(theta=true_theta.reshape(-1), X=X)
 print('J1(true_theta) = {}'.format(optimal_J1))
@@ -211,36 +214,41 @@ _ = nce_optimiser.fit(X=X, theta0=theta0.reshape(-1), maxiter=args.maxiter_nce)
 """
 
 if args.separate_terms:
-    Js_for_lnce_thetas = get_Js_for_vnce_thetas(X, nce_optimiser, optimiser, separate_terms=args.separate_terms)
-    J_plot, Js_for_lnce_thetas = create_J_diff_plot(optimiser, Js_for_lnce_thetas)
+    Js_for_vnce_thetas = get_Js_for_vnce_thetas(X, nce_optimiser, optimiser, separate_terms=args.separate_terms)
+    J_plot, Js_for_vnce_thetas = create_J_diff_plot(optimiser.J1s,
+                                                    optimiser.times,
+                                                    optimiser.E_step_ids,
+                                                    Js_for_vnce_thetas,
+                                                    posterior_ratio_vars=None,
+                                                    plot_posterior_ratio=False)
     J_plot.savefig('{}/J-optimisation-curve.pdf'.format(SAVE_DIR))
 
 # reduce results, since calculating log-likelihood is expensive
-reduced_lnce_times, reduced_lnce_thetas = optimiser.reduce_optimisation_results(args.num_log_like_steps)
+reduced_vnce_times, reduced_vnce_thetas = optimiser.reduce_optimisation_results(args.num_log_like_steps)
 reduced_cd_times, reduced_cd_thetas = cd_optimiser.reduce_optimisation_results(args.num_log_like_steps)
 cd_optimiser.times, cd_optimiser.thetas = reduced_cd_times, reduced_cd_thetas
 reduced_nce_times, reduced_nce_thetas = nce_optimiser.reduce_optimisation_results(args.num_log_like_steps)
 
-av_log_like_lnce = None
+av_log_like_vnce = None
 av_log_like_cd = None
 av_log_like_nce = None
 true_log_like = None
 init_log_like = None
 like_training_plot = None
 if args.compute_log_like:
-    # calculate average log-likelihood at each iteration for both models
+    # calculate average log-likelihood at each iteration for both models on test set
     print('calculating log-likelihoods...')
-    av_log_like_lnce = optimiser.av_log_like_for_each_iter(X, thetas=reduced_lnce_thetas)
-    av_log_like_cd = cd_optimiser.av_log_like_for_each_iter(X, thetas=reduced_cd_thetas)
-    av_log_like_nce = nce_optimiser.av_log_like_for_each_iter(X, thetas=reduced_nce_thetas)
+    av_log_like_vnce = optimiser.av_log_like_for_each_iter(X_test, thetas=reduced_vnce_thetas)
+    av_log_like_cd = cd_optimiser.av_log_like_for_each_iter(X_test, thetas=reduced_cd_thetas)
+    av_log_like_nce = nce_optimiser.av_log_like_for_each_iter(X_test, thetas=reduced_nce_thetas)
     print('finished!')
 
-    # calculate average log-likelihood of initial and true models
-    true_log_like = average_log_likelihood(true_data_dist, X)
-    init_log_like = average_log_likelihood(init_model, X)
-    noise_log_like = np.mean(np.log(noise_dist(X)))
+    # calculate average log-likelihood of initial and true models on test set
+    true_log_like = average_log_likelihood(true_data_dist, X_test)
+    init_log_like = average_log_likelihood(init_model, X_test)
+    noise_log_like = np.mean(np.log(noise_dist(X_test)))
 
-    training_curves = [[reduced_lnce_times, av_log_like_lnce, 'lnce'],
+    training_curves = [[reduced_vnce_times, av_log_like_vnce, 'vnce'],
                        [reduced_cd_times, av_log_like_cd, 'cd'],
                        [reduced_nce_times, av_log_like_nce, 'nce']]
     static_lines = [[true_log_like, 'true'],
@@ -289,10 +297,12 @@ pickle.dump(nce_optimiser, open(os.path.join(SAVE_DIR, "nce_optimiser.p"), "wb")
 np.savez(os.path.join(SAVE_DIR, "data"), X=X, Y=optimiser.Y)
 np.savez(os.path.join(SAVE_DIR, "true_weights_and_likelihood"), true_theta=true_theta, ll=true_log_like)
 np.savez(os.path.join(SAVE_DIR, "init_theta_and_likelihood"), theta0=theta0, ll=init_log_like)
+
+
 np.savez(os.path.join(SAVE_DIR, "vnce_results"), params=optimiser.thetas, times=optimiser.times, J1s=optimiser.J1s,
-         reduced_params=reduced_lnce_thetas, reduced_times=reduced_lnce_times, ll=av_log_like_lnce, E_step_ids=optimiser.E_step_ids)
+         reduced_params=reduced_vnce_thetas, reduced_times=reduced_vnce_times, ll=av_log_like_vnce, E_step_ids=optimiser.E_step_ids)
 np.savez(os.path.join(SAVE_DIR, "cd_results"), params=cd_optimiser.thetas, times=cd_optimiser.times,
          reduced_params=reduced_cd_thetas, reduced_times=reduced_cd_times, ll=av_log_like_cd)
 np.savez(os.path.join(SAVE_DIR, "nce_results"), params=nce_optimiser.thetas, times=nce_optimiser.times,
-         Js=nce_optimiser.Js, Js_for_lnce_thetas=Js_for_lnce_thetas, reduced_params=reduced_nce_thetas,
-         reduced_times=reduced_nce_times, ll=av_log_like_lnce)
+         Js=nce_optimiser.Js, Js_for_vnce_thetas=Js_for_vnce_thetas, reduced_params=reduced_nce_thetas,
+         reduced_times=reduced_nce_times, ll=av_log_like_vnce)
