@@ -17,7 +17,7 @@ from fully_observed_models import VisibleRestrictedBoltzmannMachine
 from latent_variable_model import RestrictedBoltzmannMachine
 from nce_optimiser import NCEOptimiser
 from utils import *
-from vnce_optimisers import VNCEOptimiser, VNCEOptimiserWithoutImportanceSampling
+from vnce_optimisers import VemOptimiser, SgdEmStep, ScipyMinimiseEmStep, ExactEStep, MonteCarloVnceLoss, MonteCarloVnceLossWithoutImportanceSampling
 
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from copy import deepcopy
@@ -44,49 +44,39 @@ parser.add_argument('--nu', type=float, default=1.0, help='ratio of noise to dat
 parser.add_argument('--num_gibbs_steps', type=int, default=1000,
                     help='number of gibbs steps used to generate as synthetic dataset')
 # Model arguments
-parser.add_argument('--d', type=int, default=20, help='dimension of visibles')
-parser.add_argument('--m', type=int, default=15, help='dimension of hiddens')
+parser.add_argument('--d', type=int, default=2, help='dimension of visibles')
+parser.add_argument('--m', type=int, default=1, help='dimension of hiddens')
 parser.add_argument('--true_sd', type=float, default=1.0, help='standard deviation of gaussian rv for true weights')
 
 # Latent NCE optimisation arguments
-parser.add_argument('--optimiser', type=str, default='VNCEOptimiser',
-                    help='optimiser class to use. See latent_nce_optimiser.py for options')
+parser.add_argument('--loss', type=str, default='MonteCarloVnceLossWithoutImportanceSampling',
+                    help='loss function class to use. See vnce_optimisers.py for options')
 parser.add_argument('--noise', type=str, default='marginal',
                     help='type of noise distribution for latent NCE. Currently, this can be either marginals or chow-liu')
 parser.add_argument('--opt_method', type=str, default='L-BFGS-B',
                     help='optimisation method. L-BFGS-B and CG both seem to work')
-parser.add_argument('--ftol', type=float, default=2.220446049250313e-09,
-                    help='Tolerance used as stopping criterion in scipy.minimize')
 parser.add_argument('--maxiter', type=int, default=5,
                     help='number of iterations performed by L-BFGS-B optimiser inside each M step of EM')
 parser.add_argument('--stop_threshold', type=float, default=1e-09,
                     help='Tolerance used as stopping criterion in EM loop')
-parser.add_argument('--max_num_em_steps', type=int, default=500,
+parser.add_argument('--max_num_em_steps', type=int, default=20,
                     help='Maximum number of EM steps to perform')
-parser.add_argument('--learn_rate', type=float, default=0.01,
+parser.add_argument('--learn_rate', type=float, default=0.1,
                     help='if opt_method=SGD, this is the learning rate used')
 parser.add_argument('--batch_size', type=int, default=100,
                     help='if opt_method=SGD, this is the size of a minibatch')
-
-parser.add_argument('--pos_var_threshold', type=float, default=0.01,
-                    help='if ratio: (model_posterior/variational_posterior) exceeds this threshold during the M-step'
-                         'of optimisation, then terminate the M-step')
-parser.add_argument('--ratio_variance_method_1', dest='ratio_variance_method_1', action='store_true')
-parser.add_argument('--no-ratio_variance_method_1', dest='ratio_variance_method_1', action='store_false')
-parser.set_defaults(ratio_variance_method_1=True)
-parser.add_argument('--use_control_vars', dest='use_control_vars', action='store_true')
-parser.add_argument('--no-use_control_vars', dest='use_control_vars', action='store_false')
-parser.set_defaults(use_control_vars=False)
+parser.add_argument('--num_batch_per_em_step', type=int, default=1,
+                    help='if opt_method=SGD, this is the number of batches per EM step')
 
 # Contrastive divergence optimisation arguments
 parser.add_argument('--cd_num_steps', type=int, default=1, help='number of gibbs steps used to sample from '
                                                                 'model during learning with CD')
 parser.add_argument('--cd_learn_rate', type=float, default=0.01, help='Initial learning rate for contrastive divergence')
 parser.add_argument('--cd_batch_size', type=int, default=100, help='number of datapoints used per gradient update')
-parser.add_argument('--cd_num_epochs', type=int, default=10000, help='number of passes through data set')
+parser.add_argument('--cd_num_epochs', type=int, default=0, help='number of passes through data set')
 
 # nce optimisation arguments
-parser.add_argument('--maxiter_nce', type=int, default=500, help='number of passes through data set')
+parser.add_argument('--maxiter_nce', type=int, default=0, help='number of passes through data set')
 
 # Other arguments
 parser.add_argument('--compute_log_like', dest='compute_log_like', action='store_true')
@@ -115,7 +105,6 @@ n, nz, nu = args.n, args.nz, args.nu
 d, m = args.d, args.m
 true_sd = args.true_sd
 
-# todo: get realistic weights learnt from downsampled mnist digits
 # generate weights of RBM that we want to learn
 true_theta = rng.randn(d + 1, m + 1) * true_sd
 true_theta[0, 0] = 0
@@ -154,14 +143,35 @@ init_model = RestrictedBoltzmannMachine(deepcopy(theta0), rng=rng)  # rbm with i
 # initialise variational distribution, which is the exact posterior in this case
 var_dist = RBMLatentPosterior(theta0, rng=rng)
 
-# initialise optimisers
-if args.optimiser == 'VNCEOptimiser':
-    optimiser = VNCEOptimiser(model=model, noise=noise_dist, noise_samples=Y, variational_dist=var_dist, nu=nu, latent_samples_per_datapoint=nz,
-                              rng=rng, pos_var_threshold=args.pos_var_threshold, ratio_variance_method_1=args.ratio_variance_method_1)
-elif args.optimiser == 'VNCEOptimiserWithoutImportanceSampling':
-    optimiser = VNCEOptimiserWithoutImportanceSampling(model=model, noise=noise_dist, noise_samples=Y, variational_dist=var_dist,
-                                                       nu=nu, latent_samples_per_datapoint=nz, rng=rng)
+if args.loss == 'MonteCarloVnceLoss':
+    vnce_loss_function = MonteCarloVnceLoss(model=model,
+                                            noise=noise_dist,
+                                            variational_q=var_dist,
+                                            noise_to_data_ratio=args.nu,
+                                            num_latent_per_data=args.nz,
+                                            separate_terms=args.separate_terms)
+elif args.loss == 'MonteCarloVnceLossWithoutImportanceSampling':
+    vnce_loss_function = MonteCarloVnceLossWithoutImportanceSampling(model=model,
+                                                                     noise=noise_dist,
+                                                                     variational_q=var_dist,
+                                                                     noise_to_data_ratio=args.nu,
+                                                                     num_latent_per_data=args.nz,
+                                                                     separate_terms=args.separate_terms)
+if args.opt_method == 'SGD':
+    m_step = SgdEmStep(do_m_step=True,
+                       learning_rate=args.learn_rate,
+                       batch_size=args.batch_size,
+                       num_batches_per_em_step=args.num_batch_per_em_step,
+                       num_data_points=args.n,
+                       noise_to_data_ratio=args.nu,
+                       rng=rng)
+else:
+    m_step = ScipyMinimiseEmStep(do_m_step=True,
+                                 optimisation_method=args.opt_method,
+                                 max_iter=args.maxiter)
 
+exact_e_step = ExactEStep(calculate_loss=False)  # calculating losses on E-step adds extra sampling overhead
+optimiser = VemOptimiser(loss_function=vnce_loss_function, e_step=exact_e_step, m_step=m_step)
 cd_optimiser = CDOptimiser(cd_model, rng=rng)
 nce_optimiser = NCEOptimiser(model=nce_model, noise=noise_dist, noise_samples=Y, nu=nu)
 
@@ -176,27 +186,18 @@ true_theta[0, 0] = -np.log(true_norm_const)
 ==========================================================================================================
 """
 
-# perform latent nce optimisation
-print('starting latent nce optimisation...')
-_ = optimiser.fit(X=X,
-                  theta0=model.theta,
-                  opt_method=args.opt_method,
-                  ftol=args.ftol,
-                  maxiter=args.maxiter,
-                  stop_threshold=args.stop_threshold,
-                  max_num_em_steps=args.max_num_em_steps,
-                  learning_rate=args.learn_rate,
-                  batch_size=args.batch_size,
-                  disp=True,
-                  plot=False,
-                  separate_terms=args.separate_terms,
-                  save_dir=SAVE_DIR,
-                  use_control_vars=args.use_control_vars)
+print('starting vnce optimisation...')
+optimiser.fit(X=X,
+              Y=Y,
+              theta0=model.theta,
+              alpha0=var_dist.alpha,
+              stop_threshold=args.stop_threshold,
+              max_num_em_steps=args.max_num_em_steps)
 print('finished!')
-optimal_J1 = optimiser.evaluate_J1_at_param(theta=true_theta.reshape(-1), X=X)
+optimal_J1 = evaluate_loss_at_param(loss_function=vnce_loss_function, theta=true_theta.reshape(-1), X=X, Y=Y)
 print('J1(true_theta) = {}'.format(optimal_J1))
+
 print('starting cd optimisation...')
-# perform contrastive divergence optimisation
 _ = cd_optimiser.fit(X=X,
                      theta0=theta0.reshape(-1),
                      num_gibbs_steps=args.cd_num_steps,
@@ -204,6 +205,7 @@ _ = cd_optimiser.fit(X=X,
                      batch_size=args.cd_batch_size,
                      num_epochs=args.cd_num_epochs)
 print('finished!')
+
 print('starting nce optimisation...')
 _ = nce_optimiser.fit(X=X, theta0=theta0.reshape(-1), maxiter=args.maxiter_nce)
 
@@ -212,29 +214,22 @@ _ = nce_optimiser.fit(X=X, theta0=theta0.reshape(-1), maxiter=args.maxiter_nce)
                                         METRICS & PLOTTING
 ==========================================================================================================
 """
+vnce_thetas, vnce_alphas, vnce_losses, vnce_times = optimiser.get_flattened_result_arrays()
+m_step_ids, e_step_ids, _, _ = optimiser.get_m_and_e_step_ids()
 
 if args.separate_terms:
-    Js_for_vnce_thetas = get_Js_for_vnce_thetas(X, nce_optimiser, optimiser, separate_terms=args.separate_terms)
-    J_plot, Js_for_vnce_thetas = create_J_diff_plot(optimiser.J1s,
-                                                    optimiser.times,
-                                                    optimiser.E_step_ids,
-                                                    Js_for_vnce_thetas,
-                                                    posterior_ratio_vars=None,
-                                                    plot_posterior_ratio=False)
+    nce_loss_for_vnce_params = get_nce_loss_for_vnce_params(X, nce_optimiser, optimiser, separate_terms=args.separate_terms)
+    J_plot, nce_loss_for_vnce_params = make_nce_minus_vnce_loss_plot(nce_loss_for_vnce_params,
+                                                                     vnce_losses,
+                                                                     vnce_times,
+                                                                     e_step_ids)
     J_plot.savefig('{}/J-optimisation-curve.pdf'.format(SAVE_DIR))
 
 # reduce results, since calculating log-likelihood is expensive
-reduced_vnce_times, reduced_vnce_thetas = optimiser.reduce_optimisation_results(args.num_log_like_steps)
-reduced_cd_times, reduced_cd_thetas = cd_optimiser.reduce_optimisation_results(args.num_log_like_steps)
-cd_optimiser.times, cd_optimiser.thetas = reduced_cd_times, reduced_cd_thetas
-reduced_nce_times, reduced_nce_thetas = nce_optimiser.reduce_optimisation_results(args.num_log_like_steps)
+reduced_vnce_thetas, reduced_vnce_times = get_reduced_thetas_and_times(vnce_thetas, vnce_times[m_step_ids], args.num_log_like_steps)
+reduced_cd_thetas, reduced_cd_times = get_reduced_thetas_and_times(cd_optimiser.thetas, cd_optimiser.times, args.num_log_like_steps)
+reduced_nce_thetas, reduced_nce_times = get_reduced_thetas_and_times(nce_optimiser.thetas, nce_optimiser.times, args.num_log_like_steps)
 
-av_log_like_vnce = None
-av_log_like_cd = None
-av_log_like_nce = None
-true_log_like = None
-init_log_like = None
-like_training_plot = None
 if args.compute_log_like:
     # calculate average log-likelihood at each iteration for both models on test set
     print('calculating log-likelihoods...')
@@ -294,15 +289,15 @@ pickle.dump(optimiser, open(os.path.join(SAVE_DIR, "vnce_optimiser.p"), "wb"))
 pickle.dump(cd_optimiser, open(os.path.join(SAVE_DIR, "cd_optimiser.p"), "wb"))
 pickle.dump(nce_optimiser, open(os.path.join(SAVE_DIR, "nce_optimiser.p"), "wb"))
 
-np.savez(os.path.join(SAVE_DIR, "data"), X=X, Y=optimiser.Y)
+np.savez(os.path.join(SAVE_DIR, "data"), X=X, Y=Y)
 np.savez(os.path.join(SAVE_DIR, "true_weights_and_likelihood"), true_theta=true_theta, ll=true_log_like)
 np.savez(os.path.join(SAVE_DIR, "init_theta_and_likelihood"), theta0=theta0, ll=init_log_like)
 
 
-np.savez(os.path.join(SAVE_DIR, "vnce_results"), params=optimiser.thetas, times=optimiser.times, J1s=optimiser.J1s,
-         reduced_params=reduced_vnce_thetas, reduced_times=reduced_vnce_times, ll=av_log_like_vnce, E_step_ids=optimiser.E_step_ids)
+np.savez(os.path.join(SAVE_DIR, "vnce_results"), params=vnce_thetas, var_params=vnce_alphas, times=vnce_times, J1s=vnce_losses,
+         reduced_params=reduced_vnce_thetas, reduced_times=reduced_vnce_times, ll=av_log_like_vnce, m_step_ids=m_step_ids, e_step_ids=e_step_ids)
 np.savez(os.path.join(SAVE_DIR, "cd_results"), params=cd_optimiser.thetas, times=cd_optimiser.times,
          reduced_params=reduced_cd_thetas, reduced_times=reduced_cd_times, ll=av_log_like_cd)
 np.savez(os.path.join(SAVE_DIR, "nce_results"), params=nce_optimiser.thetas, times=nce_optimiser.times,
-         Js=nce_optimiser.Js, Js_for_vnce_thetas=Js_for_vnce_thetas, reduced_params=reduced_nce_thetas,
+         Js=nce_optimiser.Js, Js_for_vnce_thetas=nce_loss_for_vnce_params, reduced_params=reduced_nce_thetas,
          reduced_times=reduced_nce_times, ll=av_log_like_vnce)

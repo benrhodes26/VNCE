@@ -11,7 +11,7 @@ from copy import deepcopy
 from matplotlib import pyplot as plt
 from numpy import random as rnd
 from scipy.optimize import minimize
-from utils import validate_shape, takeClosest
+from utils import validate_shape, take_closest
 
 
 # noinspection PyMethodMayBeStatic,PyPep8Naming,PyTypeChecker
@@ -35,23 +35,17 @@ class NCEOptimiser:
         :param nu: ratio of noise to model samples
         :param eps: small constant needed to avoid division by zero
         """
-        self.phi = model
-        self.pn = noise
+        self.model = model
+        self.noise = noise
+        self.Y = noise_samples
         self.nu = nu
         self.eps = eps
-        self.Y = noise_samples
         self.thetas = []  # for storing values of parameters during optimisation
         self.Js = []  # for storing values of objective function during optimisation
         self.times = []  # seconds spent to reach each iteration during optimisation
 
     def h(self, U):
-        """ Compute log(phi(U)) - log(pn(U).
-        :param U: array of shape (?, d)
-            U can be either data or noise samples, so ? is either n or n*nu
-        :return: array of shape (?)
-            ? is either n or n*nu
-        """
-        return np.log(self.phi(U)) - np.log(self.pn(U))
+        return np.log(self.model(U)) - np.log(self.noise(U))
 
     def compute_J(self, X, Y=None, separate_terms=False):
         """Return value of objective at current parameters
@@ -65,11 +59,16 @@ class NCEOptimiser:
             Y = self.Y
         nu = self.nu
 
-        a0 = 1 + nu*np.exp(-self.h(X))
-        a1 = 1 + (1 / nu)*np.exp(self.h(Y))
+        h_x = self.h(X)
+        a = (h_x > 0) * np.log(1 + nu * np.exp(-h_x))
+        b = (h_x < 0) * (-h_x + np.log(nu + np.exp(h_x)))
+        first_term = -np.mean(a + b)
 
-        first_term = - np.mean(np.log(a0))
-        second_term = - nu*np.mean(np.log(a1))
+        h_y = self.h(Y)
+        c = (h_y < 0) * np.log(1 + (1/nu) * np.exp(h_y))
+        d = (h_y > 0) * (h_y + np.log((1/nu) + np.exp(-h_y)))
+        second_term = -np.mean(c + d)
+
         if separate_terms:
             return np.array([first_term, second_term])
 
@@ -86,15 +85,12 @@ class NCEOptimiser:
             Y = self.Y
         nu = self.nu
 
-        gradX = self.phi.grad_log_wrt_params(X)  # (len(theta), n)
-        # a0 = 1 / (1 + (1 / nu)*np.exp(self.h(X)))  # (n,)
-        a0 = nu*self.pn(X) / (nu*self.pn(X) + self.phi(X))  # (n,)
-        # expectation over X
+        gradX = self.model.grad_log_wrt_params(X)  # (len(theta), n)
+        a0 = nu*self.noise(X) / (nu*self.noise(X) + self.model(X))  # (n,)
         term_1 = np.mean(gradX*a0, axis=1)  # (len(theta), )
 
-        gradY = self.phi.grad_log_wrt_params(Y)  # (len(theta), nu*n)
-        a1 = self.phi(Y) / (nu*self.pn(Y) + self.phi(Y))  # (n)
-        # Expectation over Y
+        gradY = self.model.grad_log_wrt_params(Y)  # (len(theta), nu*n)
+        a1 = self.model(Y) / (nu*self.noise(Y) + self.model(Y))  # (n)
         term_2 = - nu * np.mean(gradY*a1, axis=1)  # (len(theta), )
 
         grad = term_1 + term_2
@@ -102,8 +98,8 @@ class NCEOptimiser:
         # If theta is 1-dimensional, grad will be a float.
         if isinstance(grad, float):
             grad = np.array(grad)
-        assert grad.shape == self.phi.theta_shape, ' ' \
-            'Expected grad to be shape {}, got {} instead'.format(self.phi.theta_shape,
+        assert grad.shape == self.model.theta_shape, ' ' \
+            'Expected grad to be shape {}, got {} instead'.format(self.model.theta_shape,
                                                                   grad.shape)
         return grad
 
@@ -145,8 +141,8 @@ class NCEOptimiser:
         """
 
         # initialise parameters
-        self.phi.theta = deepcopy(theta0)
-        self.update_opt_results(self.compute_J(X, separate_terms=separate_terms))
+        self.model.theta = deepcopy(theta0)
+        # self.update_opt_results(self.compute_J(X, separate_terms=separate_terms))
 
         # optimise w.r.t to theta
         if opt_method == 'SGD':
@@ -154,7 +150,6 @@ class NCEOptimiser:
         else:
             self.maximize_J1_wrt_theta(X, disp=disp, opt_method=opt_method, ftol=ftol, maxiter=maxiter, separate_terms=separate_terms)
 
-        # todo: have an 'unfreeze' method that turns arrays back to lists for continued optimisationmaximize_L_wrt_theta
         self.thetas = np.array(self.thetas)
         self.Js = np.array(self.Js)
         self.times = np.array(self.times)
@@ -180,14 +175,14 @@ class NCEOptimiser:
             self.update_opt_results(self.compute_J(X, separate_terms=separate_terms))
 
         def J1_k_neg(theta):
-            self.phi.theta = theta
+            self.model.theta = theta
             return -self.compute_J(X)
 
         def J1_k_grad_neg(theta):
-            self.phi.theta = theta
+            self.model.theta = theta
             return -self.compute_J_grad(X)
 
-        _ = minimize(J1_k_neg, self.phi.theta, method=opt_method, jac=J1_k_grad_neg,
+        _ = minimize(J1_k_neg, self.model.theta, method=opt_method, jac=J1_k_grad_neg,
                      callback=callback, options={'ftol': ftol, 'maxiter': maxiter, 'disp': disp})
 
         self.thetas.extend(thetas)
@@ -216,7 +211,12 @@ class NCEOptimiser:
                     grad = self.compute_J_grad(X_batch, Y_batch)
 
                     # update params
-                    self.phi.theta += learning_rate * grad
+                    self.model.theta += learning_rate * grad
+
+                    # save a result at start of learning
+                    if i == 0 and j == 0:
+                        current_J = self.compute_J(X_batch, Y=Y_batch, separate_terms=separate_terms)
+                        self.update_opt_results(current_J)
 
                 # store results
                 current_J = self.compute_J(X_batch, Y=Y_batch, separate_terms=separate_terms)
@@ -253,7 +253,7 @@ class NCEOptimiser:
 
     def update_opt_results(self, J):
         self.times.append(time.time())
-        self.thetas.append(deepcopy(self.phi.theta))
+        self.thetas.append(deepcopy(self.model.theta))
         self.Js.append(deepcopy(J))
 
     def plot_loss_curve(self):
@@ -268,22 +268,22 @@ class NCEOptimiser:
         NOTE: this method can only be applied to small models, where
         computing the partition function is not too costly
         """
-        theta = deepcopy(self.phi.theta)
+        theta = deepcopy(self.model.theta)
         if thetas is None:
             thetas = self.thetas
 
         av_log_likelihoods = np.zeros(len(thetas))
         for i in np.arange(0, len(thetas)):
-            self.phi.theta = deepcopy(thetas[i])
-            av_log_likelihoods[i] = np.mean(np.log(self.phi(X)))
+            self.model.theta = deepcopy(thetas[i])
+            av_log_likelihoods[i] = np.mean(np.log(self.model(X)))
 
-        self.phi.theta = theta  # reset theta to its original value
+        self.model.theta = theta  # reset theta to its original value
         return av_log_likelihoods
 
-    def reduce_optimisation_results(self, time_step_size):
+    def get_reduced_results(self, time_step_size):
         """reduce to #time_step_size results, evenly spaced on a log scale"""
         log_times = np.exp(np.linspace(-3, np.log(self.times[-1]), num=time_step_size))
-        log_time_ids = np.unique(np.array([takeClosest(self.times, t) for t in log_times]))
+        log_time_ids = np.unique(np.array([take_closest(self.times, t) for t in log_times]))
         reduced_times = deepcopy(self.times[log_time_ids])
         reduced_thetas = deepcopy(self.thetas[log_time_ids])
 
@@ -296,10 +296,10 @@ class NCEOptimiser:
         :param X: array (n, d)
             data needed to compute objective function at true_theta.
         """
-        current_theta = deepcopy(self.phi.theta)
-        self.phi.theta = theta
-        J = self.compute_J(X, separate_terms)
-        self.phi.theta = current_theta
+        current_theta = deepcopy(self.model.theta)
+        self.model.theta = theta
+        J = self.compute_J(X=X, separate_terms=separate_terms)
+        self.model.theta = current_theta
         return J
 
     def __repr__(self):

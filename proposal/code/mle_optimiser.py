@@ -8,7 +8,7 @@ from copy import deepcopy
 from matplotlib import pyplot as plt
 from numpy import random as rnd
 from scipy.optimize import minimize
-from utils import validate_shape, takeClosest
+from utils import validate_shape, take_closest
 
 
 # noinspection PyMethodMayBeStatic,PyPep8Naming,PyTypeChecker
@@ -164,7 +164,7 @@ class MLEOptimiser:
     def reduce_optimisation_results(self, time_step_size):
         """reduce to #time_step_size results, evenly spaced on a log scale"""
         log_times = np.exp(np.linspace(-3, np.log(self.times[-1]), num=time_step_size))
-        log_time_ids = [takeClosest(self.times, t) for t in log_times]
+        log_time_ids = [take_closest(self.times, t) for t in log_times]
         reduced_times = deepcopy(self.times[log_time_ids])
         reduced_thetas = deepcopy(self.thetas[log_time_ids])
 

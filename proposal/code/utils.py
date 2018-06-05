@@ -2,7 +2,9 @@
 the latent NCE code. In particular, multiple plotting functions.
 """
 import numpy as np
+
 from bisect import bisect_left
+from collections import OrderedDict
 from copy import deepcopy
 from matplotlib import pyplot as plt
 
@@ -59,6 +61,43 @@ def sigmoid(u):
     return 1/(1 + np.exp(-u))
 
 
+def evaluate_loss_at_param(loss_function, X, Y, theta=None, alpha=None, nz=None):
+    """
+    :param loss_function: see vnce_optimisers.py for examples
+    :param theta: array
+        model parameter setting
+    :param X: array (n, d)
+        data needed to compute objective function at true_theta.
+    :param Y: array (n, d)
+        noise needed to compute objective function at true_theta.
+    """
+
+    if nz:
+        current_nz = deepcopy(loss_function.nz)
+        loss_function.nz = nz  # increase accuracy of approximation
+
+    current_theta = deepcopy(loss_function.model.theta)
+    current_alpha = deepcopy(loss_function.q.alpha)
+
+    if theta is not None:
+        loss_function.model.theta = theta
+    if alpha is not None:
+        loss_function.q.alpha = alpha
+
+    if alpha is not None:
+        loss = loss_function(X, Y)
+    else:
+        loss = loss_function(X, Y, reuse_latent_samples=True)
+    loss = np.sum(loss) if loss_function.separate_terms else loss
+
+    # reset parameters to how they were before
+    loss_function.model.theta, loss_function.q.alpha = current_theta, current_alpha
+    if nz:
+        loss_function.nz = current_nz
+
+    return loss
+
+
 def get_true_weights(d, m):
     true_W = np.zeros((d+1, m+1))
     num_chosen = 10
@@ -71,54 +110,67 @@ def get_true_weights(d, m):
     return true_W
 
 
-def create_J_diff_plot(J1s, times, E_step_ids, Js_for_vnce_thetas, posterior_ratio_vars=None, plot_posterior_ratio=False):
+def make_nce_minus_vnce_loss_plot(nce_loss_for_vnce_params, vnce_losses, times, e_step_ids):
     """plot J (NCE objective function) minus J1 (lower bound to NCE objective)"""
-    if plot_posterior_ratio:
-        fig, axs = plt.subplots(2, 1, figsize=(15, 20))
-        axs = axs.ravel()
-    else:
-        fig, axs = plt.subplots(1, 1, figsize=(15, 20))
-        axs = [axs]
+
+    fig, axs = plt.subplots(1, 1, figsize=(15, 20))
+    axs = [axs]
 
     ax = axs[0]
-    diff = np.sum(Js_for_vnce_thetas, axis=1) - np.sum(J1s, axis=1)
+    diff = np.sum(nce_loss_for_vnce_params, axis=1) - np.sum(vnce_losses, axis=1)
     ax.plot(times, diff, c='k', label='J - J1')
-    diff1 = Js_for_vnce_thetas[:, 0] - J1s[:, 0]
+    diff1 = nce_loss_for_vnce_params[:, 0] - vnce_losses[:, 0]
     ax.plot(times, diff1, c='r', label='term1: J - J1')
-    diff2 = Js_for_vnce_thetas[:, 1] - J1s[:, 1]
+    diff2 = nce_loss_for_vnce_params[:, 1] - vnce_losses[:, 1]
     ax.plot(times, diff2, c='b', label='term2: J - J1')
 
-    if plot_posterior_ratio:
-        ax = axs[1]
-        ax.plot(times, posterior_ratio_vars, c='k', label='V(p(z|y)/q(z|y))')
-
     for ax in axs:
-        for time_id in E_step_ids:
+        for time_id in e_step_ids:
             time = times[time_id]
             ax.plot((time, time), ax.get_ylim(), c='0.5')
         ax.set_xlabel('time (seconds)', fontsize=16)
         ax.legend()
 
-    return fig, Js_for_vnce_thetas
+    return fig, nce_loss_for_vnce_params
 
-def get_Js_for_vnce_thetas(X, nce_optimiser, optimiser, separate_terms):
-    cur_theta = deepcopy(nce_optimiser.phi.theta)
-    Js_for_vnce_thetas = []
-    for i, theta_k in enumerate(optimiser.thetas):
-        nce_optimiser.phi.theta = deepcopy(theta_k)
-        Js_for_vnce_thetas.append(nce_optimiser.compute_J(X, separate_terms=separate_terms))
-    Js_for_vnce_thetas = np.array(Js_for_vnce_thetas)
-    nce_optimiser.phi.theta = cur_theta
 
-    return Js_for_vnce_thetas
+def get_nce_loss_for_vnce_params(X, nce_optimiser, vnce_optimiser, separate_terms, e_step_results_exist=False):
+    """Evaluate the NCE objective at every parameter setting visited during VNCE optimisation"""
+    cur_theta = deepcopy(nce_optimiser.model.theta)
+
+    num_em_steps = len(vnce_optimiser.thetas)
+    nce_losses = []
+
+    nce_optimiser.model.theta = deepcopy(vnce_optimiser.thetas[0][0])
+    # append loss twice (to simulate an E and an M step)
+    # nce_losses.append(nce_optimiser.compute_J(X, separate_terms=separate_terms))
+    # nce_losses.append(nce_optimiser.compute_J(X, separate_terms=separate_terms))
+
+    for i in range(0, num_em_steps):
+        # for every value of theta visited during the M-step, evaluate the nce objective
+        for theta in vnce_optimiser.thetas[i]:
+            nce_optimiser.model.theta = deepcopy(theta)
+            nce_losses.append(nce_optimiser.compute_J(X, separate_terms=separate_terms))
+
+        # during the E-step, the nce objective is constant
+        if e_step_results_exist:
+            for _ in vnce_optimiser.alphas[i]:
+                nce_losses.append(nce_losses[-1])
+
+    nce_losses = np.array(nce_losses)
+    nce_optimiser.model.theta = cur_theta
+
+    return nce_losses
+
 
 def get_optimal_J(X, nce_optimiser, true_theta, separate_terms):
     """calculate optimal J (i.e at true theta)"""
-    nce_optimiser.phi.theta = deepcopy(true_theta.reshape(-1))
+    nce_optimiser.model.theta = deepcopy(true_theta.reshape(-1))
     optimal_J = nce_optimiser.compute_J(X, separate_terms=separate_terms)
-    nce_optimiser.phi.theta = cur_theta
+    nce_optimiser.model.theta = cur_theta
 
     return optimal_J
+
 
 def plot_rbm_parameters(params, titles, d, m, with_bias=False, figsize=(15, 25)):
     """plot heatmaps of restricted boltzmann machine weights
@@ -165,6 +217,16 @@ def plot_rbm_parameters(params, titles, d, m, with_bias=False, figsize=(15, 25))
     return fig
 
 
+def get_reduced_thetas_and_times(thetas, times, time_step_size):
+    """reduce to #time_step_size results, evenly spaced on a log scale"""
+    log_times = np.exp(np.linspace(-3, np.log(times[-1]), num=time_step_size))
+    log_time_ids = np.unique(np.array([take_closest(times, t) for t in log_times]))
+    reduced_times = deepcopy(times[log_time_ids])
+    reduced_thetas = deepcopy(thetas[log_time_ids])
+
+    return reduced_thetas, reduced_times
+
+
 def plot_log_likelihood_training_curves(training_curves, static_lines):
     """plot log-likelihood training curves
 
@@ -206,7 +268,7 @@ def rescale_times(times1, times2):
         if theta > times2[-1]:
             break
         else:
-            times2_new_ids.append(takeClosest(times2, theta))
+            times2_new_ids.append(take_closest(times2, theta))
 
     times2_new = times2[times2_new_ids]
     # if cd lasted longer, we need to get the remaining time ids
@@ -215,7 +277,7 @@ def rescale_times(times1, times2):
         gaps = [times2_new[i+1] - times2_new[i] for i in range(len(times2_new) - 1)]
         av_gap = np.mean(np.array(gaps))
         remaining_duration = times2[-1] - times2_new[-1]
-        remaining_time_ids = [takeClosest(times2, times2_new[-1] + av_gap*i)
+        remaining_time_ids = [take_closest(times2, times2_new[-1] + av_gap*i)
                               for i in range(int(remaining_duration / av_gap))]
         times2_new_ids.extend(remaining_time_ids)
         times2_new = np.concatenate((times2_new, times2[remaining_time_ids]))
@@ -223,7 +285,7 @@ def rescale_times(times1, times2):
     return times2_new, times2_new_ids
 
 
-def takeClosest(myList, myNumber):
+def take_closest(myList, myNumber):
     """Get index of element closest to myNumber, but smaller than it
 
     If myNumber is smaller than all elements, return 0.
@@ -237,3 +299,9 @@ def takeClosest(myList, myNumber):
         return pos
     else:
         return pos - 1
+
+
+def remove_duplicate_legends(ax):
+    handles, labels = ax.get_legend_handles_labels()
+    by_label = OrderedDict(zip(labels, handles))
+    ax.legend(by_label.values(), by_label.keys())

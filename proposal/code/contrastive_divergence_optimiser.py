@@ -11,7 +11,7 @@ from copy import deepcopy
 from matplotlib import pyplot as plt
 from numpy import random as rnd
 from scipy.optimize import minimize
-from utils import validate_shape, average_log_likelihood, takeClosest
+from utils import validate_shape, average_log_likelihood, take_closest
 
 DEFAULT_SEED = 1083463236
 
@@ -78,8 +78,6 @@ class CDOptimiser:
         :return thetas list of array
             values of model parameters (theta) after each gradient step
         """
-        # todo: make it easy to access biases and non-bias weights separately? (model-specific hack...)
-        # todo: write a get_learning_rate method using decay (this is more important)
         # initialise parameters
         self.phi.theta = deepcopy(theta0)
         self.thetas.append(deepcopy(theta0))
@@ -102,6 +100,11 @@ class CDOptimiser:
 
                 grad = data_grad - model_grad  # (len(theta), )
                 self.phi.theta += learning_rate * grad
+
+                # save a result at start of learning
+                if i == 0 and j == 0:
+                    self.thetas.append(deepcopy(self.phi.theta))
+                    self.times.append(time.time())
 
             self.thetas.append(deepcopy(self.phi.theta))
             self.times.append(time.time())
@@ -130,10 +133,10 @@ class CDOptimiser:
         self.phi.theta = theta  # reset theta to its original value
         return av_log_likelihoods
 
-    def reduce_optimisation_results(self, time_step_size):
+    def get_reduced_results(self, time_step_size):
         """reduce to #time_step_size results, evenly spaced on a log scale"""
         log_times = np.exp(np.linspace(-3, np.log(self.times[-1]), num=time_step_size))
-        log_time_ids = np.unique(np.array([takeClosest(self.times, t) for t in log_times]))
+        log_time_ids = np.unique(np.array([take_closest(self.times, t) for t in log_times]))
         reduced_times = deepcopy(self.times[log_time_ids])
         reduced_thetas = deepcopy(self.thetas[log_time_ids])
 

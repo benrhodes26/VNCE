@@ -142,7 +142,7 @@ def make_tradeoff_curves(times, runs, nus):
             mses_for_diff_nus = []
             for nu in nus:
                 run = runs[str(nu)][j]  # triple (thetas, times, ground_truth_thetas)
-                time_id = takeClosest(run[1], t)
+                time_id = take_closest(run[1], t)
                 mse = mean_square_error(estimate=run[0][time_id][-1], true_value=run[2][-1], plot=False)
                 mses_for_diff_nus.append(mse)
 

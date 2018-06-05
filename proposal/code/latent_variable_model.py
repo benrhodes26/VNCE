@@ -69,7 +69,7 @@ class LatentVarModel(metaclass=ABCMeta):
 
 
 # noinspection PyPep8Naming,PyMissingConstructor,PyTypeChecker,PyArgumentList
-class MixtureOfTwoGaussians(LatentVarModel):
+class LatentMixtureOfTwoGaussians(LatentVarModel):
     """ *normalised* Mixture of two Gaussians.
 
     The model takes the form:
@@ -158,8 +158,9 @@ class MixtureOfTwoGaussians(LatentVarModel):
             either data or noise for NCE
         :return array (1, n)
         """
-        grad = (U**2 * np.exp(-2*self.theta)) - 1  # (n, 1)
-        return grad.T  # (1, n)
+        grad0 = (U**2 * np.exp(-2*self.theta)) - 1  # (n, 1)
+        grad1 = 0
+        return grad0.T, grad1  # (1, n)
 
     def sample(self, n):
         """ Sample n values from the model
@@ -197,7 +198,7 @@ class MixtureOfTwoGaussians(LatentVarModel):
 
 
 # noinspection PyPep8Naming,PyMissingConstructor,PyTypeChecker,PyArgumentList
-class MixtureOfTwoUnnormalisedGaussians(LatentVarModel):
+class LatentMixtureOfTwoUnnormalisedGaussians(LatentVarModel):
     """ Mixture of two *unnormalised* Gaussians given by:
     phi(u; theta) = e^-(theta[0]) [exp(-x**2/2exp(theta[1])**2) +
                                    exp(-x**/2sigma1**2)]
@@ -286,11 +287,17 @@ class MixtureOfTwoUnnormalisedGaussians(LatentVarModel):
             either data or noise for NCE
         :return array (2, n)
         """
-        grad = np.zeros((self.theta.size, U.shape[0]))  # (2, n)
-        grad[0] = -1
+        grad0 = np.zeros((self.theta.size, U.shape[0]))  # (2, n)
+        grad1 = np.zeros((self.theta.size, U.shape[0]))  # (2, n)
+
+        grad0[0] = -1
+        grad1[0] = -1
+
         a = (U**2 * np.exp(-2*self.theta[1]))  # (n, 1)
-        grad[1] = a.reshape(-1)
-        return grad  # (2, n)
+        grad0[1] = a.reshape(-1)
+        grad1[1] = 0
+
+        return grad0, grad1  # (2, n)
 
     def sample(self, n):
         """ Sample n values from the model, with uniform(0,1) dist over latent vars
@@ -343,6 +350,166 @@ class MixtureOfTwoUnnormalisedGaussians(LatentVarModel):
         plt.grid()
 
         return fig
+
+# noinspection PyPep8Naming,PyMissingConstructor,PyTypeChecker,PyArgumentList
+class LatentMixtureOfTwoUnnormalisedGaussians2(LatentVarModel):
+    """ Mixture of two *unnormalised* Gaussians given by:
+    phi(u, z; theta) =  [ (1-z) * e^-(theta[0])* exp(-x**2/2exp(theta[2])**2) + z * e^-(theta[1])* exp(-x**/2sigma1**2)]
+
+    This class represents a sum of two gaussians, each of which has lost its normalising constant.
+    """
+
+    def __init__(self, theta, sigma1=1, rng=None):
+        """Initialise theta and stdevs of gaussians
+        :param theta: array (3, )
+            theta[0] and theta[1] are scaling parameters. See the formula
+            in the class docstring. theta[2] is (log) standard deviation
+            of one of the two gaussians. We use the log to enforce positivity.
+        :param sigma1: float/int
+            standard deviation of one of the gaussians
+        """
+        self.sigma1 = sigma1
+        super().__init__(theta, rng=rng)
+
+    def __call__(self, U, Z):
+        """ Evaluate model for each data point U[i, :]
+
+        :param U: array (n, 1)
+             either data or noise for NCE
+        :param Z: (nz, n, 1)
+            nz*n 1-dimensional latent variable samples for data U.
+        :return array (nz, n)
+        """
+        Z = Z.reshape(Z.shape[0], Z.shape[1])
+
+        first_term = (Z == 0)*self.marginal_z_0(U)  # (nz, n)
+        second_term = (Z == 1)*self.marginal_z_1(U)  # (nz, n)
+
+        return first_term + second_term
+
+    def marginal_z_0(self, U):
+        """ Return value of model for z=0
+        :param U: array (n, 1)
+            N is number of data points
+        :return array (n,)
+        """
+        U = U.reshape(-1)
+        c_0 = np.exp(-self.theta[0])  # 1st scaling parameter
+        sigma = np.exp(self.theta[2])  # stdev parameter
+        b = np.exp(-U**2 / (2*(sigma**2)))
+        return c_0 * b
+
+    def marginal_z_1(self, U):
+        """ Return value of model for z=1
+        :param U: array (n, 1)
+            N is number of data points
+        :return array (n,)
+        """
+        U = U.reshape(-1)
+        c_1 = np.exp(-self.theta[1])  # 2nd scaling parameter
+        b = np.exp(-U**2 / (2*(self.sigma1**2)))
+        return c_1 * b
+
+    def grad_log_wrt_params(self, U, Z):
+        """ Nabla_theta(log(phi(x,z; theta))) where phi is the unnormalised model
+
+        :param U: array (n, 1)
+             either data or noise for NCE
+        :param Z: (nz, n, 1)
+            1 dimensional latent variable samples for data U.
+        :return grad: array (len(theta)=3, nz, n)
+        """
+        nz, n = Z.shape[0], Z.shape[1]
+        Z = Z.reshape(nz, n)
+        grad = np.zeros((len(self.theta), nz, n))
+
+        first_term = (Z == 0)*self.marginal_z_0(U)  # (nz, n)
+        second_term = (Z == 1)*self.marginal_z_1(U)  # (nz, n)
+
+        grad[0] = - first_term / (first_term + second_term)
+        grad[1] = - second_term / (first_term + second_term)
+        grad[2] = first_term * (U**2 * np.exp(-2 * self.theta[2])) / (first_term + second_term)
+
+        correct_shape = self.theta_shape + (nz, n)
+        assert grad.shape == correct_shape, ' ' \
+            'gradient should have shape {}, got {} instead'.format(correct_shape, grad.shape)
+
+        return grad
+
+    def grad_log_wrt_params_analytic(self, U):
+        """ nabla_theta[1] (log(model))
+        :param U: array (n, 1)
+            either data or noise for NCE
+        :return array (3, n)
+        """
+        grad0 = np.zeros((self.theta.size, U.shape[0]))  # (3, n)
+        grad1 = np.zeros((self.theta.size, U.shape[0]))  # (3, n)
+
+        grad0[0] = -1
+        grad0[1] = 0
+        a = (U**2 * np.exp(-2*self.theta[2]))  # (n, 1)
+        grad0[2] = a.reshape(-1)
+
+        grad1[0] = 0
+        grad1[1] = -1
+        grad1[2] = 0
+
+        return grad0, grad1  # (3, n)
+
+    def sample(self, n):
+        """ Sample n values from the model, with uniform(0,1) dist over latent vars
+
+        :param n: number of data points to sample
+        :return: data array of shape (n, 1)
+        """
+        # sigma = np.exp(self.theta[2])
+        # a = self.sigma1 / (sigma + self.sigma1)
+        # w = self.rng.uniform(0, 1, n) < a
+        # x = (w == 0)*(self.rng.randn(n)*sigma) + (w == 1)*(self.rng.randn(n)*self.sigma1)
+        # return x.reshape(-1, 1)
+        raise NotImplementedError
+
+    def normalised_and_marginalised_over_z(self, U):
+        """Return values of p(U), where p is the (normalised) marginal over x
+
+        :param U: array (n, 1)
+             either data or noise for NCE
+        :return array (n, )
+            probabilities of datapoints under p(x) i.e with z marginalised out
+            and the distribution has been normalised
+        """
+        # sigma = np.exp(self.theta[1])
+        # a = sigma / (sigma + self.sigma1)
+        # return a*norm.pdf(U.reshape(-1), 0, sigma) + (1 - a)*norm.pdf(U.reshape(-1), 0, self.sigma1)
+        raise NotImplementedError
+
+        # noinspection PyUnusedLocal
+
+    def plot_sample_density_against_true_density(self, X, figsize=(10, 7), bandwidth=0.2):
+        """Compare kernel density estimate of sample X to true density
+
+        :param X: array (N, 1)
+            X is a sample, possibly generated from self.sample
+        :param figsize: tuple
+            size of figure
+        :param bandwidth:
+            bandwidth parameter passed to sklearn.KernelDensity
+        """
+        # fig = plt.figure(figsize=figsize)
+        # u = np.arange(-10, 10, 0.01)
+        #
+        # x_density = kd(bandwidth=bandwidth).fit(X.reshape(-1, 1))
+        # x_density_samples = np.exp(x_density.score_samples(u.reshape(-1, 1)))
+        # plt.plot(u, x_density_samples, label='kde')
+        #
+        # px = self.normalised_and_marginalised_over_z(u)
+        # plt.plot(u, px, label='true', c='r', linestyle='--')
+        #
+        # plt.legend()
+        # plt.grid()
+        #
+        # return fig
+        raise NotImplementedError
 
 
 # noinspection PyPep8Naming,PyMissingConstructor,PyArgumentList,PyTypeChecker

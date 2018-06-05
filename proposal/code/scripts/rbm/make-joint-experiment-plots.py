@@ -19,7 +19,7 @@ from distribution import RBMLatentPosterior, MultivariateBernoulliNoise, ChowLiu
 from fully_observed_models import VisibleRestrictedBoltzmannMachine
 from latent_variable_model import RestrictedBoltzmannMachine
 from nce_optimiser import NCEOptimiser
-from utils import plot_log_likelihood_training_curves, takeClosest, create_J_diff_plot, get_Js_for_vnce_thetas
+from utils import plot_log_likelihood_training_curves, take_closest, make_nce_minus_vnce_loss_plot, get_nce_loss_for_vnce_params
 from vnce_optimisers import VNCEOptimiser
 
 from copy import deepcopy
@@ -66,7 +66,7 @@ def annotate(ax, annotation, xy, length=100):
 
 def plot_and_annotate(ax, times, vals, annotation, annotate_val, length=100):
     ax.semilogx(times, vals)
-    ind = takeClosest(vals, annotate_val)
+    ind = take_closest(vals, annotate_val)
     annotate(ax, annotation, (times[ind], vals[ind]), length)
     ax.annotate(r"{}".format(round(vals[-1], 4)), xy=(times[-1], vals[-1]), fontsize=12)
 
@@ -262,13 +262,13 @@ for i, file in enumerate(os.listdir(exp_dir)):
     
     # ACTUAL PLOTTING
     if config['optimiser'] == 'VNCEOptimiserWithoutImportanceSampling':
-        J_plot, _ = create_J_diff_plot(J1s, vnce_times, E_step_ids, Js_for_vnce_thetas, 
+        J_plot, _ = make_nce_minus_vnce_loss_plot(J1s, vnce_times, E_step_ids, Js_for_vnce_thetas,
                                        posterior_ratio_vars=None, plot_posterior_ratio=False)
         axs = J_plot.axes
         axs[0].set_xlim(-5, 20)
         axs[0].set_ylim((-0.02, 0.02))
     else:
-        J_plot, _ = create_J_diff_plot(J1s, vnce_times, E_step_ids, Js_for_vnce_thetas, 
+        J_plot, _ = make_nce_minus_vnce_loss_plot(J1s, vnce_times, E_step_ids, Js_for_vnce_thetas,
                                        posterior_ratio_vars=None, plot_posterior_ratio=False)
         axs = J_plot.axes
         axs[0].set_xlim(-5, 20)

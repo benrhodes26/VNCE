@@ -25,7 +25,7 @@ from distribution import PolynomialSigmoidBernoulli as PolySig
 
 
 # noinspection PyPep8Naming,PyUnusedLocal
-def E_r(U, phi, q, pn, eps=10**-15):
+def E_r(U, phi, q, pn, eps=10**-7):
     """ E(r(u, z))
     :param U: array (n, 1)
     :param phi: LatentVariableModel
@@ -44,7 +44,7 @@ def E_r(U, phi, q, pn, eps=10**-15):
 
 
 # noinspection PyPep8Naming
-def E_log_psi_1(X, phi, q, pn, nu, eps=10**-15):
+def E_log_psi_1(X, phi, q, pn, nu, eps=10**-8):
     """ E(psi_1(x, z)) = E(log(q + (nu/r(x,z)))
 
     :param X: array (n, 1)
@@ -58,17 +58,23 @@ def E_log_psi_1(X, phi, q, pn, nu, eps=10**-15):
     :param pn: Distribution
     :return array (n, )
     """
-    a0 = np.log(_psi_1_0(X, phi, q, pn, nu, eps))
-    a1 = np.log(_psi_1_1(X, phi, q, pn, nu, eps))
+    q0 = 1 - q.calculate_p(X)
+    q1 = q.calculate_p(X)
 
-    term0 = (1 - q.calculate_p(X))*a0
-    term1 = q.calculate_p(X)*a1
+    h0_x = np.log(phi.marginal_z_0(X) + eps) - np.log(q0*pn(X) + eps)
+    h1_x = np.log(phi.marginal_z_1(X) + eps) - np.log(q1*pn(X) + eps)
 
-    return term0 + term1
+    a0 = (h0_x > 0) * np.log(1 + nu * np.exp(-h0_x)) + (h0_x < 0) * (-h0_x + np.log(nu + np.exp(h0_x)))
+    a1 = (h1_x > 0) * np.log(1 + nu * np.exp(-h1_x)) + (h1_x < 0) * (-h1_x + np.log(nu + np.exp(h1_x)))
+
+    term0 = q0 * a0
+    term1 = q1 * a1
+
+    return -(term0 + term1)
 
 
 # noinspection PyPep8Naming
-def E_psi_1_ratio_times_grad_log_theta(X, phi, q, pn, nu, eps=10**-15):
+def E_psi_1_ratio_times_grad_log_theta(X, phi, q, pn, nu, eps=10**-7):
     """ E( grad_theta(log(phi(u,z)) (psi_1(u, z) - 1) / psi_1(u, z))
     :param X: array (n, 1)
         data
@@ -81,16 +87,22 @@ def E_psi_1_ratio_times_grad_log_theta(X, phi, q, pn, nu, eps=10**-15):
     :param pn: Distribution
     :return array (len(theta), n)
     """
+
+    grad0, grad1 = phi.grad_log_wrt_params_analytic(X)  # (len(theta), n)
+
     psi_1_0 = _psi_1_0(X, phi, q, pn, nu, eps)  # (n, )
     a = (psi_1_0 - 1)/psi_1_0  # (n, )
-    b = phi.grad_log_wrt_params_analytic(X)  # (len(theta), n)
-    E = (1 - q.calculate_p(X)) * a * b  # (len(theta), n)
+    E0 = (1 - q.calculate_p(X)) * a * grad0  # (len(theta), n)
 
-    return E  # (len(theta), n)
+    psi_1_1 = _psi_1_1(X, phi, q, pn, nu, eps)  # (n, )
+    b = (psi_1_1 - 1)/psi_1_1  # (n, )
+    E1 = q.calculate_p(X) * b * grad1
+
+    return E0 + E1  # (len(theta), n)
 
 
 # noinspection PyPep8Naming,PyUnusedLocal
-def E_r_times_grad_log_theta(Y, phi, q, pn, nu, eps=10 ** 15):
+def E_r_times_grad_log_theta(Y, phi, q, pn, nu, eps=10**-7):
     """ E( grad_theta(log(phi(u,z)) r(u, z) )
 
     :param Y: array (n*nu, 1)
@@ -104,15 +116,19 @@ def E_r_times_grad_log_theta(Y, phi, q, pn, nu, eps=10 ** 15):
     :param pn: Distribution
     :return array (len(theta), n)
     """
-    a = _r0(Y, phi, q, pn, eps)  # (n, )
-    b = phi.grad_log_wrt_params_analytic(Y)  # (len(theta), n)
-    E = (1 - q.calculate_p(Y)) * a * b  # (len(theta), n)
+    grad0, grad1 = phi.grad_log_wrt_params_analytic(Y)  # (len(theta), n)
 
-    return E  # (len(theta), n)
+    a = _r0(Y, phi, q, pn, eps)  # (n, )
+    E0 = (1 - q.calculate_p(Y)) * a * grad0  # (len(theta), n)
+
+    b = _r1(Y, phi, q, pn, eps)  # (n, )
+    E1 = q.calculate_p(Y) * b * grad1  # (len(theta), n)
+
+    return E0 + E1  # (len(theta), n)
 
 
 # noinspection PyPep8Naming
-def grad_wrt_alpha_of_E_log_psi_1(X, phi, q, pn, nu, eps=10**-15):
+def grad_wrt_alpha_of_E_log_psi_1(X, phi, q, pn, nu, eps=10**-7):
     """ grad_alpha (E(log(1 + nu/r(u, z))))
     :param X: array (n, 1)
         data

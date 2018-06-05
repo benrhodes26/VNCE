@@ -334,7 +334,8 @@ class MultivariateBernoulliNoise(Distribution):
             number of noise samples used in NCE
         :return: array (num_noise_samples, d)
         """
-        return self.rng.uniform(0, 1, (num_noise_samples, len(self.p))) < self.p
+        noise = self.rng.uniform(0, 1, (num_noise_samples, len(self.p))) < self.p
+        return noise.astype(int)
 
 
 # noinspection PyPep8Naming,PyMissingConstructor
