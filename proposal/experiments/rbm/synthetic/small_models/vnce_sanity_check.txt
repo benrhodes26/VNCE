@@ -1,0 +1,10 @@
+
+file: nz=1. Percentage of iters for which J1 increases: 88.04%
+          Percentage of iters for which J increases: 62.34%
+          Percentage of iters for which J1 is less than J: 16.5%
+file: nz=10. Percentage of iters for which J1 increases: 92.12%
+          Percentage of iters for which J increases: 77.18%
+          Percentage of iters for which J1 is less than J: 35.4%
+file: nz=100. Percentage of iters for which J1 increases: 99.72%
+          Percentage of iters for which J increases: 94.77%
+          Percentage of iters for which J1 is less than J: 87.09%

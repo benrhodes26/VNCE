@@ -27,3 +27,6 @@ proposal.pdf
 .ipynb_checkpoints
 */.ipynb_checkpoints/*
 notebooks/test.ipynb
+/proposal/experiments/rbm/test/*
+/proposal/experiments/rbm/old/*
+

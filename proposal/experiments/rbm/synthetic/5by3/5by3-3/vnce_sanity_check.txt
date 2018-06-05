@@ -1,0 +1,9 @@
+file: sgd-lr=0.3. Percentage of iters for which J1 increases: 50.45%
+          Percentage of iters for which J increases: 50.97%
+          Percentage of iters for which J1 is less than J: 38.52%
+file: sgd-lr=0.3-noIS. Percentage of iters for which J1 increases: 50.22%
+          Percentage of iters for which J increases: 51.12%
+          Percentage of iters for which J1 is less than J: 40.54%
+file: sgd-lr=0.1. Percentage of iters for which J1 increases: 50.31%
+          Percentage of iters for which J increases: 52.91%
+          Percentage of iters for which J1 is less than J: 46.01%

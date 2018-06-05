@@ -1,0 +1,24 @@
+start time: 20180423-1232
+end_time: 20180423-1234
+n: 10000
+nz: 3
+nu: 1.0
+d: 5
+m: 3
+true_sd: 1.0
+num_gibbs_steps: 1000
+noise: marginal
+opt_method: L-BFGS-B
+ftol: 2.220446049250313e-09
+posterior_variance_threshold: 100.0
+maxiter: 10
+stop_threshold: 1e-09
+max_num_em_steps: 100
+learn_rate: 0.01
+batch_size: 10
+cd_num_steps: 1
+cd_learn_rate: 0.01
+cd_batch_size: 100
+cd_num_epochs: 0
+num_log_like_steps: 20
+random_seed: 1083463236

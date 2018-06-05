@@ -1,0 +1,18 @@
+file: 1. Percentage of iters for which J1 increases: 67.93%
+          Percentage of iters for which J increases: 65.63%
+          Percentage of iters for which J1 is less than J: 22.86%
+file: 2. Percentage of iters for which J1 increases: 75.4%
+          Percentage of iters for which J increases: 63.5%
+          Percentage of iters for which J1 is less than J: 16.95%
+file: 5. Percentage of iters for which J1 increases: 85.79%
+          Percentage of iters for which J increases: 58.16%
+          Percentage of iters for which J1 is less than J: 9.77%
+file: 10. Percentage of iters for which J1 increases: 91.72%
+          Percentage of iters for which J increases: 58.27%
+          Percentage of iters for which J1 is less than J: 6.049%
+file: 20. Percentage of iters for which J1 increases: 95.47%
+          Percentage of iters for which J increases: 56.82%
+          Percentage of iters for which J1 is less than J: 3.182%
+file: 50. Percentage of iters for which J1 increases: 98.08%
+          Percentage of iters for which J increases: 54.05%
+          Percentage of iters for which J1 is less than J: 1.446%
