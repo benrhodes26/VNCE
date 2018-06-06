@@ -135,13 +135,15 @@ var_dist = RBMLatentPosterior(theta0, rng=rng)
 if args.loss == 'MonteCarloVnceLoss':
     vnce_loss_function = MonteCarloVnceLoss(model=model,
                                             noise=noise_dist,
-                                            variational_q=var_dist,
+                                            noise_samples=Y,
+                                            variational_noise=var_dist,
                                             noise_to_data_ratio=args.nu,
                                             num_latent_per_data=args.nz,
                                             separate_terms=args.separate_terms)
 elif args.loss == 'MonteCarloVnceLossWithoutImportanceSampling':
     vnce_loss_function = MonteCarloVnceLossWithoutImportanceSampling(model=model,
                                                                      noise=noise_dist,
+                                                                     noise_samples=Y,
                                                                      variational_q=var_dist,
                                                                      noise_to_data_ratio=args.nu,
                                                                      num_latent_per_data=args.nz,
@@ -175,7 +177,6 @@ nce_optimiser = NCEOptimiser(model=nce_model, noise=noise_dist, noise_samples=Y,
 # perform latent nce optimisation
 print('starting latent nce optimisation...')
 optimiser.fit(X=X,
-              Y=Y,
               theta0=model.theta,
               alpha0=var_dist.alpha,
               stop_threshold=args.stop_threshold,
