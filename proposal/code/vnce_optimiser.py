@@ -30,17 +30,18 @@ class VemOptimiser:
     provided at initialisation as objects with particular methods: see SgdEmStep or ScipyMinimiseEmStep for examples.
     """
 
-    def __init__(self, m_step, e_step):
+    def __init__(self, m_step, e_step, num_em_steps_per_save):
         """
-        :param loss_function: object
-            see e.g. MonteCarloVnceLoss
         :param e_step: object
             see e.g. SgdEmStep
         :param m_step: object
             see e.g SgdEmStep
+        :param num_em_steps_per_save: int
+            we save a results triple (parameter, loss, time) every X iterations of the EM outer loop
         """
         self.m_step = m_step
         self.e_step = e_step
+        self.num_em_steps_per_save = num_em_steps_per_save
 
         # results during optimisation. Each is a list of lists. The inner lists pertain to a specific E or M step.
         self.thetas = []  # model parameters
@@ -51,10 +52,8 @@ class VemOptimiser:
     def fit(self, loss_function, theta0, alpha0, stop_threshold=1e-6, max_num_em_steps=100):
         """Optimise the loss function initialised on this class to fit the data X
 
-        :param X: array (n, d)
-            data
-        :param Y: array (n*nu, d)
-            noise used in (V)NCE
+        :param loss_function: class
+            see MonteCarloVnceLoss for an example
         :param theta0: array
             starting value of the model's parameters
         :param alpha0: array
@@ -65,34 +64,33 @@ class VemOptimiser:
             terminate optimisation after this many EM iterations
         """
 
-        self.init_parameters(loss_function, alpha0, theta0)
+        self.init_parameters(loss_function, theta0, alpha0)
 
         num_em_steps = 0
         prev_loss, current_loss = -99, -9  # arbitrary distinct numbers
         while np.abs(prev_loss - current_loss) > stop_threshold and num_em_steps < max_num_em_steps:
+            save_results = num_em_steps % num_em_steps_per_save
 
             m_results = self.m_step(loss_function)
-            if m_results:
+            if m_results and save_results:
                 self.update_results(*m_results, m_step=True)
 
             e_results = self.e_step(loss_function)
-            if e_results and m_results:
+            if e_results and save_results:
                 self.update_results(*e_results, e_step=True)
 
             prev_loss = current_loss
-            current_loss = deepcopy(loss_function.current_loss)
-            current_loss = np.sum(current_loss) if isinstance(current_loss, np.ndarray) else current_loss
+            current_loss = get_current_loss(get_float=True)
             num_em_steps += 1
 
-    def init_parameters(self, loss_function, alpha0, theta0):
+    def init_parameters(self, loss_function, theta0, alpha0):
         """Initialise parameters and update optimisation results accordingly"""
-        loss_function.model.theta = deepcopy(theta0)
-        loss_function.q.alpha = deepcopy(alpha0)
+        loss_function.set_theta(theta0)
+        loss_function.set_alpha(alpha0)
 
-        #todo: how to change this to work with adaptive noise?
-        # initial_loss = loss_function(X, Y)
-        # self.update_results([theta0], [initial_loss], [time.time()], m_step=True)
-        # self.update_results([alpha0], [initial_loss], [time.time()], e_step=True)
+        initial_loss = loss_function(next_minibatch=True)
+        self.update_results([theta0], [initial_loss], [time.time()], m_step=True)
+        self.update_results([alpha0], [initial_loss], [time.time()], e_step=True)
 
     def update_results(self, params, losses, times, m_step=False, e_step=False):
         """Update optimisation results during learning"""
@@ -120,17 +118,16 @@ class VemOptimiser:
         NOTE: this method can only be applied to small models, where
         computing the partition function is not too costly
         """
-
-        theta = deepcopy(self.loss_function.model.theta)
+        theta = loss_function.get_theta()
         if thetas is None:
             thetas = self.thetas
 
         av_log_likelihoods = np.zeros(len(thetas))
         for i in np.arange(0, len(thetas)):
-            loss_function.model.theta = deepcopy(thetas[i])
-            av_log_likelihoods[i] = average_log_likelihood(self.loss_function.model, X)
+            loss_function.set_theta(thetas[i])
+            av_log_likelihoods[i] = average_log_likelihood(loss_function.model, X)
 
-        loss_function.model.theta = theta  # reset theta to its original value
+        loss_function.set_theta(theta)  # reset theta to its original value
         return av_log_likelihoods
 
     def plot_loss_curve(self, optimal_loss=None, separate_terms=False):
@@ -167,27 +164,26 @@ class VemOptimiser:
 
         return fig
 
-    def get_m_and_e_step_ids(self, e_step_results_exist=True):
+    def get_m_and_e_step_ids(self):
         """Return the indices of the M steps and E steps in the flattened array of times/losses.
         Also return just the *first* index of each E and M step (this is useful for plotting).
         """
         m_ids, e_ids = [], []
         m_start_ids, e_start_ids = [], []
-        id = 0
+        ind = 0
         m_step = True
         for m_or_e_step in self.times:
             for i in range(len(m_or_e_step)):
                 if m_step:
-                    m_ids.append(id)
+                    m_ids.append(ind)
                     if i == 0:
-                        m_start_ids.append(id)
+                        m_start_ids.append(ind)
                 else:
-                    e_ids.append(id)
+                    e_ids.append(ind)
                     if i == 0:
-                        e_start_ids.append(id)
-                id += 1
-            if e_step_results_exist:
-                m_step = not m_step
+                        e_start_ids.append(ind)
+                ind += 1
+            m_step = not m_step
 
         return m_ids, e_ids, m_start_ids, e_start_ids
 
@@ -202,7 +198,7 @@ class SgdEmStep:
     If used during the E step, it optimises the VNCE objective w.r.t the variational parameters alpha.
     In either case, it uses stochastic gradient descent with adjustable mini-batch size and learning rate.
     """
-    def __init__(self, do_m_step, learning_rate, batch_size, num_batches_per_em_step, num_data_points, noise_to_data_ratio, rng):
+    def __init__(self, do_m_step, learning_rate, num_batches_per_em_step, noise_to_data_ratio, rng):
         """
         :param do_m_step: boolean
             if True, optimise loss function w.r.t model params theta. Else w.r.t variational params alpha.
@@ -215,41 +211,30 @@ class SgdEmStep:
         """
         self.do_m_step = do_m_step
         self.learning_rate = learning_rate
-        self.batch_size = batch_size
         self.num_batches_per_em_step = num_batches_per_em_step
-        self.batches_per_epoch = int(num_data_points / batch_size)
-        self.current_batch_id = 0
-        self.current_epoch = 0
         self.nu = noise_to_data_ratio
         self.rng = rng
 
     def __call__(self, loss_function):
-        """Execute optimisation of loss function using stochastic grad descent
-        :param X: array (n, d)
-            data
-        :param Y: array (n*nu, d)
-            noise in (V)NCE
+        """Execute optimisation of loss function using stochastic gradient ascent
         :param loss_function:
             see e.g. MonteCarloVnceLoss
         """
         for _ in range(self.num_batches_per_em_step):
-            # todo: work out how to tell loss function what batch to use
             if self.do_m_step:
-                grad = loss_function.grad_wrt_theta()
-                loss_function.model.theta += self.learning_rate * grad
+                grad = loss_function.grad_wrt_theta(next_minibatch=True)
+                current_theta = loss_function.get_theta()
+                new_param = current_theta + self.learning_rate * grad
+                loss_function.set_theta(new_param)
             else:
-                grad = loss_function.grad_wrt_alpha()
-                # todo: check that += still forces us to resample (should do...)
-                loss_function.q.alpha += self.learning_rate * grad
+                grad = loss_function.grad_wrt_alpha(next_minibatch=True)
+                current_alpha = loss_function.get_alpha()
+                new_param = current_alpha + self.learning_rate * grad
+                loss_function.set_alpha(new_param)
 
-        # calculate loss, which is stored on the loss function and used in the stopping criterion of the em algorithm
-        _ = loss_function()
+        loss = loss_function()
 
-        # If we're about to start a new epoch, shuffle the data and print status
-        start_new_epoch = (self.current_batch_id + 1) % self.batches_per_epoch == 0
-        if start_new_epoch or self.current_epoch == 0:
-            current_loss = self.new_epoch(X, Y, X_batch, Y_batch, loss_function)
-            return [deepcopy(loss_function.model.theta)], [current_loss], [time.time()]
+        return [new_param], [loss], [time.time()]
 
     def __repr__(self):
         return "SgdEmStep"
@@ -260,7 +245,7 @@ class ScipyMinimiseEmStep:
 
     If used during the M step, it optimises the VNCE objective w.r.t the model parameters theta.
     If used during the E step, it optimises the VNCE objective w.r.t the variational parameters alpha.
-    In either case, it uses stochastic gradient descent with adjustable mini-batch size and learning rate.
+    In either case, it uses stochastic gradient ascent with adjustable mini-batch size and learning rate.
     """
     def __init__(self, do_m_step, optimisation_method='L-BFGS-B', max_iter=100):
         """
@@ -288,39 +273,42 @@ class ScipyMinimiseEmStep:
         :param loss_function:
             see e.g. MonteCarloVnceLoss
         """
+        assert not loss_function.use_minibatches, "Your loss function has use_minibatches=True, " \
+            "but you are trying to optimise it with a non-linear optimiser. Use SGD instead."
+
         def callback(param):
             self.update_results(deepcopy(param))
 
         def loss_neg(param_k):
             if self.do_m_step:
-                loss_function.model.theta = deepcopy(param_k)
+                loss_function.set_theta(param_k)
                 self.current_loss = loss_function()
             else:
-                loss_function.q.alpha = deepcopy(param_k)
+                loss_function.set_alpha(param_k)
                 self.current_loss = loss_function()
             return deepcopy(-np.sum(self.current_loss))
 
         def loss_grad_neg(param_k):
             if self.do_m_step:
-                loss_function.model.theta = deepcopy(param_k)
+                loss_function.set_theta(param_k)
                 grad = -loss_function.grad_wrt_theta()
             else:
-                loss_function.q.alpha = deepcopy(param_k)
+                loss_function.set_alpha(param_k)
                 grad = -loss_function.grad_wrt_alpha()
             return grad
 
         if self.do_m_step:
-            start_val = loss_function.model.theta
+            start_param = loss_function.get_theta()
         else:
-            start_val = loss_function.q.alpha
+            start_param = loss_function.get_alpha()
 
-        _ = minimize(loss_neg, start_val, method=self.opt_method, jac=loss_grad_neg,
+        _ = minimize(loss_neg, start_param, method=self.opt_method, jac=loss_grad_neg,
                      callback=callback, options={'maxiter': self.max_iter, 'disp': True})
 
         if self.do_m_step:
-            self.update_results(deepcopy(loss_function.model.theta))
+            self.update_results(loss_function.get_theta())
         else:
-            self.update_results(deepcopy(loss_function.q.alpha))
+            self.update_results(loss_function.get_alpha())
 
         params, losses, times = deepcopy(self.params), deepcopy(self.losses), deepcopy(self.times)
         self.reset_results()
@@ -344,19 +332,17 @@ class ScipyMinimiseEmStep:
 
 class ExactEStep:
 
-    def __init__(self, calculate_loss=True):
-        """
-         :param calculate_loss: boolean
-            Calculating the loss in the E-step isn't necessary. It can be useful for tracking performance, but it can
-            also be expensive (since we have to re-sample from the new q)."""
-        self.calculate_loss = calculate_loss
+    def __init__(self):
+        pass
 
     def __call__(self, loss_function):
-        new_alpha = deepcopy(loss_function.model.theta)
-        loss_function.q.alpha = new_alpha
-        if self.calculate_loss:
-            loss = loss_function()
-            return [new_alpha], [loss], [time.time()]
+        # We want to update q to equal the model's posterior over latent variables.
+        # We assume that q is parametrised such that setting alpha=theta achieves this.
+        new_alpha = loss_function.get_theta()
+        loss_function.set_alpha(new_alpha)
+        loss = loss_function()
+
+        return [new_alpha], [loss], [time.time()]
 
     def __repr__(self):
         return "ExactEStep"
@@ -364,19 +350,15 @@ class ExactEStep:
 
 class AdaptiveEStep:
 
-    def __init__(self, calculate_loss=True):
-        """
-         :param calculate_loss: boolean
-            Calculating the loss in the E-step isn't necessary. It can be useful for tracking performance, but it can
-            also be expensive (since we have to re-sample from the new q)."""
-        self.calculate_loss = calculate_loss
+    def __init__(self):
+        pass
 
     def __call__(self, loss_function):
-        new_alpha = deepcopy(loss_function.model.theta)
-        loss_function.noise.alpha = new_alpha
-        if self.calculate_loss:
-            loss = loss_function()
-            return [new_alpha], [loss], [time.time()]
+        # todo: get rid of this class if it remains identical to ExactEStep
+        new_alpha = loss_function.get_theta()
+        loss_function.set_alpha(new_alpha)
+        loss = loss_function()
+        return [new_alpha], [loss], [time.time()]
 
     def __repr__(self):
         return "AdaptiveEStep"
@@ -400,6 +382,7 @@ class MonteCarloVnceLoss:
                  use_minibatches=False,
                  batch_size=None,
                  separate_terms=False,
+                 use_importance_sampling=True,
                  eps=1e-7):
         """
         :param model: see latent_variable_model.py for examples
@@ -418,9 +401,10 @@ class MonteCarloVnceLoss:
         self.nu = noise_to_data_ratio
         self.nz = num_latent_per_data
         self.separate_terms = separate_terms
-        self.use_minibatches = use_minibatches
+        self.use_importance_sampling = use_importance_sampling
         self.eps = eps
 
+        self.use_minibatches = use_minibatches
         if use_minibatches:
             self.X = None
             self.Y = None
@@ -437,11 +421,23 @@ class MonteCarloVnceLoss:
         self.resample_from_variational_noise = True
         self.current_loss = None
 
+    def get_theta(self):
+        return deepcopy(self.model.theta)
+
+    def get_alpha(self):
+        return deepcopy(self.variational_noise.alpha)
+
+    def get_current_loss(self, get_float=False):
+        loss = deepcopy(self.current_loss)
+        if get_float:
+            loss = np.sum(loss) if isinstance(loss, np.ndarray) else loss
+        return loss
+
     def set_theta(self, new_theta):
         self.model.theta = deepcopy(new_theta)
 
     def set_alpha(self, new_alpha):
-        self.variational_noise.alpha = new_alpha
+        self.variational_noise.alpha = deepcopy(new_alpha)
         self.resample_from_variational_noise = True
 
     def __call__(self, next_minibatch=False):
@@ -457,23 +453,12 @@ class MonteCarloVnceLoss:
        :return: float
            Value of objective for current parameters
        """
-        if next_minibatch:
+        if next_minibatch and self.use_minibatches:
             self.next_minibatch()
         self.resample_noise_if_necessary()
 
-        nu = self.nu
-        h_x = self.h(self.X, self.ZX)
-        a = (h_x > 0) * np.log(1 + nu * np.exp(-h_x))
-        b = (h_x < 0) * (-h_x + np.log(nu + np.exp(h_x)))
-        first_term = -np.mean(a + b)
-
-        h_y = self.h(self.Y, self.ZY)
-        expectation = np.mean(np.exp(h_y), axis=0)
-        c = (1 / nu) * expectation  # (n*nu, )
-        second_term = -nu * np.mean(np.log(1 + c))
-
-        validate_shape(a.shape, (self.nz, len(self.X)))
-        validate_shape(c.shape, (len(self.Y), ))
+        first_term = self.first_term_of_loss()
+        second_term = self.second_term_of_loss()
 
         if self.separate_terms:
             val = np.array([first_term, second_term])
@@ -482,6 +467,37 @@ class MonteCarloVnceLoss:
         self.current_loss = val
 
         return val
+
+    def first_term_of_loss(self):
+        nu = self.nu
+
+        # use a numerically stable implementation of the cross-entropy sigmoid
+        h_x = self.h(self.X, self.ZX)
+        a = (h_x > 0) * np.log(1 + nu * np.exp(-h_x))
+        b = (h_x < 0) * (-h_x + np.log(nu + np.exp(h_x)))
+        first_term = -np.mean(a + b)
+
+        validate_shape(a.shape, (self.nz, len(self.X)))
+        return first_term
+
+    def second_term_of_loss(self):
+        nu = self.nu
+
+        if self.use_importance_sampling:
+            # We could use the same cross-entropy sigmoid trick as above, BEFORE using importance sampling.
+            # Currently not doing this - not sure which way round is better.
+            h_y = self.h(self.Y, self.ZY)
+            expectation = np.mean(np.exp(h_y), axis=0)
+            c = (1 / nu) * expectation  # (n*nu, )
+            second_term = -nu * np.mean(np.log(1 + c))
+        else:
+            h_y = self.h2(self.Y)
+            c = (h_y < 0) * np.log(1 + (1/nu) * np.exp(h_y))
+            d = (h_y > 0) * (h_y + np.log((1/nu) + np.exp(-h_y)))
+            second_term = -np.mean(c + d)
+
+        validate_shape(c.shape, (len(self.Y), ))
+        return second_term
 
     def h(self, U, Z):
         """Compute the ratio: model / (noise*q).
@@ -493,7 +509,6 @@ class MonteCarloVnceLoss:
         :return: array of shape (nz, ?)
             ? is either n or n*nu
         """
-
         if len(Z.shape) == 2:
             Z = Z.reshape((1, ) + Z.shape)
 
@@ -501,6 +516,18 @@ class MonteCarloVnceLoss:
         q = self.variational_noise(Z, U)
         val = np.log(phi) - np.log((q * self.noise(U) + self.eps))
         validate_shape(val.shape, (Z.shape[0], Z.shape[1]))
+
+        return val
+
+    def h2(self, Y):
+        """ compute ratio \sum_z(model)/ (noise).
+
+        :param Y: array of shape (n*nu, d)
+            noise samples
+        :return: array of shape (n*nu, )
+        """
+        model = self.model.marginalised_over_z(Y)  # (n*nu, )
+        val = np.log(model) - np.log((self.noise(Y)))  # (n*nu, )
 
         return val
 
@@ -513,27 +540,13 @@ class MonteCarloVnceLoss:
             noise samples
         :return grad: array of shape (len(model.theta), )
         """
-        if next_minibatch:
+        if next_minibatch and self.use_minibatches:
             self.next_minibatch()
         self.resample_noise_if_necessary()
 
-        joint_noise = self.nu * self.noise(self.X) * self.variational_noise(self.ZX, self.X)
-        a = joint_noise / (joint_noise + self.model(self.X, self.ZX))  # (nz, n)
-
-        gradX = self.model.grad_log_wrt_params(self.X, self.ZX)  # (len(theta), nz, n)
-        term_1 = np.mean(gradX * a, axis=(1, 2))  # (len(theta), )
-
-        gradY = self.model.grad_log_wrt_params(self.Y, self.ZY)  # (len(theta), nz, n)
-        r = np.exp(self.h(self.Y, self.ZY))  # (nz, n)
-
-        # Expectation over ZY
-        E_ZY = np.mean(gradY * r, axis=1)  # (len(theta), n)
-        one_over_psi = 1/self._psi(self.Y, self.ZY)  # (n, )
-
-        # Expectation over Y
-        term_2 = - np.mean(E_ZY * one_over_psi, axis=1)  # (len(theta), )
-
-        grad = term_1 + term_2
+        first_term = self.first_term_of_grad()
+        second_term = self.second_term_grad()
+        grad = first_term + second_term
 
         # If theta is 1-dimensional, grad will be a float.
         if isinstance(grad, float):
@@ -541,6 +554,32 @@ class MonteCarloVnceLoss:
         validate_shape(grad.shape, self.model.theta_shape)
 
         return grad
+
+    def first_term_of_grad(self):
+
+        joint_noise = self.nu * self.noise(self.X) * self.variational_noise(self.ZX, self.X)
+        a = joint_noise / (joint_noise + self.model(self.X, self.ZX))  # (nz, n)
+
+        gradX = self.model.grad_log_wrt_params(self.X, self.ZX)  # (len(theta), nz, n)
+        first_term = np.mean(gradX * a, axis=(1, 2))  # (len(theta), )
+
+        return first_term
+
+    def second_term_grad(self):
+
+        if self.use_importance_sampling:
+            gradY = self.model.grad_log_wrt_params(self.Y, self.ZY)  # (len(theta), nz, n)
+            r = np.exp(self.h(self.Y, self.ZY))  # (nz, n)
+            E_ZY = np.mean(gradY * r, axis=1)  # (len(theta), n)
+            one_over_psi = 1/self._psi(self.Y, self.ZY)  # (n, )
+            second_term = - np.mean(E_ZY * one_over_psi, axis=1)  # (len(theta), )
+        else:
+            gradY = self.model.grad_log_visible_marginal_wrt_params(self.Y)  # (len(theta), nz, n)
+            phiY = self.model.marginalised_over_z(self.Y)
+            a1 = phiY / (self.nu*self.noise(Y) + phiY)  # (n)
+            second_term = - self.nu * np.mean(gradY*a1, axis=1)  # (len(theta), )
+
+        return second_term
 
     def _psi(self, U, Z):
         """Return array (n, )"""
@@ -561,6 +600,7 @@ class MonteCarloVnceLoss:
 
         self.current_batch_id += 1
         if self.current_batch_id % self.batches_per_epoch == 0:
+            self.new_epoch()
             self.current_batch_id = 0
 
     def new_epoch(self):
@@ -568,11 +608,8 @@ class MonteCarloVnceLoss:
         self.rng.shuffle(self.data)
         self.rng.shuffle(self.noise_samples)
 
-        current_loss = loss_function(X_batch, Y_batch)
-        print('epoch {}: J1 = {}'.format(self.current_epoch, current_loss))
+        print('epoch {}: J1 = {}'.format(self.current_epoch, self.current_loss))
         self.current_epoch += 1
-
-        return current_loss
 
     def resample_noise_if_necessary(self):
         if (self.ZX is None) or (self.ZY is None) or self.resample_from_variational_noise:
@@ -582,143 +619,6 @@ class MonteCarloVnceLoss:
 
     def __repr__(self):
         return "MonteCarloVnceLoss"
-
-
-class MonteCarloVnceLossWithoutImportanceSampling:
-    """VNCE loss function identical to MonteCarloVnceLoss except we do not use importance sampling in second term
-
-    This loss function requires us to be able to analytically integrate out the latent variables in our model in order
-    to avoid using importance sampling. This is NOT a realistic assumption for many models, but when it is feasible, it
-    allows us to see how much `damage' importance sampling is doing.
-
-    Currently, grad_wrt_alpha(), where alpha is the variational parameter, is not implemented.
-    This is fine when we have access to the exact posterior p(z|x; theta) and so do not need variational parameters.
-    """
-    def __init__(self, model, noise, noise_samples, variational_q, noise_to_data_ratio, num_latent_per_data, separate_terms=False, eps=1e-7):
-        self.model = model
-        self.noise = noise
-        self.Y = noise_samples
-        self.q = variational_q
-        self.nu = noise_to_data_ratio
-        self.nz = num_latent_per_data
-        self.separate_terms = separate_terms
-        self.eps = eps
-        self.current_loss = None
-        self.ZX = None
-        self.ZY = None
-
-    def __call__(self, X, Y=None, reuse_latent_samples=False):
-        """Return Monte Carlo estimate of Lower bound of NCE objective
-
-       :param X: array (N, d)
-           data sample we are training our model on
-       :param Y: array (nz, N*nu)
-           noise samples
-       :param reuse_latent_samples: boolean
-           If true, reuse the samples ZX and ZY saved on this class as attributes. This is useful
-           during variational EM, since we want to reuse the same samples for every update in the M step.
-       :return: float
-           Value of objective for current parameters
-       """
-        if Y is None:
-            Y = self.Y
-        if (self.ZX is None) or (not reuse_latent_samples):
-            self.ZX = self.q.sample(self.nz, X)
-
-        nu = self.nu
-        h_x = self.h1(X, self.ZX)
-        a = (h_x > 0) * np.log(1 + nu * np.exp(-h_x))
-        b = (h_x < 0) * (-h_x + np.log(nu + np.exp(h_x)))
-        first_term = -np.mean(a + b)
-
-        h_y = self.h2(Y)
-        c = (h_y < 0) * np.log(1 + (1/nu) * np.exp(h_y))
-        d = (h_y > 0) * (h_y + np.log((1/nu) + np.exp(-h_y)))
-        second_term = -np.mean(c + d)
-
-        validate_shape(a.shape, (self.nz, len(X)))
-        validate_shape(c.shape, (len(Y), ))
-
-        if self.separate_terms:
-            val = np.array([first_term, second_term])
-        else:
-            val = first_term + second_term
-
-        self.current_loss = val
-
-        return val
-
-    def h1(self, X, Z):
-        """ compute ratio model / (noise*q).
-
-        :param X: array of shape (n, d)
-            U can be either data or noise samples, so ? is either n or n*nu
-        :param Z: array of shape (nz, n, m)
-            ? is either n or n*nu
-        :return: array of shape (nz, n)
-            ? is either n or n*nu
-        """
-        if len(Z.shape) == 2:
-            Z = Z.reshape((1, ) + Z.shape)
-
-        phi = self.model(X, Z)
-        q = self.q(Z, X)
-        val = np.log(phi) - np.log((q * self.noise(X) + self.eps))
-        validate_shape(val.shape, (Z.shape[0], Z.shape[1]))
-
-        return val
-
-    def h2(self, Y):
-        """ compute ratio \sum_z(model)/ (noise).
-
-        :param Y: array of shape (n*nu, d)
-            noise samples
-        :return: array of shape (n*nu, )
-        """
-        model = self.model.marginalised_over_z(Y)  # (n*nu, )
-        val = np.log(model) - np.log((self.noise(Y)))  # (n*nu, )
-
-        return val
-
-    def grad_wrt_theta(self, X, Y=None, reuse_latent_samples=False):
-        """Computes grad of loss w.r.t theta using Monte-Carlo
-
-        :param X: array (N, d)
-            data sample we are training our model on.
-        :param Y: array (N*nu, d)
-            noise samples
-        :return grad: array of shape (len(phi.theta), )
-        """
-        if Y is None:
-            Y = self.Y
-        if (self.ZX is None) or (not reuse_latent_samples):
-            self.ZX = self.q.sample(self.nz, X)
-
-        joint_noise = self.nu * self.noise(X) * self.q(self.ZX, X)
-        a = joint_noise / (joint_noise + self.model(X, self.ZX))  # (nz, n)
-
-        gradX = self.model.grad_log_wrt_params(X, self.ZX)  # (len(theta), nz, n)
-        term_1 = np.mean(gradX * a, axis=(1, 2))  # (len(theta), )
-
-        gradY = self.model.grad_log_visible_marginal_wrt_params(Y)  # (len(theta), nz, n)
-        phiY = self.model.marginalised_over_z(Y)
-        a1 = phiY / (self.nu*self.noise(Y) + phiY)  # (n)
-        term_2 = - self.nu * np.mean(gradY*a1, axis=1)  # (len(theta), )
-
-        grad = term_1 + term_2
-
-        # If theta is 1-dimensional, grad will be a float.
-        if isinstance(grad, float):
-            grad = np.array(grad)
-        validate_shape(grad.shape, self.model.theta_shape)
-
-        return grad
-
-    def grad_wrt_alpha(self, X):
-        raise NotImplementedError
-
-    def __repr__(self):
-        return "MonteCarloVnceLossWithoutImportanceSampling"
 
 
 class VnceLossWithAnalyticExpectations:
@@ -737,11 +637,12 @@ class VnceLossWithAnalyticExpectations:
      psi_1(u, z) = 1 + (nu/r(u, z))
      """
 
-    def __init__(self, model, noise, noise_samples, variational_q, E1, E2, E3, E4, E5, noise_to_data_ratio, separate_terms=False, eps=1e-7):
+    def __init__(self, model, noise, noise_samples, variational_noise, E1, E2, E3, E4, E5, noise_to_data_ratio, separate_terms=False, eps=1e-7):
+        # todo: redo this class to match other loss function class
         self.model = model
         self.noise = noise
         self.Y = noise_samples
-        self.q = variational_q
+        self.variational_noise = variational_noise
         self.E1 = E1
         self.E2 = E2
         self.E3 = E3
@@ -754,7 +655,7 @@ class VnceLossWithAnalyticExpectations:
         self.ZX = None
         self.ZY = None
 
-    def __call__(self, X, Y=None, reuse_latent_samples=False):
+    def __call__(self, next_minibatch=False):
         """Return Monte Carlo estimate of Lower bound of NCE objective
 
        :param X: array (N, d)
@@ -769,10 +670,10 @@ class VnceLossWithAnalyticExpectations:
        """
         if Y is None:
             Y = self.Y
-        E2 = self.E2(X, self.model, self.q, self.noise, self.nu, self.eps)
+        E2 = self.E2(X, self.model, self.variational_noise, self.noise, self.nu, self.eps)
         first_term = np.mean(E2)
 
-        E1 = self.E1(Y, self.model, self.q, self.noise, self.eps)
+        E1 = self.E1(Y, self.model, self.variational_noise, self.noise, self.eps)
         psi_2 = 1 + (1/self.nu)*E1
         second_term = -self.nu * np.mean(np.log(psi_2))
 
@@ -796,10 +697,10 @@ class VnceLossWithAnalyticExpectations:
         """
         if Y is None:
             Y = self.Y
-        E3 = self.E3(X, self.model, self.q, self.noise, self.nu, self.eps)  # (len(theta), n)
+        E3 = self.E3(X, self.model, self.variational_noise, self.noise, self.nu, self.eps)  # (len(theta), n)
         term_1 = np.mean(E3, axis=1)
 
-        E4 = self.E4(Y, self.model, self.q, self.noise, self.nu, self.eps)  # (len(theta), n)
+        E4 = self.E4(Y, self.model, self.variational_noise, self.noise, self.nu, self.eps)  # (len(theta), n)
         a = 1/(self._psi_2(Y) + self.eps)  # (n, )
         term_2 = - np.mean(a * E4, axis=1)
 
@@ -814,7 +715,7 @@ class VnceLossWithAnalyticExpectations:
 
     def _psi_2(self, U):
         """Return array (n, )"""
-        E1 = self.E1(U, self.model, self.q, self.noise, self.eps)
+        E1 = self.E1(U, self.model, self.variational_noise, self.noise, self.eps)
         return 1 + (1/self.nu) * E1
 
     def grad_wrt_alpha(self, X, reuse_latent_samples=False):
@@ -822,11 +723,11 @@ class VnceLossWithAnalyticExpectations:
 
         :param X: array (n, d)
             data sample we are training our model on.
-        :return grad: array of shape (len(q.alpha), )
+        :return grad: array of shape (len(noise.alpha), )
         """
-        E5 = self.E5(X, self.model, self.q, self.noise, self.nu, self.eps)
+        E5 = self.E5(X, self.model, self.variational_noise, self.noise, self.nu, self.eps)
         grad = np.mean(E5, axis=1)
-        validate_shape(grad.shape, self.q.alpha_shape)
+        validate_shape(grad.shape, self.variational_noise.alpha_shape)
 
         return grad
 
