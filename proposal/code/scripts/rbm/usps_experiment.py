@@ -4,8 +4,11 @@ two methods: latent nce and contrastive divergence.
 import os
 import sys
 code_dir = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/code'
+code_dir_2 = '/home/ben/ben-rhodes-masters-project/proposal/code'
 if code_dir not in sys.path:
     sys.path.append(code_dir)
+if code_dir_2 not in sys.path:
+    sys.path.append(code_dir_2)
 
 import numpy as np
 import pickle
@@ -17,12 +20,10 @@ from fully_observed_models import VisibleRestrictedBoltzmannMachine
 from latent_variable_model import RestrictedBoltzmannMachine
 from nce_optimiser import NCEOptimiser
 from utils import *
-from vnce_optimiser import VemOptimiser, SgdEmStep, ScipyMinimiseEmStep, ExactEStep, MonteCarloVnceLoss, MonteCarloVnceLossWithoutImportanceSampling
+from vnce_optimiser import VemOptimiser, SgdEmStep, ScipyMinimiseEmStep, ExactEStep, MonteCarloVnceLoss
 
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from copy import deepcopy
-from matplotlib import pyplot as plt
-from matplotlib import rc
 from numpy import random as rnd
 from time import gmtime, strftime
 
@@ -33,18 +34,27 @@ parser = ArgumentParser(description='Experimental comparison of training an RBM 
 # Read/write arguments
 parser.add_argument('--data_dir', type=str, default='/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/data/usps',
                     help='Path to directory where data is loaded and saved')
-parser.add_argument('--save_dir', type=str, default='/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/experimental-results/rbm',
+# parser.add_argument('--save_dir', type=str, default='/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/experimental-results/rbm',
+#                     help='Path to directory where model will be saved')
+parser.add_argument('--save_dir', type=str, default='/home/ben/ben-rhodes-masters-project/proposal/experiments/rbm/synthetic/test',
                     help='Path to directory where model will be saved')
+
 parser.add_argument('--exp_name', type=str, default='test', help='name of set of experiments this one belongs to')
 parser.add_argument('--name', type=str, default=START_TIME, help='name of this exact experiment')
 
 # Data arguments
+parser.add_argument('--which_dataset', default='synthetic', help='options: usps and synthetic')
+parser.add_argument('--n', type=int, default=10000, help='Number of datapoints')
 parser.add_argument('--nz', type=int, default=1, help='Number of latent samples per datapoint')
 parser.add_argument('--nu', type=float, default=1.0, help='ratio of noise to data samples in NCE')
 parser.add_argument('--num_gibbs_steps', type=int, default=1000,
-                    help='number of gibbs steps used to generate as synthetic dataset')
+                    help='number of gibbs steps used to generate as synthetic dataset (if using synthetic)')
+
 # Model arguments
-parser.add_argument('--m', type=int, default=4, help='dimension of hiddens')
+
+parser.add_argument('--true_sd', type=float, default=1.0, help='standard deviation of gaussian rv for synthetic ground truth weights')
+parser.add_argument('--d', type=int, default=9, help='dimension of visibles (for synthetic dataset)')
+parser.add_argument('--m', type=int, default=2, help='dimension of hiddens')
 
 # Latent NCE optimisation arguments
 parser.add_argument('--loss', type=str, default='MonteCarloVnceLoss', help='loss function class to use. See vnce_optimisers.py for options')
@@ -52,25 +62,27 @@ parser.add_argument('--noise', type=str, default='marginal', help='type of noise
 parser.add_argument('--opt_method', type=str, default='SGD', help='optimisation method. L-BFGS-B and CG both seem to work')
 parser.add_argument('--maxiter', type=int, default=10, help='number of iterations performed by L-BFGS-B optimiser inside each M step of EM')
 parser.add_argument('--stop_threshold', type=float, default=1e-09, help='Tolerance used as stopping criterion in EM loop')
-parser.add_argument('--max_num_em_steps', type=int, default=100000, help='Maximum number of EM steps to perform')
+parser.add_argument('--max_num_em_steps', type=int, default=10000, help='Maximum number of EM steps to perform')
 parser.add_argument('--learn_rate', type=float, default=0.1, help='if opt_method=SGD, this is the learning rate used')
 parser.add_argument('--batch_size', type=int, default=100, help='if opt_method=SGD, this is the size of a minibatch')
 parser.add_argument('--num_batch_per_em_step', type=int, default=1, help='if opt_method=SGD, this is the number of batches per EM step')
-parser.add_argument('--save_e_step_results', dest='save_e_step_results', action='store_true', help='save results in the E step. This introduces extra sampling overhead.')
-parser.add_argument('--no-save_e_step_results', dest='save_e_step_results', action='store_false')
-parser.set_defaults(save_e_step_results=False)
+parser.add_argument('--num_em_steps_per_save', type=int, default=1, help='Every X EM steps save the current params, loss and time')
+parser.add_argument('--use_importance_sampling', dest='use_importance_sampling', action='store_true', help='use importance sampling to estimate '
+                    'the second term of the MonteCarloVnceLoss. If false, it must be possible to analytically marginalise out the latent variables in the model.')
+parser.add_argument('--no-use_importance_sampling', dest='use_importance_sampling', action='store_false')
+parser.set_defaults(use_importance_sampling=True)
 
 
 # Contrastive divergence optimisation arguments
 parser.add_argument('--cd_num_steps', type=int, default=1, help='number of gibbs steps used to sample from model during learning with CD')
 parser.add_argument('--cd_learn_rate', type=float, default=0.1, help='learning rate for contrastive divergence')
 parser.add_argument('--cd_batch_size', type=int, default=100, help='number of datapoints used per gradient update')
-parser.add_argument('--cd_num_epochs', type=int, default=1000, help='number of passes through data set')
+parser.add_argument('--cd_num_epochs', type=int, default=1, help='number of passes through data set')
 
 # nce optimisation arguments
-parser.add_argument('--nce_opt_method', type=str, default='L-BFGS-B', help='nce optimisation method. L-BFGS-B and CG both seem to work')
+parser.add_argument('--nce_opt_method', type=str, default='SGD', help='nce optimisation method. L-BFGS-B and CG both seem to work')
 parser.add_argument('--maxiter_nce', type=int, default=500, help='number of iterations inside scipy.minimize')
-parser.add_argument('--nce_num_epochs', type=int, default=1000, help='if nce_opt_method=SGD, this is the number of passes through data set')
+parser.add_argument('--nce_num_epochs', type=int, default=1, help='if nce_opt_method=SGD, this is the number of passes through data set')
 parser.add_argument('--nce_learn_rate', type=float, default=0.1, help='if nce_opt_method=SGD, this is the learning rate used')
 parser.add_argument('--nce_batch_size', type=int, default=100, help='if nce_opt_method=SGD, this is the size of a minibatch')
 
@@ -95,16 +107,34 @@ os.makedirs(SAVE_DIR)
 rng = rnd.RandomState(1083463236)
 
 # get training and test sets
-loaded_data = np.load(os.path.join(args.data_dir, 'usps_3by3patches.npz'))
-X = loaded_data['train']
-X_test = loaded_data['test']
-X_mean = np.mean(X, axis=0)
-n, d = X.shape
+if args.which_dataset == 'usps':
+    loaded_data = np.load(os.path.join(args.data_dir, 'usps_3by3patches.npz'))
+    X = loaded_data['train']
+    X_test = loaded_data['test']
+    X_mean = np.mean(X, axis=0)
+    n, d = X.shape
 
-# Load empirical dist, which is useful for comparison
-emp_dist = pickle.load(open(os.path.join(args.data_dir, 'usps_3by3_emp_dist.p'), 'rb'))
+    # Load empirical dist, which which treat as ground truth (this is reasonable in low dimensions)
+    true_data_dist = pickle.load(open(os.path.join(args.data_dir, 'usps_3by3_emp_dist.p'), 'rb'))
 
-# initialise noise distributions for VNCE & sample from it
+elif args.which_dataset == 'synthetic':
+    n, d = args.n, args.d
+
+    # generate weights of RBM that we want to learn
+    true_theta = rng.randn(d + 1, args.m + 1) * args.true_sd
+    true_theta[0, 0] = 0
+
+    # generate synthetic training and test sets
+    true_data_dist = RestrictedBoltzmannMachine(true_theta, rng=rng)
+    X, Z = true_data_dist.sample(n, num_iter=args.num_gibbs_steps)
+    X_test, _ = true_data_dist.sample(n, num_iter=args.num_gibbs_steps)
+    X_mean = np.mean(X, axis=0)
+
+else:
+    print("Do not recognise which_dataset={}".format(args.which_dataset))
+    raise TypeError
+
+# initialise noise distributions for V/NCE & sample from it
 noise_dist = None
 if args.noise == 'marginal':
     noise_dist = MultivariateBernoulliNoise(X_mean, rng=rng)
@@ -132,28 +162,25 @@ init_model = RestrictedBoltzmannMachine(deepcopy(theta0), rng=rng)  # rbm with i
 # initialise variational distribution, which is the exact posterior in this case
 var_dist = RBMLatentPosterior(theta0, rng=rng)
 
+use_sgd = (args.opt_method == 'SGD')
 if args.loss == 'MonteCarloVnceLoss':
     vnce_loss_function = MonteCarloVnceLoss(model=model,
+                                            data=X,
                                             noise=noise_dist,
                                             noise_samples=Y,
                                             variational_noise=var_dist,
                                             noise_to_data_ratio=args.nu,
                                             num_latent_per_data=args.nz,
-                                            separate_terms=args.separate_terms)
-elif args.loss == 'MonteCarloVnceLossWithoutImportanceSampling':
-    vnce_loss_function = MonteCarloVnceLossWithoutImportanceSampling(model=model,
-                                                                     noise=noise_dist,
-                                                                     noise_samples=Y,
-                                                                     variational_q=var_dist,
-                                                                     noise_to_data_ratio=args.nu,
-                                                                     num_latent_per_data=args.nz,
-                                                                     separate_terms=args.separate_terms)
+                                            use_minibatches=use_sgd,
+                                            batch_size=args.batch_size,
+                                            separate_terms=args.separate_terms,
+                                            use_importance_sampling=args.use_importance_sampling,
+                                            rng=rng)
+
 if args.opt_method == 'SGD':
     m_step = SgdEmStep(do_m_step=True,
                        learning_rate=args.learn_rate,
-                       batch_size=args.batch_size,
                        num_batches_per_em_step=args.num_batch_per_em_step,
-                       num_data_points=n,
                        noise_to_data_ratio=args.nu,
                        rng=rng)
 else:
@@ -162,9 +189,9 @@ else:
                                  max_iter=args.maxiter)
 
 # calculating losses on E-step adds extra sampling overhead, so it's optional
-exact_e_step = ExactEStep(calculate_loss=args.save_e_step_results)
+exact_e_step = ExactEStep()
 
-optimiser = VemOptimiser(loss_function=vnce_loss_function, e_step=exact_e_step, m_step=m_step)
+optimiser = VemOptimiser(m_step=m_step, e_step=exact_e_step, num_em_steps_per_save=args.num_em_steps_per_save)
 cd_optimiser = CDOptimiser(cd_model, rng=rng)
 nce_optimiser = NCEOptimiser(model=nce_model, noise=noise_dist, noise_samples=Y, nu=args.nu)
 
@@ -176,7 +203,7 @@ nce_optimiser = NCEOptimiser(model=nce_model, noise=noise_dist, noise_samples=Y,
 
 # perform latent nce optimisation
 print('starting latent nce optimisation...')
-optimiser.fit(X=X,
+optimiser.fit(loss_function=vnce_loss_function,
               theta0=model.theta,
               alpha0=var_dist.alpha,
               stop_threshold=args.stop_threshold,
@@ -199,6 +226,7 @@ _ = nce_optimiser.fit(X=X,
                       learning_rate=args.nce_learn_rate,
                       batch_size=args.nce_batch_size,
                       num_epochs=args.nce_num_epochs)
+print('finished nce optimisation!')
 
 """
 ==========================================================================================================
@@ -206,18 +234,19 @@ _ = nce_optimiser.fit(X=X,
 ==========================================================================================================
 """
 vnce_thetas, vnce_alphas, vnce_losses, vnce_times = optimiser.get_flattened_result_arrays()
-m_step_ids, e_step_ids, _, _ = optimiser.get_m_and_e_step_ids(e_step_results_exist=args.save_e_step_results)
+m_step_ids, e_step_ids, _, _ = optimiser.get_m_and_e_step_ids()
 
+nce_losses_for_vnce_params = None
+J_plot = None
 if args.separate_terms:
     nce_losses_for_vnce_params = get_nce_loss_for_vnce_params(X,
                                                               nce_optimiser,
                                                               optimiser,
-                                                              separate_terms=args.separate_terms,
-                                                              e_step_results_exist=args.save_e_step_results)
-    J_plot, nce_losses_for_vnce_params = make_nce_minus_vnce_loss_plot(nce_losses_for_vnce_params,
-                                                                       vnce_losses,
-                                                                       vnce_times,
-                                                                       e_step_ids)
+                                                              separate_terms=args.separate_terms)
+    J_plot = make_nce_minus_vnce_loss_plot(nce_losses_for_vnce_params,
+                                           vnce_losses,
+                                           vnce_times,
+                                           e_step_ids)
     J_plot.savefig('{}/J-optimisation-curve.pdf'.format(SAVE_DIR))
 
 # reduce results, since calculating log-likelihood is expensive
@@ -227,20 +256,23 @@ reduced_nce_thetas, reduced_nce_times = get_reduced_thetas_and_times(nce_optimis
 
 # calculate average log-likelihood at each iteration for both models on test set
 print('calculating log-likelihoods...')
-av_log_like_vnce = optimiser.av_log_like_for_each_iter(X_test, thetas=reduced_vnce_thetas)
+av_log_like_vnce = optimiser.av_log_like_for_each_iter(X_test, loss_function=vnce_loss_function, thetas=reduced_vnce_thetas)
 av_log_like_cd = cd_optimiser.av_log_like_for_each_iter(X_test, thetas=reduced_cd_thetas)
 av_log_like_nce = nce_optimiser.av_log_like_for_each_iter(X_test, thetas=reduced_nce_thetas)
 print('finished!')
 
 # calculate average log-likelihood of empirical, initial & noise distributions on test set, for comparison
-emp_log_like = np.mean(np.log(emp_dist(X_test)))
+if args.which_dataset == 'usps':
+    true_log_like = np.mean(np.log(true_data_dist(X_test)))
+elif args.which_dataset == 'synthetic':
+    true_log_like = average_log_likelihood(true_data_dist, X_test)
 init_log_like = average_log_likelihood(init_model, X_test)
 noise_log_like = np.mean(np.log(noise_dist(X_test)))
 
 training_curves = [[reduced_vnce_times, av_log_like_vnce, 'vnce'],
                    [reduced_cd_times, av_log_like_cd, 'cd'],
                    [reduced_nce_times, av_log_like_nce, 'nce']]
-static_lines = [[emp_log_like, 'empirical'],
+static_lines = [[true_log_like, 'empirical'],
                 [init_log_like, 'initial'],
                 [noise_log_like, 'noise']]
 

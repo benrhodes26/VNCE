@@ -8,6 +8,7 @@ from collections import OrderedDict
 from copy import deepcopy
 from matplotlib import pyplot as plt
 
+
 def mean_square_error(estimate, true_value, plot=True):
 
     estimate_float_or_int = isinstance(estimate, float) | isinstance(estimate, int)
@@ -131,21 +132,21 @@ def make_nce_minus_vnce_loss_plot(nce_loss_for_vnce_params, vnce_losses, times, 
         ax.set_xlabel('time (seconds)', fontsize=16)
         ax.legend()
 
-    return fig, nce_loss_for_vnce_params
+    return fig
 
 
-def get_nce_loss_for_vnce_params(X, nce_optimiser, vnce_optimiser, separate_terms, e_step_results_exist=False):
+def get_nce_loss_for_vnce_params(X, nce_optimiser, vnce_optimiser, separate_terms):
     """Evaluate the NCE objective at every parameter setting visited during VNCE optimisation"""
     cur_theta = deepcopy(nce_optimiser.model.theta)
 
     num_em_steps = len(vnce_optimiser.thetas)
     nce_losses = []
 
-    nce_optimiser.model.theta = deepcopy(vnce_optimiser.thetas[0][0])
-    # append loss twice (to simulate an E and an M step)
+    # nce_optimiser.model.theta = deepcopy(vnce_optimiser.thetas[0][0])
+    # append loss twice (to simulate an intial E and an M step)
     # nce_losses.append(nce_optimiser.compute_J(X, separate_terms=separate_terms))
     # nce_losses.append(nce_optimiser.compute_J(X, separate_terms=separate_terms))
-
+    print("about to get nce losses for vnce params")
     for i in range(0, num_em_steps):
         # for every value of theta visited during the M-step, evaluate the nce objective
         for theta in vnce_optimiser.thetas[i]:
@@ -153,9 +154,8 @@ def get_nce_loss_for_vnce_params(X, nce_optimiser, vnce_optimiser, separate_term
             nce_losses.append(nce_optimiser.compute_J(X, separate_terms=separate_terms))
 
         # during the E-step, the nce objective is constant
-        if e_step_results_exist:
-            for _ in vnce_optimiser.alphas[i]:
-                nce_losses.append(nce_losses[-1])
+        for _ in vnce_optimiser.alphas[i]:
+            nce_losses.append(nce_losses[-1])
 
     nce_losses = np.array(nce_losses)
     nce_optimiser.model.theta = cur_theta

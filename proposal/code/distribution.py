@@ -4,7 +4,6 @@ import numpy as np
 
 from abc import ABCMeta, abstractmethod
 from numpy import random as rnd
-from pandas import DataFrame
 from pomegranate import BayesianNetwork
 from scipy.stats import norm, multivariate_normal
 from utils import sigmoid
