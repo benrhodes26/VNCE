@@ -34,11 +34,11 @@
 python usps_experiment.py \
 --save_dir=/home/ben/ben-rhodes-masters-project/proposal/experiments/rbm/synthetic/test \
 --which_dataset=synthetic \
---m=2 \
+--m=8 \
 --loss=MonteCarloVnceLoss \
 --opt_method=L-BFGS-B \
---max_num_em_steps=1 \
+--max_num_em_steps=10 \
 --num_em_steps_per_save=1 \
 --cd_num_epochs=1 \
 --nce_opt_method=L-BFGS-B \
---maxiter_nce=100
+--maxiter_nce=10

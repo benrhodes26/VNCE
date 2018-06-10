@@ -25,6 +25,7 @@ from vnce_optimiser import VemOptimiser, SgdEmStep, ScipyMinimiseEmStep, ExactES
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from copy import deepcopy
 from numpy import random as rnd
+from scipy.optimize import check_grad
 from time import gmtime, strftime
 
 START_TIME = strftime('%Y%m%d-%H%M', gmtime())
@@ -57,12 +58,12 @@ parser.add_argument('--d', type=int, default=9, help='dimension of visibles (for
 parser.add_argument('--m', type=int, default=4, help='dimension of hiddens')
 
 # Latent NCE optimisation arguments
-parser.add_argument('--loss', type=str, default='MonteCarloVnceLoss', help='loss function class to use. See vnce_optimisers.py for options')
+parser.add_argument('--loss', type=str, default='AdaptiveMonteCarloVnceLoss', help='loss function class to use. See vnce_optimisers.py for options')
 parser.add_argument('--noise', type=str, default='marginal', help='type of noise distribution for latent NCE. Currently, this can be either marginals or chow-liu')
-parser.add_argument('--opt_method', type=str, default='L-BFGS-B', help='optimisation method. L-BFGS-B and CG both seem to work')
+parser.add_argument('--opt_method', type=str, default='SGD', help='optimisation method. L-BFGS-B and CG both seem to work')
 parser.add_argument('--maxiter', type=int, default=10, help='number of iterations performed by L-BFGS-B optimiser inside each M step of EM')
 parser.add_argument('--stop_threshold', type=float, default=0, help='Tolerance used as stopping criterion in EM loop')
-parser.add_argument('--max_num_em_steps', type=int, default=10, help='Maximum number of EM steps to perform')
+parser.add_argument('--max_num_em_steps', type=int, default=1000, help='Maximum number of EM steps to perform')
 parser.add_argument('--learn_rate', type=float, default=0.1, help='if opt_method=SGD, this is the learning rate used')
 parser.add_argument('--batch_size', type=int, default=100, help='if opt_method=SGD, this is the size of a minibatch')
 parser.add_argument('--num_batch_per_em_step', type=int, default=1, help='if opt_method=SGD, this is the number of batches per EM step')
@@ -78,12 +79,12 @@ parser.set_defaults(use_importance_sampling=True)
 parser.add_argument('--cd_num_steps', type=int, default=1, help='number of gibbs steps used to sample from model during learning with CD')
 parser.add_argument('--cd_learn_rate', type=float, default=0.1, help='learning rate for contrastive divergence')
 parser.add_argument('--cd_batch_size', type=int, default=100, help='number of datapoints used per gradient update')
-parser.add_argument('--cd_num_epochs', type=int, default=500, help='number of passes through data set')
+parser.add_argument('--cd_num_epochs', type=int, default=1, help='number of passes through data set')
 
 # nce optimisation arguments
 parser.add_argument('--nce_opt_method', type=str, default='SGD', help='nce optimisation method. L-BFGS-B and CG both seem to work')
 parser.add_argument('--maxiter_nce', type=int, default=500, help='number of iterations inside scipy.minimize')
-parser.add_argument('--nce_num_epochs', type=int, default=500, help='if nce_opt_method=SGD, this is the number of passes through data set')
+parser.add_argument('--nce_num_epochs', type=int, default=1, help='if nce_opt_method=SGD, this is the number of passes through data set')
 parser.add_argument('--nce_learn_rate', type=float, default=0.1, help='if nce_opt_method=SGD, this is the learning rate used')
 parser.add_argument('--nce_batch_size', type=int, default=100, help='if nce_opt_method=SGD, this is the size of a minibatch')
 
@@ -297,8 +298,7 @@ static_lines = [[true_log_like, 'empirical'],
 
 # plot log-likelihood during training
 like_training_plot = plot_log_likelihood_training_curves(training_curves, static_lines)
-
-like_training_plot.gca().set_ylim((noise_log_like - 0.1, true_log_like + 0.05))
+like_training_plot.gca().set_ylim((noise_log_like - 0.5, true_log_like + 0.05))
 like_training_plot.savefig('{}/likelihood-optimisation-curve.pdf'.format(SAVE_DIR))
 
 # plot rbm weights for each model (including ground truth and random initialisation)

@@ -20,7 +20,7 @@ import time
 from collections import OrderedDict
 from copy import deepcopy
 from matplotlib import pyplot as plt
-from scipy.optimize import minimize
+from scipy.optimize import minimize, check_grad
 from utils import validate_shape, average_log_likelihood, take_closest, remove_duplicate_legends
 
 DEFAULT_SEED = 1083463236
@@ -280,6 +280,7 @@ class ScipyMinimiseEmStep:
 
         def callback(param):
             self.update_results(deepcopy(param))
+            # print("vnce finite diff is: {}".format(check_grad(loss_neg, loss_grad_neg, start_param)))
 
         def loss_neg(param_k):
             if self.do_m_step:
@@ -492,9 +493,11 @@ class MonteCarloVnceLoss:
         if len(Z.shape) == 2:
             Z = Z.reshape((1, ) + Z.shape)
 
-        phi = self.model(U, Z)
+        # phi = self.model(U, Z)
+        log_model = self.model(U, Z, log=True)
         q = self.variational_noise(Z, U)
-        val = np.log(phi) - np.log((q * self.noise(U)))
+        # val = np.log(phi) - np.log((q * self.noise(U)))
+        val = log_model - np.log((q * self.noise(U)))
         validate_shape(val.shape, (Z.shape[0], Z.shape[1]))
 
         return val
@@ -532,9 +535,12 @@ class MonteCarloVnceLoss:
         return grad
 
     def first_term_of_grad(self):
-
-        joint_noise = self.nu * self.noise(self.X) * self.variational_noise(self.ZX, self.X)
-        a = joint_noise / (joint_noise + self.model(self.X, self.ZX))  # (nz, n)
+        h_x = self.h(self.X, self.ZX)
+        a0 = (h_x > 0) * (1 / (1 + ((1 / self.nu) * np.exp(h_x))))
+        a1 = (h_x < 0) * (np.exp(-h_x) / ((1 / self.nu) + np.exp(-h_x)))
+        a = a0 + a1
+        # joint_noise = self.nu * self.noise(self.X) * self.variational_noise(self.ZX, self.X)
+        # a = joint_noise / (joint_noise + self.model(self.X, self.ZX))  # (nz, n)
 
         gradX = self.model.grad_log_wrt_params(self.X, self.ZX)  # (len(theta), nz, n)
         first_term = np.mean(gradX * a, axis=(1, 2))  # (len(theta), )
@@ -715,7 +721,7 @@ class AdaptiveMonteCarloVnceLoss:
 
         # use a numerically stable implementation of the cross-entropy sigmoid
         h_x = self.h(self.X, self.ZX)
-        a = (h_x > 0) * np.log(1 + nu * np.exp(-h_x))
+        a = (h_x >= 0) * np.log(1 + nu * np.exp(-h_x))
         b = (h_x < 0) * (-h_x + np.log(nu + np.exp(h_x)))
         first_term = -np.mean(a + b)
 
@@ -754,9 +760,12 @@ class AdaptiveMonteCarloVnceLoss:
         if len(Z.shape) == 2:
             Z = Z.reshape((1,) + Z.shape)
 
-        model = self.model(U, Z)
-        noise = self.variational_noise(U, Z)
-        val = np.log(model) - np.log(noise)
+        log_model = self.model(U, Z, log=True)
+        log_noise = self.variational_noise(U, Z, log=True)
+        val = log_model - log_noise
+        # model = self.model(U, Z)
+        # noise = self.variational_noise(U, Z)
+        # val = np.log(model) - np.log(noise)
         validate_shape(val.shape, (Z.shape[0], Z.shape[1]))
 
         return val
@@ -795,10 +804,11 @@ class AdaptiveMonteCarloVnceLoss:
         return grad
 
     def first_term_of_grad(self):
-        #todo: rewrite to avoid instability. Can this be done?
-        model = self.model(self.X, self.ZX)
-        noise = self.nu * self.variational_noise(self.X, self.ZX)
-        a = noise / (noise + model)  # (nz, n)#
+
+        h_x = self.h(self.X, self.ZX)
+        a0 = (h_x <= 0) * (1 / (1 + ((1 / self.nu) * np.exp(h_x))))
+        a1 = (h_x > 0) * (np.exp(-h_x) / ((1 / self.nu) + np.exp(-h_x)))
+        a = a0 + a1
         gradX = self.model.grad_log_wrt_params(self.X, self.ZX)  # (len(theta), nz, n)
         first_term = np.mean(gradX * a, axis=(1, 2))  # (len(theta), )
 
@@ -811,7 +821,7 @@ class AdaptiveMonteCarloVnceLoss:
             r = np.exp(self.h(self.Y, self.ZY))  # (nz, n)
             E_ZY = np.mean(gradY * r, axis=1)  # (len(theta), n)
             one_over_psi = 1 / self._psi(self.Y, self.ZY)  # (n, )
-            second_term = - np.mean(E_ZY * one_over_psi, axis=1)  # (len(theta), )
+            second_term = -np.mean(E_ZY * one_over_psi, axis=1)  # (len(theta), )
         else:
             gradY = self.model.grad_log_visible_marginal_wrt_params(self.Y)  # (len(theta), nz, n)
             model_marginal = self.model.marginalised_over_z(self.Y)

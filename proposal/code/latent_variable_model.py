@@ -545,7 +545,7 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         theta = W.reshape(-1)
         super().__init__(theta, rng=rng)
 
-    def __call__(self, U, Z, normalise=False, reset_norm_const=True):
+    def __call__(self, U, Z, normalise=False, reset_norm_const=True, log=False):
         """ Evaluate model for each data point U[i, :]
 
         :param U: array (n, d)
@@ -570,7 +570,10 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         uW = np.dot(U, W)  # (n, m+1)
         uWz = np.sum(Z * uW, axis=-1)  # (nz, n)
 
-        val = np.exp(uWz)  # (nz, n)
+        if log:
+            val = uWz
+        else:
+            val = np.exp(uWz)  # (nz, n)
         if normalise:
             if (not self.norm_const) or reset_norm_const:
                 self.reset_norm_const()

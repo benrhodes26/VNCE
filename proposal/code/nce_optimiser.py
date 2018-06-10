@@ -10,7 +10,7 @@ from collections import OrderedDict
 from copy import deepcopy
 from matplotlib import pyplot as plt
 from numpy import random as rnd
-from scipy.optimize import minimize
+from scipy.optimize import minimize, check_grad
 from utils import validate_shape, take_closest
 
 
@@ -46,6 +46,7 @@ class NCEOptimiser:
 
     def h(self, U):
         return np.log(self.model(U)) - np.log(self.noise(U))
+        # return self.model(U, log=True) - np.log(self.noise(U))
 
     def compute_J(self, X, Y=None, separate_terms=False):
         """Return value of objective at current parameters
@@ -60,19 +61,14 @@ class NCEOptimiser:
         nu = self.nu
 
         h_x = self.h(X)
-        a = (h_x > 0) * np.log(1 + nu * np.exp(-h_x))
+        a = (h_x >= 0) * np.log(1 + nu * np.exp(-h_x))
         b = (h_x < 0) * (-h_x + np.log(nu + np.exp(h_x)))
         first_term = -np.mean(a + b)
 
         h_y = self.h(Y)
-        c = (h_y < 0) * np.log(1 + (1/nu) * np.exp(h_y))
+        c = (h_y <= 0) * np.log(1 + (1/nu) * np.exp(h_y))
         d = (h_y > 0) * (h_y + np.log((1/nu) + np.exp(-h_y)))
         second_term = -np.mean(c + d)
-        # a0 = 1 + nu * np.exp(-self.h(X))
-        # a1 = 1 + (1 / nu) * np.exp(self.h(Y))
-        #
-        # first_term = - np.mean(np.log(a0))
-        # second_term = - nu * np.mean(np.log(a1))
 
         if separate_terms:
             return np.array([first_term, second_term])
@@ -90,13 +86,16 @@ class NCEOptimiser:
             Y = self.Y
         nu = self.nu
 
+        h_x = self.h(X)
         gradX = self.model.grad_log_wrt_params(X)  # (len(theta), n)
-        a0 = 1 / (1 + (1 / nu) * np.exp(self.h(X)))
-        term_1 = np.mean(gradX*a0, axis=1)  # (len(theta), )
+        a0 = (h_x <= 0) * (1 / (1 + ((1 / nu) * np.exp(h_x))))
+        a1 = (h_x > 0) * (np.exp(-h_x) / ((1 / nu) + np.exp(-h_x)))
+        a = a0 + a1
+        term_1 = np.mean(gradX*a, axis=1)  # (len(theta), )
 
         gradY = self.model.grad_log_wrt_params(Y)  # (len(theta), nu*n)
-        a1 = self.model(Y) / (nu*self.noise(Y) + self.model(Y))  # (n)
-        term_2 = - nu * np.mean(gradY*a1, axis=1)  # (len(theta), )
+        b0 = 1 / (1 + nu * np.exp(-self.h(Y)))
+        term_2 = - nu * np.mean(gradY*b0, axis=1)  # (len(theta), )
 
         grad = term_1 + term_2
 
@@ -178,6 +177,7 @@ class NCEOptimiser:
 
         def callback(_):
             self.update_opt_results(self.compute_J(X, separate_terms=separate_terms))
+            # print("nce finite diff is: {}".format(check_grad(J1_k_neg, J1_k_grad_neg, self.model.theta)))
 
         def J1_k_neg(theta):
             self.model.theta = theta

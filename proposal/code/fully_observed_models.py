@@ -173,6 +173,7 @@ class SumOfTwoUnnormalisedGaussians(Model):
         plt.legend()
         plt.grid()
 
+
 # noinspection PyPep8Naming,PyArgumentList,PyTypeChecker
 class SumOfTwoUnnormalisedGaussians2(Model):
     """Sum of two unnormalisedGaussians (no latent variable)
