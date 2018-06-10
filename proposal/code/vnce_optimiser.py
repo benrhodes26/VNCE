@@ -493,10 +493,8 @@ class MonteCarloVnceLoss:
         if len(Z.shape) == 2:
             Z = Z.reshape((1, ) + Z.shape)
 
-        # phi = self.model(U, Z)
         log_model = self.model(U, Z, log=True)
         q = self.variational_noise(Z, U)
-        # val = np.log(phi) - np.log((q * self.noise(U)))
         val = log_model - np.log((q * self.noise(U)))
         validate_shape(val.shape, (Z.shape[0], Z.shape[1]))
 
@@ -539,8 +537,6 @@ class MonteCarloVnceLoss:
         a0 = (h_x > 0) * (1 / (1 + ((1 / self.nu) * np.exp(h_x))))
         a1 = (h_x < 0) * (np.exp(-h_x) / ((1 / self.nu) + np.exp(-h_x)))
         a = a0 + a1
-        # joint_noise = self.nu * self.noise(self.X) * self.variational_noise(self.ZX, self.X)
-        # a = joint_noise / (joint_noise + self.model(self.X, self.ZX))  # (nz, n)
 
         gradX = self.model.grad_log_wrt_params(self.X, self.ZX)  # (len(theta), nz, n)
         first_term = np.mean(gradX * a, axis=(1, 2))  # (len(theta), )

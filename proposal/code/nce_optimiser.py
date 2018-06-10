@@ -94,8 +94,11 @@ class NCEOptimiser:
         term_1 = np.mean(gradX*a, axis=1)  # (len(theta), )
 
         gradY = self.model.grad_log_wrt_params(Y)  # (len(theta), nu*n)
-        b0 = 1 / (1 + nu * np.exp(-self.h(Y)))
-        term_2 = - nu * np.mean(gradY*b0, axis=1)  # (len(theta), )
+        h_y = self.h(Y)
+        b0 = (h_y > 0) * (1 / (1 + nu * np.exp(-h_y)))
+        b1 = (h_y <= 0) * (np.exp(h_y) / (np.exp(h_y) + nu))
+        b = b0 + b1
+        term_2 = -nu * np.mean(gradY*b, axis=1)  # (len(theta), )
 
         grad = term_1 + term_2
 
