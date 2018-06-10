@@ -68,6 +68,11 @@ class NCEOptimiser:
         c = (h_y < 0) * np.log(1 + (1/nu) * np.exp(h_y))
         d = (h_y > 0) * (h_y + np.log((1/nu) + np.exp(-h_y)))
         second_term = -np.mean(c + d)
+        # a0 = 1 + nu * np.exp(-self.h(X))
+        # a1 = 1 + (1 / nu) * np.exp(self.h(Y))
+        #
+        # first_term = - np.mean(np.log(a0))
+        # second_term = - nu * np.mean(np.log(a1))
 
         if separate_terms:
             return np.array([first_term, second_term])
@@ -86,7 +91,7 @@ class NCEOptimiser:
         nu = self.nu
 
         gradX = self.model.grad_log_wrt_params(X)  # (len(theta), n)
-        a0 = nu*self.noise(X) / (nu*self.noise(X) + self.model(X))  # (n,)
+        a0 = 1 / (1 + (1 / nu) * np.exp(self.h(X)))
         term_1 = np.mean(gradX*a0, axis=1)  # (len(theta), )
 
         gradY = self.model.grad_log_wrt_params(Y)  # (len(theta), nu*n)

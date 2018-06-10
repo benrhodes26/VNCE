@@ -351,6 +351,7 @@ class LatentMixtureOfTwoUnnormalisedGaussians(LatentVarModel):
 
         return fig
 
+
 # noinspection PyPep8Naming,PyMissingConstructor,PyTypeChecker,PyArgumentList
 class LatentMixtureOfTwoUnnormalisedGaussians2(LatentVarModel):
     """ Mixture of two *unnormalised* Gaussians given by:
@@ -514,6 +515,7 @@ class LatentMixtureOfTwoUnnormalisedGaussians2(LatentVarModel):
 
 # noinspection PyPep8Naming,PyMissingConstructor,PyArgumentList,PyTypeChecker
 class RestrictedBoltzmannMachine(LatentVarModel):
+
     """ Type of probabilistic graphical model that specifies an unnormalised
     joint distribution over data and latent variables. The model is given by:
              phi(u, z; W, a, b) = exp(uWz + au + bz)
@@ -749,7 +751,7 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         needs two things:
         - a sample Z0 ~ P(Z|U0). where U0 is the data
         - (V_k, Z_k) sampled from the *model*, which requires gibbs
-        sampling.
+        sampling with k gibbs steps.
 
         :param U0 array (n, d)
             data vectors used to initialise gibbs sampling
@@ -775,6 +777,25 @@ class RestrictedBoltzmannMachine(LatentVarModel):
             Z = self.rng.uniform(0, 1, p_z_given_u.shape) < p_z_given_u  # (n, m)
 
         return Z0.astype(int), U.astype(int), Z.astype(int)
+
+    def sample_from_latents_given_visibles(self, nz, U):
+        """Return latent samples conditioning on visibles.
+        
+        For many models, sampling latents given visibles requires MCMC. Here, we have
+        access to the exact posterior over latents and sampling from it is easy.
+        :param nz int
+            number of latent samples per visible samples.
+        :param U: array (n, d)
+            n (visible) data points that we condition on
+        :return: array (n, m)
+            For each of the n visibles that we condition on, return nz latent samples#
+        """
+        p1 = self.p_latents_given_visibles(U)  # (n, m)
+        Z_shape = (nz, ) + p1.shape
+
+        Z = self.rng.uniform(0, 1, Z_shape) < p1  # (nz, n, m)
+
+        return Z.astype(int)
 
     def reset_norm_const(self):
         """Reset normalisation constant using current theta"""
@@ -967,3 +988,8 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         all_binary_vectors = np.array(list(product(*binary_pairs)))  # (2**k, k)
 
         return all_binary_vectors
+
+    def set_alpha(self, alpha):
+        """"Only useful when using the rbm as a variational noise distribution in adaptive VNCE """
+        self.theta = deepcopy(alpha)
+

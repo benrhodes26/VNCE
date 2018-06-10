@@ -75,8 +75,8 @@ class VemOptimiser:
 
         num_em_steps = 0
         prev_loss, current_loss = -99, -9  # arbitrary distinct numbers
-        while np.abs(prev_loss - current_loss) > stop_threshold and num_em_steps < max_num_em_steps:
-            save_results = num_em_steps % self.num_em_steps_per_save
+        while np.abs(prev_loss - current_loss) >= stop_threshold and num_em_steps < max_num_em_steps:
+            save_results = num_em_steps % self.num_em_steps_per_save == 0
 
             m_results = self.m_step(loss_function)
             if m_results and save_results:
@@ -338,32 +338,13 @@ class ExactEStep:
         pass
 
     def __call__(self, loss_function):
-        # We want to update q to equal the model's posterior over latent variables.
-        # We assume that q is parametrised such that setting alpha=theta achieves this.
         new_alpha = loss_function.get_theta()
         loss_function.set_alpha(new_alpha)
         loss = loss_function()
-
         return [new_alpha], [loss], [time.time()]
 
     def __repr__(self):
         return "ExactEStep"
-
-
-class AdaptiveEStep:
-
-    def __init__(self):
-        pass
-
-    def __call__(self, loss_function):
-        # todo: get rid of this class if it remains identical to ExactEStep
-        new_alpha = loss_function.get_theta()
-        loss_function.set_alpha(new_alpha)
-        loss = loss_function()
-        return [new_alpha], [loss], [time.time()]
-
-    def __repr__(self):
-        return "AdaptiveEStep"
 
 
 class MonteCarloVnceLoss:
@@ -456,7 +437,7 @@ class MonteCarloVnceLoss:
        """
         if next_minibatch and self.use_minibatches:
             self.next_minibatch()
-        self.resample_noise_if_necessary()
+        self.resample_latents_if_necessary()
 
         first_term = self.first_term_of_loss()
         second_term = self.second_term_of_loss()
@@ -513,7 +494,7 @@ class MonteCarloVnceLoss:
 
         phi = self.model(U, Z)
         q = self.variational_noise(Z, U)
-        val = np.log(phi) - np.log((q * self.noise(U) + self.eps))
+        val = np.log(phi) - np.log((q * self.noise(U)))
         validate_shape(val.shape, (Z.shape[0], Z.shape[1]))
 
         return val
@@ -537,7 +518,7 @@ class MonteCarloVnceLoss:
         """
         if next_minibatch and self.use_minibatches:
             self.next_minibatch()
-        self.resample_noise_if_necessary()
+        self.resample_latents_if_necessary()
 
         first_term = self.first_term_of_grad()
         second_term = self.second_term_grad()
@@ -607,7 +588,7 @@ class MonteCarloVnceLoss:
         print('epoch {}: J1 = {}'.format(self.current_epoch, self.current_loss))
         self.current_epoch += 1
 
-    def resample_noise_if_necessary(self):
+    def resample_latents_if_necessary(self):
         if (self.ZX is None) or (self.ZY is None) or self.resample_from_variational_noise:
             self.ZX = self.variational_noise.sample(self.nz, self.X)
             self.ZY = self.variational_noise.sample(self.nz, self.Y)
@@ -629,27 +610,42 @@ class AdaptiveMonteCarloVnceLoss:
                  variational_noise,
                  noise_to_data_ratio,
                  num_latent_per_data,
+                 num_mcmc_steps=1,
                  use_minibatches=False,
                  batch_size=None,
+                 use_importance_sampling=True,
                  separate_terms=False,
                  eps=1e-7,
                  rng=None):
         """
         :param model: see latent_variable_model.py for examples
         :param noise: see distribution.py for examples
-        :param variational_noise: see distribution.py for examples
+        :param variational_noise: see latent_variable_model.py for examples
+            this should be a different instance of the same class as model. NOTE: this is in contrast to the variational
+            noise used in MonteCarloVnceLoss, which is just a distribution over latent variables.
         :param noise_to_data_ratio: int
+        :param num_latent_per_data int
+        :param num_mcmc_steps: int
+            number of steps of MCMC used when sampling from the joint noise distribution
+        :param use_minibatches: boolean
+            If true, we assume that optimisation of the loss uses minibatches of data
+        :param batch_size: int
         :param separate_terms: boolean
             the VNCE loss function is made of two terms: an expectation w.r.t the data and an expectation w.r.t the noise.
             If separate_terms=True, then the loss function outputs a each term separately in an array. This is useful for plotting / debugging.
+        :param eps: float
+            small float for numerical stability
+        :param rng
+            np.RandomState
         """
         self.model = model
         self.data = data
-        self.variational_noise = variational_noise
+        self.variational_noise = variational_noise  # This is now a class from latent_variable_model.py
         self.nu = noise_to_data_ratio
         self.nz = num_latent_per_data
+        self.num_mcmc_steps = num_mcmc_steps
         self.separate_terms = separate_terms
-        # self.use_importance_sampling = use_importance_sampling
+        self.use_importance_sampling = use_importance_sampling
         self.eps = eps
 
         self.use_minibatches = use_minibatches
@@ -662,10 +658,11 @@ class AdaptiveMonteCarloVnceLoss:
         self.current_batch_id = 0
         self.current_epoch = 0
 
-        self.Y = None
-        self.ZX = None
-        self.ZY = None
-        self.resample_from_variational_noise = True
+        self.Y = None  # visible noise
+        self.ZX = None  # latent variables given the data X
+        self.ZY = None  # latent noise
+        self.resample_from_joint_variational_noise = True
+        self.resample_from_conditional_variational_noise_given_data = True
         self.current_loss = None
 
         if rng:
@@ -677,7 +674,8 @@ class AdaptiveMonteCarloVnceLoss:
         return deepcopy(self.model.theta)
 
     def get_alpha(self):
-        return deepcopy(self.variational_noise.alpha)
+        """"By `alpha' in this case, we mean the params (theta) of the variational noise"""
+        return deepcopy(self.variational_noise.theta)
 
     def get_current_loss(self, get_float=False):
         loss = deepcopy(self.current_loss)
@@ -689,8 +687,9 @@ class AdaptiveMonteCarloVnceLoss:
         self.model.theta = deepcopy(new_theta)
 
     def set_alpha(self, new_alpha):
-        self.variational_noise.alpha = deepcopy(new_alpha)
-        self.resample_from_variational_noise = True
+        """"By `alpha' in this case, we mean the params (theta) of the variational noise"""
+        self.variational_noise.theta = deepcopy(new_alpha)
+        self.resample_from_joint_variational_noise = True
 
     def __call__(self, next_minibatch=False):
         """Return Monte Carlo estimate of Lower bound of NCE objective
@@ -755,9 +754,9 @@ class AdaptiveMonteCarloVnceLoss:
         if len(Z.shape) == 2:
             Z = Z.reshape((1,) + Z.shape)
 
-        phi = self.model(U, Z)
-        q = self.variational_noise(Z, U)
-        val = np.log(phi) - np.log((q * self.noise(U) + self.eps))
+        model = self.model(U, Z)
+        noise = self.variational_noise(U, Z)
+        val = np.log(model) - np.log(noise)
         validate_shape(val.shape, (Z.shape[0], Z.shape[1]))
 
         return val
@@ -769,8 +768,9 @@ class AdaptiveMonteCarloVnceLoss:
             noise samples
         :return: array of shape (n*nu, )
         """
-        model = self.model.marginalised_over_z(Y)  # (n*nu, )
-        val = np.log(model) - np.log((self.noise(Y)))  # (n*nu, )
+        model_marginal = self.model.marginalised_over_z(Y)  # (n*nu, )
+        noise_marginal = self.variational_noise.marginalised_over_z(Y)
+        val = np.log(model_marginal) - np.log(noise_marginal)  # (n*nu, )
 
         return val
 
@@ -795,10 +795,10 @@ class AdaptiveMonteCarloVnceLoss:
         return grad
 
     def first_term_of_grad(self):
-
-        joint_noise = self.nu * self.noise(self.X) * self.variational_noise(self.ZX, self.X)
-        a = joint_noise / (joint_noise + self.model(self.X, self.ZX))  # (nz, n)
-
+        #todo: rewrite to avoid instability. Can this be done?
+        model = self.model(self.X, self.ZX)
+        noise = self.nu * self.variational_noise(self.X, self.ZX)
+        a = noise / (noise + model)  # (nz, n)#
         gradX = self.model.grad_log_wrt_params(self.X, self.ZX)  # (len(theta), nz, n)
         first_term = np.mean(gradX * a, axis=(1, 2))  # (len(theta), )
 
@@ -814,9 +814,10 @@ class AdaptiveMonteCarloVnceLoss:
             second_term = - np.mean(E_ZY * one_over_psi, axis=1)  # (len(theta), )
         else:
             gradY = self.model.grad_log_visible_marginal_wrt_params(self.Y)  # (len(theta), nz, n)
-            phiY = self.model.marginalised_over_z(self.Y)
-            a1 = phiY / (self.nu * self.noise(self.Y) + phiY)  # (n)
-            second_term = - self.nu * np.mean(gradY * a1, axis=1)  # (len(theta), )
+            model_marginal = self.model.marginalised_over_z(self.Y)
+            noise_marginal = self.variational_noise.marginalised_over_z(self.Y)
+            a = model_marginal / (self.nu * noise_marginal + model_marginal)  # (n)
+            second_term = - self.nu * np.mean(gradY * a, axis=1)  # (len(theta), )
 
         return second_term
 
@@ -831,12 +832,8 @@ class AdaptiveMonteCarloVnceLoss:
         batch_start = self.current_batch_id * self.batch_size
         batch_slice = slice(batch_start, batch_start + self.batch_size)
 
-        noise_batch_start = int(batch_start * self.nu)
-        noise_batch_slice = slice(noise_batch_start, noise_batch_start + int(self.batch_size * self.nu))
-
         self.X = self.data[batch_slice]
-        self.Y = self.noise_samples[noise_batch_slice]
-        self.resample_from_variational_noise = True
+        self.resample_from_conditional_variational_noise_given_data = True
 
         self.current_batch_id += 1
         if self.current_batch_id % self.batches_per_epoch == 0:
@@ -846,19 +843,23 @@ class AdaptiveMonteCarloVnceLoss:
     def new_epoch(self):
         """Shuffle data X and noise Y and print current loss"""
         self.rng.shuffle(self.data)
-        self.rng.shuffle(self.noise_samples)
-
         print('epoch {}: J1 = {}'.format(self.current_epoch, self.current_loss))
         self.current_epoch += 1
 
     def resample_noise_if_necessary(self):
-        if (self.ZX is None) or (self.ZY is None) or self.resample_from_variational_noise:
-            self.ZX = self.variational_noise.sample(self.nz, self.X)
-            self.ZY = self.variational_noise.sample(self.nz, self.Y)
-            self.resample_from_variational_noise = False
+
+        # NOTE: currently, for each point in self.X, we sample 1 point from the joint noise. This could be changed, but is standard practice for CD.
+        if (self.Y is None) or (self.ZY is None) or self.resample_from_joint_variational_noise:
+            self.ZX, self.Y, self.ZY = self.variational_noise.sample_for_contrastive_divergence(self.X, num_iter=self.num_mcmc_steps)
+            self.resample_from_conditional_variational_noise_given_data = False
+            self.resample_from_joint_variational_noise = False
+
+        if (self.ZX is None) or self.resample_from_conditional_variational_noise_given_data:
+            self.ZX = self.variational_noise.sample_from_latents_given_visibles(nz=1, U=self.X)
+            self.resample_from_conditional_variational_noise_given_data = False
 
     def __repr__(self):
-        return "MonteCarloVnceLoss"
+        return "AdaptiveMonteCarloVnceLoss"
 
 
 class VnceLossWithAnalyticExpectations:
@@ -993,7 +994,7 @@ class VnceLossWithAnalyticExpectations:
 
         E5 = self.E5(self.X, self.model, self.variational_noise, self.noise, self.nu, self.eps)
         grad = np.mean(E5, axis=1)
-        validate_shape(grad.shape, self.variational_noise.alpha_shape)
+        # validate_shape(grad.shape, self.variational_noise.alpha_shape)
 
         return grad
 
