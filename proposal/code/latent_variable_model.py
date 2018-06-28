@@ -87,7 +87,7 @@ class LatentMixtureOfTwoGaussians(LatentVarModel):
         self.sigma1 = sigma1
         super().__init__(theta, rng=rng)
 
-    def __call__(self, U, Z):
+    def __call__(self, U, Z, log=False):
         """ Evaluate model for each data point U[i, :]
 
         :param U: array (n, 1)
@@ -101,7 +101,12 @@ class LatentMixtureOfTwoGaussians(LatentVarModel):
         first_term = (Z == 0)*self.marginal_z_0(U)
         second_term = (Z == 1)*self.marginal_z_1(U)
 
-        return first_term + second_term
+        if log:
+            val = np.log(first_term + second_term)
+        else:
+            val = first_term + second_term
+
+        return val
 
     def marginal_z_0(self, U):
         """ Return value of model for z=0
@@ -109,6 +114,7 @@ class LatentMixtureOfTwoGaussians(LatentVarModel):
              either data or noise for NCE
         :return array (n,)
         """
+        U = U.reshape(-1)
         sigma = np.exp(self.theta)
         return 0.5*norm.pdf(U.reshape(-1), 0, sigma)
 
@@ -118,6 +124,7 @@ class LatentMixtureOfTwoGaussians(LatentVarModel):
              either data or noise for NCE
         :return array (n,)
         """
+        U = U.reshape(-1)
         return 0.5*norm.pdf(U.reshape(-1), 0, self.sigma1)
 
     def marginalised_over_z(self, U):
@@ -564,8 +571,7 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         """
         W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
 
-        U, Z = self.add_bias_terms(U), self.add_bias_terms(Z)
-        # (n, d+1), (nz, n, m+1)
+        U, Z = self.add_bias_terms(U), self.add_bias_terms(Z)  # (n, d+1), (nz, n, m+1)
 
         uW = np.dot(U, W)  # (n, m+1)
         uWz = np.sum(Z * uW, axis=-1)  # (nz, n)
@@ -996,3 +1002,115 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         """"Only useful when using the rbm as a variational noise distribution in adaptive VNCE """
         self.theta = deepcopy(alpha)
 
+
+class StarsAndMoonsModel(LatentVarModel):
+
+    def __init__(self, c, truncate_gaussian=False, rng=None):
+        """Initialise the parameters of the model.
+
+        the model is implicitly specified by:
+            z ~ N(0, 1)
+            x = w + e
+            w = (z_1*z_2, z_1*z_2)
+            e ~ N(0, c*I)
+        where x, z and e are all 2-dimensional real vectors. e independent from z.
+        Note that the model is normalised.
+
+        If self.truncate_gaussian=True, then:
+            e ~ N(0, c*I) * I(>= 0)
+        where I(>= 0) is an indicator function, equal to one when both components of e are non-negative.
+        :param c: array (2, )
+            variance of each component of e
+        :param truncate_gaussian: boolean
+            if True, truncate distribution of e so its components are positive (see math in docstring)
+        """
+        self.c = c
+        self.truncate_gaussian = truncate_gaussian
+        super().__init__(c, rng=rng)
+
+    def __call__(self, U, Z, log=False):
+        """ Evaluate model for each data point U[i, :]
+
+        :param U: array (n, 2)
+             either data or noise for NCE
+        :param Z: (nz, n, 2) or (n, 2)
+            latent data
+        :param log: boolean
+            if True, return value of logpdf
+        :return array (nz, n)
+            probability of each datapoint & its corresponding latent under
+            the joint distribution of the model
+        """
+        if Z.ndim == 2:
+            new_shape = (1, ) + Z.shape
+            Z = Z.reshape(new_shape)
+        Z1_Z2 = np.product(Z, axis=-1)[..., np.newaxis]
+        Z1_Z2 = np.tile(Z1_Z2, (1, 1, 2))  # (nz, n, 2)
+        validate_shape(Z1_Z2.shape, Z.shape)
+
+        c1 = -np.log(2*np.pi*self.c)
+        first_term = c1 - (1 / (2 * self.c)) * np.sum((U - Z1_Z2) * (U - Z1_Z2), axis=-1)  # (nz, n)
+        if self.truncate_gaussian:
+            mask = np.all(U - Z1_Z2 > 0, axis=-1)
+            first_term = mask * first_term + (1 - mask) * -10  # should be -infty, but -10 avoids numerical issues
+
+        c2 = -np.log(2 * np.pi)
+        second_term = c2 - 0.5 * np.sum(Z * Z, axis=-1)  # (nz, n)
+
+        val = first_term + second_term
+        if not log:
+            val = np.exp(val)
+
+        return val
+
+    def grad_log_wrt_params(self, U, Z):
+        pass
+
+    def grad_log_wrt_nn_outputs(self, U, Z, grad_z_wrt_nn_outputs):
+        """ Evaluate gradient of model w.r.t the variational parameters
+
+        Note that the model depends on the variational parameters because we are using
+        the reparameterisation trick.
+
+        :param U: array (n, 2)
+             either data or noise for NCE
+        :param Z: (nz, n, 2) or (n, 2)
+            latent data
+        :param grad_z_wrt_nn_outputs: array (len(alpha), nz, n, 2)
+        :return grad: array (4, nz, n)
+        """
+        grad_Z = grad_z_wrt_nn_outputs  # (4, nz, n, 2)
+
+        Z1_Z2 = np.product(Z, axis=-1)[..., np.newaxis]
+        Z1_Z2 = np.tile(Z1_Z2, (1, 1, 2))  # (nz, n, 2)
+        validate_shape(Z1_Z2.shape, Z.shape)
+
+        Z_swap = Z[:, :, [1, 0]]  # (nz, n, 2)
+        A = grad_Z * Z_swap  # (4, nz, n, 2)
+
+        grad_log_posterior_x_given_z = (1 / self.c) * np.sum(A, axis=-1) * np.sum((U - Z1_Z2), axis=-1)  # (4, nz, n)
+        if self.truncate_gaussian:
+            mask = np.all(U - Z1_Z2 > 0, axis=-1)
+            grad_log_posterior_x_given_z *= mask
+        validate_shape(grad_log_posterior_x_given_z.shape, grad_Z.shape[:-1])
+
+        grad_log_prior_z = - np.sum(grad_Z * Z, axis=-1)  # (4, nz, n)
+        validate_shape(grad_log_prior_z.shape, grad_Z.shape[:-1])
+
+        return grad_log_posterior_x_given_z + grad_log_prior_z  # (4, nz, n)
+
+    def sample(self, n):
+        z_mean = np.zeros(2)
+        z_cov = np.identity(2)
+        z = rnd.multivariate_normal(mean=z_mean, cov=z_cov, size=n)
+        z1_z2 = np.product(z, axis=1)
+        z1_z2 = np.tile(z1_z2.reshape(-1, 1), (1, 2))
+
+        noise_mean = np.zeros(2)
+        noise_cov = self.c * np.identity(2)
+        noise = rnd.multivariate_normal(mean=noise_mean, cov=noise_cov, size=n)
+
+        if self.truncate_gaussian:
+            noise = np.abs(noise)
+
+        return z, z1_z2 + noise  # (n, 2)

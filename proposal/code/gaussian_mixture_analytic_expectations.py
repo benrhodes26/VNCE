@@ -61,11 +61,14 @@ def E_log_psi_1(X, phi, q, pn, nu, eps=10**-8):
     q0 = 1 - q.calculate_p(X)
     q1 = q.calculate_p(X)
 
-    h0_x = np.log(phi.marginal_z_0(X) + eps) - np.log(q0*pn(X) + eps)
-    h1_x = np.log(phi.marginal_z_1(X) + eps) - np.log(q1*pn(X) + eps)
+    a0 = np.log(_psi_1_0(X, phi, q, pn, nu, eps))
+    a1 = np.log(_psi_1_1(X, phi, q, pn, nu, eps))
 
-    a0 = (h0_x > 0) * np.log(1 + nu * np.exp(-h0_x)) + (h0_x < 0) * (-h0_x + np.log(nu + np.exp(h0_x)))
-    a1 = (h1_x > 0) * np.log(1 + nu * np.exp(-h1_x)) + (h1_x < 0) * (-h1_x + np.log(nu + np.exp(h1_x)))
+    # h0_x = np.log(phi.marginal_z_0(X) + eps) - np.log(q0*pn(X) + eps)
+    # h1_x = np.log(phi.marginal_z_1(X) + eps) - np.log(q1*pn(X) + eps)
+    #
+    # a0 = (h0_x > 0) * np.log(1 + nu * np.exp(-h0_x)) + (h0_x < 0) * (-h0_x + np.log(nu + np.exp(h0_x)))
+    # a1 = (h1_x > 0) * np.log(1 + nu * np.exp(-h1_x)) + (h1_x < 0) * (-h1_x + np.log(nu + np.exp(h1_x)))
 
     term0 = q0 * a0
     term1 = q1 * a1

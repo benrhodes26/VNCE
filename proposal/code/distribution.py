@@ -6,7 +6,7 @@ from abc import ABCMeta, abstractmethod
 from numpy import random as rnd
 from pomegranate import BayesianNetwork
 from scipy.stats import norm, multivariate_normal
-from utils import sigmoid
+from utils import sigmoid, validate_shape
 
 DEFAULT_SEED = 1083463236
 
@@ -269,6 +269,102 @@ class RBMLatentPosterior(Distribution):
         return Z.astype(int)
 
 
+# noinspection PyMissingConstructor,PyMethodOverriding
+class StarsAndMoonsPosterior(Distribution):
+
+    def __init__(self, nn, rng=None):
+        """Initialise approx posterior q(z|x) for StarsAndMoonsModel (see latent_variable_model.py)
+
+        :params nn: neural network object
+            neural network needs to have an fprop method that yields the output of the network given the input
+        """
+        self.nn = nn
+        if rng:
+            self.rng = rng
+        else:
+            self.rng = rnd.RandomState(DEFAULT_SEED)
+
+    def __call__(self, Z, U, log=False, outputs=None):
+        mean, cov = self.get_mean_and_cov(U, outputs)
+        cholesky = cov**0.5
+        term1 = -np.log(2 * np.pi * np.product(cholesky, axis=-1))  # (n, )
+        term2 = -0.5 * np.sum((Z - mean)**2 / cov, axis=-1)  # (nz, n)
+
+        val = term1 + term2  # (nz, n)
+        if not log:
+            val = np.exp(val)
+
+        return val
+
+    def get_mean_and_cov(self, U, outputs=None):
+        """
+        :param U: array (n, d)
+        :return mean, cov: arrays (n, 2)
+        """
+        if outputs is None:
+            outputs = self.nn.fprop(U)[-1]
+        mean, cov = outputs[:, :2], np.exp(outputs[:, 2:])**2
+        return mean, cov
+
+    def sample(self, nz, U, outputs=None):
+        E = self.sample_E(nz, len(U))  # (nz, n, 2)
+        Z = self.get_Z_samples_from_E(E, U, outputs=outputs)  # (nz, n, 2)
+        return Z
+
+    def sample_E(self, nz, n):
+        samples = self.rng.multivariate_normal(mean=np.zeros(2), cov=np.identity(2), size=(nz, n))
+        return samples.reshape(nz, n, 2)
+
+    def get_Z_samples_from_E(self, E, U, outputs=None):
+        """Converts samples E from some simple base distribution to samples from posterior
+
+        This function is needed to apply the reparametrization trick. E is from a standard normal Gaussian
+        and Z is from a Gaussian whose mean and covariance depends on a neural network with parameters alpha.
+
+        :param E: array (nz, n, 2)
+            random variable to be transformed into Z (via reparam trick)
+        :param U: array (n, d)
+        """
+        mean, cov = self.get_mean_and_cov(U, outputs)  # (n, 2)
+        cholesky = cov**0.5
+        Z = E * cholesky + mean  # (nz, n, 2)
+        validate_shape(Z.shape, E.shape)
+
+        return Z
+
+    def grad_of_Z_wrt_nn_outputs(self, outputs, E):
+        """gradient of Z w.r.t to the outputs of the neural network
+
+        :param outputs: array (n, 4)
+            outputs of neural net
+        :param E: array (nz, n, 2)
+            random variable to be transformed into Z (via reparam trick)
+        :return: array (4, nz, n, 2)
+            grad of z1 and z2 w.r.t alpha
+        """
+        grad_shape = (outputs.shape[1], ) + E.shape  # (4, nz, n, 2)
+        grad = np.zeros(grad_shape)
+        grad[0, :, :, 0] = 1
+        grad[1, :, :, 1] = 1
+        grad[2, :, :, 0] = E[:, :, 0] * np.exp(outputs[:, 2])
+        grad[3, :, :, 1] = E[:, :, 1] * np.exp(outputs[:, 3])
+
+        return grad  # (4, nz, n, 2)
+
+    def entropy(self, U, outputs=None):
+        _, cov = self.get_mean_and_cov(U, outputs)  # (n, 2)
+        return 1 + np.log(2*np.pi) + (0.5*np.log(np.product(cov, axis=1)))  # (n, )
+
+    def grad_of_entropy_wrt_nn_outputs(self, outputs):
+        grad_shape = outputs.shape  # (n, 2)
+        grad = np.zeros(grad_shape)
+
+        grad[:, :2] = 0  # mean of gaussian does not contribute to the entropy
+        grad[:, 2:] = 1
+
+        return grad
+
+
 # noinspection PyPep8Naming,PyMissingConstructor
 class GaussianNoise(Distribution):
     def __init__(self, mean=0, cov=1, rng=None):
@@ -486,4 +582,3 @@ class ChowLiuTree(Distribution):
             node_to_parents_dict[e[1]] = e[0]
 
         return node_to_children_dict, node_to_parents_dict
-

@@ -37,7 +37,7 @@ class VemOptimiser:
     provided at initialisation as objects with particular methods: see SgdEmStep or ScipyMinimiseEmStep for examples.
     """
 
-    def __init__(self, m_step, e_step, num_em_steps_per_save):
+    def __init__(self, m_step, e_step, num_em_steps_per_save=1):
         """
         :param e_step: object
             see e.g. SgdEmStep
@@ -205,19 +205,22 @@ class SgdEmStep:
     If used during the E step, it optimises the VNCE objective w.r.t the variational parameters alpha.
     In either case, it uses stochastic gradient descent with adjustable mini-batch size and learning rate.
     """
-    def __init__(self, do_m_step, learning_rate, num_batches_per_em_step, noise_to_data_ratio, rng):
+    def __init__(self, do_m_step, learning_rate, num_batches_per_em_step, noise_to_data_ratio, rng, track_loss=False):
         """
         :param do_m_step: boolean
             if True, optimise loss function w.r.t model params theta. Else w.r.t variational params alpha.
         :param learning_rate: float
         :param num_batches_per_em_step: int
         :param noise_to_data_ratio: int
+        :param track_loss: boolean
+            if True, calculate loss at the end of the step
         :param rng: np.RandomState
         """
         self.do_m_step = do_m_step
         self.learning_rate = learning_rate
         self.num_batches_per_em_step = num_batches_per_em_step
         self.nu = noise_to_data_ratio
+        self.track_loss = track_loss
         self.rng = rng
 
     def __call__(self, loss_function):
@@ -237,7 +240,7 @@ class SgdEmStep:
                 new_param = current_alpha + self.learning_rate * grad
                 loss_function.set_alpha(new_param)
 
-        loss = loss_function()
+        loss = loss_function() if self.track_loss else 0
 
         return [new_param], [loss], [time.time()]
 
@@ -335,13 +338,17 @@ class ScipyMinimiseEmStep:
 
 class ExactEStep:
 
-    def __init__(self):
-        pass
+    def __init__(self, track_loss=False):
+        """
+        :param track_loss: boolean
+            if True, calculate loss at the end of the step
+        """
+        self.track_loss = track_loss
 
     def __call__(self, loss_function):
         new_alpha = loss_function.get_theta()
         loss_function.set_alpha(new_alpha)
-        loss = loss_function()
+        loss = loss_function() if self.track_loss else 0
         return [new_alpha], [loss], [time.time()]
 
     def __repr__(self):
@@ -397,7 +404,8 @@ class MonteCarloVnceLoss:
             self.X = data
             self.Y = noise_samples
         self.batch_size = batch_size
-        self.batches_per_epoch = int(len(data) / batch_size)
+        if batch_size:
+            self.batches_per_epoch = int(len(data) / batch_size)
         self.current_batch_id = 0
         self.current_epoch = 0
 
@@ -656,7 +664,8 @@ class AdaptiveMonteCarloVnceLoss:
         else:
             self.X = data
         self.batch_size = batch_size
-        self.batches_per_epoch = int(len(data) / batch_size)
+        if batch_size:
+            self.batches_per_epoch = int(len(data) / batch_size)
         self.current_batch_id = 0
         self.current_epoch = 0
 
@@ -759,9 +768,7 @@ class AdaptiveMonteCarloVnceLoss:
         log_model = self.model(U, Z, log=True)
         log_noise = self.variational_noise(U, Z, log=True)
         val = log_model - log_noise
-        # model = self.model(U, Z)
-        # noise = self.variational_noise(U, Z)
-        # val = np.log(model) - np.log(noise)
+
         validate_shape(val.shape, (Z.shape[0], Z.shape[1]))
 
         return val
@@ -922,19 +929,41 @@ class VnceLossWithAnalyticExpectations:
             self.X = data
             self.Y = noise_samples
         self.batch_size = batch_size
-        self.batches_per_epoch = int(len(data) / batch_size)
+        if batch_size:
+            self.batches_per_epoch = int(len(data) / batch_size)
         self.current_batch_id = 0
         self.current_epoch = 0
 
         self.ZX = None
         self.ZY = None
-        self.resample_from_variational_noise = True
+        # self.resample_from_variational_noise = True
         self.current_loss = None
 
         if rng:
             self.rng = rng
         else:
             self.rng = np.random.RandomState(DEFAULT_SEED)
+
+    def get_theta(self):
+        return deepcopy(self.model.theta)
+
+    def get_alpha(self):
+        """"By `alpha' in this case, we mean the params (theta) of the variational noise"""
+        return deepcopy(self.variational_noise.alpha)
+
+    def set_theta(self, new_theta):
+        self.model.theta = deepcopy(new_theta)
+
+    def set_alpha(self, new_alpha):
+        """"By `alpha' in this case, we mean the params (theta) of the variational noise"""
+        self.variational_noise.alpha = deepcopy(new_alpha)
+        # self.resample_from_joint_variational_noise = True
+
+    def get_current_loss(self, get_float=False):
+        loss = deepcopy(self.current_loss)
+        if get_float:
+            loss = np.sum(loss) if isinstance(loss, np.ndarray) else loss
+        return loss
 
     def __call__(self, next_minibatch=False):
         """Return Monte Carlo estimate of Lower bound of NCE objective

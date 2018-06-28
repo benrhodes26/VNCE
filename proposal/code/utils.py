@@ -2,11 +2,25 @@
 the latent NCE code. In particular, multiple plotting functions.
 """
 import numpy as np
+import os
+import pickle
 
 from bisect import bisect_left
 from collections import OrderedDict
 from copy import deepcopy
 from matplotlib import pyplot as plt
+
+
+def save_fig(fig, save_dir, title):
+    fig.savefig(save_dir + title + '.png', bbox_inches="tight", dpi=300)
+    fig.savefig(save_dir + title + '.pdf', bbox_inches="tight", dpi=300)
+    pickle.dump(fig, open(os.path.join(save_dir, title + '.p'), "wb"))
+
+
+def change_fig_fontsize(fig, new_size):
+    for ax in fig.axes:
+        for item in ([ax.title, ax.xaxis.label, ax.yaxis.label] + ax.get_xticklabels() + ax.get_yticklabels() + ax.legend().get_texts()):
+            item.set_fontsize(new_size)
 
 
 def mean_square_error(estimate, true_value, plot=True):
@@ -62,7 +76,7 @@ def sigmoid(u):
     return 1/(1 + np.exp(-u))
 
 
-def evaluate_loss_at_param(loss_function, X, Y, theta=None, alpha=None, nz=None):
+def evaluate_loss_at_param(loss_function, theta=None, alpha=None):
     """
     :param loss_function: see vnce_optimisers.py for examples
     :param theta: array
@@ -72,29 +86,23 @@ def evaluate_loss_at_param(loss_function, X, Y, theta=None, alpha=None, nz=None)
     :param Y: array (n, d)
         noise needed to compute objective function at true_theta.
     """
-
-    if nz:
-        current_nz = deepcopy(loss_function.nz)
-        loss_function.nz = nz  # increase accuracy of approximation
-
-    current_theta = deepcopy(loss_function.model.theta)
-    current_alpha = deepcopy(loss_function.q.alpha)
-
+    # alter parameters if necessary
     if theta is not None:
-        loss_function.model.theta = theta
+        current_theta = loss_function.get_theta()
+        loss_function.set_theta(theta)
     if alpha is not None:
-        loss_function.q.alpha = alpha
+        current_alpha = loss_function.get_alpha()
+        loss_function.set_alpha(alpha)
 
-    if alpha is not None:
-        loss = loss_function(X, Y)
-    else:
-        loss = loss_function(X, Y, reuse_latent_samples=True)
+    # compute loss
+    loss = loss_function()
     loss = np.sum(loss) if loss_function.separate_terms else loss
 
     # reset parameters to how they were before
-    loss_function.model.theta, loss_function.q.alpha = current_theta, current_alpha
-    if nz:
-        loss_function.nz = current_nz
+    if theta is not None:
+        loss_function.set_theta(current_theta)
+    if alpha is not None:
+        loss_function.set_alpha(current_alpha)
 
     return loss
 
@@ -125,10 +133,12 @@ def make_nce_minus_vnce_loss_plot(nce_loss_for_vnce_params, vnce_losses, times, 
     diff2 = nce_loss_for_vnce_params[:, 1] - vnce_losses[:, 1]
     ax.plot(times, diff2, c='b', label='term2: J - J1')
 
+    max_y_val = max(diff1.max(), diff2.max())
+    min_y_val = min(diff1.min(), diff2.min())
     for ax in axs:
         for time_id in e_step_ids:
             time = times[time_id]
-            ax.plot((time, time), ax.get_ylim(), c='0.5')
+            ax.plot((time, time), (min_y_val, max_y_val), c='0.5')
         ax.set_xlabel('time (seconds)', fontsize=16)
         ax.legend()
 
@@ -249,7 +259,7 @@ def plot_log_likelihood_training_curves(training_curves, static_lines):
         ax.plot(plt.get(ax, 'xlim'), (pair[0], pair[0]), label=pair[1])
     ax.set_xlabel('time (seconds)', fontsize=16)
     ax.set_ylabel('log likelihood', fontsize=16)
-    ax.legend()
+    ax.legend(loc='lower right')
 
     return fig
 

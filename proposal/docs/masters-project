@@ -19,6 +19,8 @@
 \usepackage{amsthm}
 \usepackage{amsmath}							
 \usepackage{amssymb}
+\usepackage{mathtools}
+
 \usepackage[utf8]{inputenc}
 
 \usepackage{natbib}
@@ -78,11 +80,22 @@
 \newtheorem{corollary}{Corollary}[theorem]
 \newtheorem{lemma}[theorem]{Lemma}
 
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[section]
+
+
 \newcommand{\argmax}[1]{\underset{#1}{\operatorname{arg}\,\operatorname{max}}\;}
 
 \tikzstyle{neuron}=[draw,circle,minimum size=20pt,inner sep=0pt, fill=white]
 \tikzstyle{stateTransition}=[thick]
 \tikzstyle{learned}=[text=red]
+
+% KL-divergence double bar with: \infdiv{KL}{p}{q}
+\DeclarePairedDelimiterX{\infdivx}[2]{(}{)}{%
+#1\;\delimsize\|\;#2%
+}
+\newcommand{\infdiv}[1]{D_{#1}\infdivx}
+\DeclarePairedDelimiter{\norm}{\lVert}{\rVert}
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -96,7 +109,7 @@
 % Text
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-\title{Interim Report: Noise Contrastive Estimation with Unobserved Variables}
+\title{Variational Noise-contrastive Estimation}
 \author{Ben Rhodes}
 \date{\today}						
 
@@ -117,11 +130,6 @@ This thesis presents a method for estimating the parameters of unnormalised prob
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 \section{Introduction}
-
-TODO: motivate the study of unnormalised, latent variable models in an intuitive, appealing way with whatever model you end up applying VNCE to (e.g neural language model)
-
-The RBM is just one member of a much broader class of unnormalised models known as undirected graphical models or Markov networks \citep{kindermann1980markov} which are very general tools for describing probabilistic relations between random variables.
-
 \textbf{An unnormalised model}, $\pnn(\u;\thetab)$, is a parametrised family of non-negative functions that you can think of as scaled probability density \footnote{unless stated otherwise, assume that all results apply equally to probability mass functions defined over discrete random variables, replacing integrals with sums as necessary.} functions that do not integrate to 1 for all values of $\thetab$. That is:
  \begin{align}
    \int_{\u }\pnn(\u;\thetab) \dif \u &= Z(\thetab) \neq 1 & \pnn(\u;\thetab) \geq 0
@@ -155,6 +163,7 @@ Let us now consider the combined case of an unnormalised, latent variable model.
 \end{align}
 where $Z(\thetab)$ is as we defined it in equation \ref{eq:Zdef}. This expression contains two troublesome integrals, and it is this double intractability that is the fundamental technical barrier we must overcome to perform parameter estimation.
 
+\newpage
 \section{Background}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -164,36 +173,36 @@ where $Z(\thetab)$ is as we defined it in equation \ref{eq:Zdef}. This expressio
 \subsection{Maximum Likelihood and Contrastive Divergence}
 \label{sec:mle and cd}
 
-As stated in the introduction, maximum likelihood learning consists of maximising the log-likelihood given in equation \ref{eq:log-likelihood}, which involves a summation over $n$ data points. However, for much of the theory presented in this thesis, it will be convenient to remove the dependency on a finite set of data, and just refer to the underlying distributions that generate the data. To do this, note that the average log-likelihood is the sample version of:
+As stated in the introduction, maximum likelihood learning consists of maximising the log-likelihood given in equation \ref{eq:log-likelihood}, which is a summation over $n$ data points. However, for much of the theory presented in this thesis, it will be convenient to remove the dependency on a finite set of data, and just refer to the underlying distributions that generate the data. To do this, note that the average log-likelihood is the sample version of:
 \begin{align}
 \label{eq:expectation log-like}
 \ell(\thetab) &= \Edata \left[ \log \pnorm(\x;\thetab) \right] \\
               &= \Edata \left[\log \pnn(\x;\thetab) \right] - \log Z(\thetab) \\
-              &= \Edata \left[ \log \int\pnn(\x, \z;\thetab) \dif \x \right] - \log \int\pnn(\x, \z;\thetab) \dif \x \dif \z \ ,
+              &= \Edata \left[ \log \int\pnn(\x, \z;\thetab) \dif \z \right] - \log \int\pnn(\x, \z;\thetab) \dif \x \dif \z \ ,
 \end{align}
 where $p^*$ is the data generating distribution. One can show that the gradient of $\ell(\thetab)$ is given by:
 \begin{align}
     \label{eq:unnormalised latent var mle gradient}
     \gradtheta \ell(\thetab) = \Edata \E_{\z \sim p(\z | \x)} \left[ \gradtheta \log \pnn(\x, \z;\thetab) \right] - \E_{\x, \z \sim p(\x, \z)} \left[\gradtheta \log \left(\pnn(\x, \z;\thetab) \right) \right] \ ,
 \end{align}
-This gradient update has an intuitive explanation: TODO (pushing up on data, pushing down on model to enforce normalisation requirement)
-In general, the expectations in equation \ref{eq:unnormalised latent var mle gradient} will not be computable analytically. Then the question becomes, can we efficiently sample from the model's posterior over latents $p(\z | \x)$ and the from the joint $p(\x, \z)$? Note that sampling must be efficient since we need to re-sample after \emph{every} gradient update.
+Intuitively, the first gradient `pushes up' on $\pnn$ wherever the \emph{data} is likely, whilst the second term `pushes down' on  $\pnn$ wherever the \emph{model} is likely. The net effect is to reallocate probability mass from regions where the data is unlikely to regions where it is likely. It is critical that reallocate mass, and not simply increase the total amount, since the model must integrate to one. At equilibrium, these two forces directly cancel, and the model equals the data generating distribution.
 
-For many models of interest, such as the Restricted Boltzmann Machine discussed in \ref{sec:rbm}, sampling from $p(\z | \x)$ is straightforward, whilst sampling from the joint $p(\x, \z)$ is problematic. The reason is that many unnormalised, latent variable models are defined via undirected graphs, which do not permit ancestral sampling and generally require us to use a Monte-Carlo Markov Chain (MCMC) method (TODO: REF) that can be very slow to converge.
 
-Contrastive divergence \citep{hinton2006training} circumvents the slowness of MCMC sampling by initialising the Markov chain at a data point and only running it for k-steps (rather than waiting for it to converge), where k is a tuning hyperparameter. Thus, the gradient updates are given by:
+In general, the expectations in equation \ref{eq:unnormalised latent var mle gradient} will not be computable analytically. Then the question becomes, can we efficiently sample from the model's posterior over latents $p(\z | \x)$ and the from the joint $p(\x, \z)$? Sampling must be efficient since we need to re-sample after \emph{every} gradient update. For many models of interest, such as the Restricted Boltzmann Machine discussed in \ref{sec:rbm}, sampling from $p(\z | \x)$ is straightforward, whilst sampling from the joint $p(\x, \z)$ is problematic. The reason is that many unnormalised, latent variable models are defined via undirected graphs, which do not permit ancestral sampling and generally require us to use a Monte-Carlo Markov Chain (MCMC) method that can be very slow to converge.
+
+Contrastive divergence \citep{hinton2006training} bypasses slow MCMC sampling by initialising the Markov chain at a data point and only running it for k-steps (rather than waiting for it to converge), where k is a tuning hyperparameter. Thus, the gradient updates are given by:
 \begin{align}
     \label{eq:cd grad update}
     \nabla_{\thetab} \ell(\thetab) &= \Edata \E_{\z \sim p(\z | \x)} \left[ \nabla_{\thetab} \log \pnn(\x, \z;\thetab) \right] - \E_{\x, \z \sim p_k(\x, \z)} \left[\nabla_{\thetab} \log \left(\pnn(\x, \z;\thetab) \right) \right] \ , 
 \end{align}
-where $p_k$ is the distribution obtained after running the Markov chain for k steps, starting at a datapoint. Bengio & Dellaleau (TODO: CITE) showed that the difference between the MLE gradient update and the contrastive divergence update is given by 
+where $p_k$ is the distribution obtained after running the Markov chain for k steps, starting at a datapoint. \citet{bengio2009justifying} showed that the difference between the MLE gradient update and the contrastive divergence update is given by 
 \begin{equation}
     \label{eq:cd bias}
     \E_{\x \sim p_k(\x)} \left[ \gradtheta \log p_k(\x) \right] \ .
 \end{equation}
-In addition, they showed that this term tends to zero as k tends to infinity and in the specific case of the RBM, provided a bound on this term. Non model-specific bounds seem hard to derive, and little is known in general about the convergence properties of contrastive divergence (TODO: cite). One interesting result we do have is that the contrastive divergence update is \emph{not} the update of any objective function (TODO: CITE), which prevents us applying non-linear optimisation methods. Despite the weak theory supporting contrastive divergence, empirically, it has proven to be an efficient learning technique (TODO: CITE).
+In addition, they showed that this term tends to zero as k tends to infinity and in the specific case of the RBM, provided a bound on this term. Non model-specific bounds seem hard to derive, and little is known in general about the convergence properties of contrastive divergence \citep{carreira2005contrastive}. One interesting result we do have is that the contrastive divergence update is \emph{not} the update of any objective function \citep{sutskever2010convergence}, which prevents us applying non-linear optimisation methods. Despite the weak theory supporting contrastive divergence, it has proven empirically to be an efficient learning technique in many situations.
 
-A related learning method to contrastive divergence is  \emph{persistent} contrastive divergence. Instead of initialising the Markov chains at a datapoint after every gradient update, we `persist' the state of the chain and reuse it across gradient steps. 
+A related learning method to contrastive divergence is  \emph{persistent} contrastive divergence \citep{younes1998stochastic, tieleman2009using}. Instead of initialising the Markov chains at a datapoint after every gradient update, we `persist' the state of the chain and reuse it across gradient steps. 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                                           INTRO TO NCE
@@ -204,21 +213,23 @@ NCE converts an unsupervised density estimation problem into a supervised classi
 
 Concretely, we first generate $m$ samples $\{\textbf{y}_1, \ldots \textbf{y}_m\}$ from a noise distribution $\pnoise(\textbf{y})$ and mix these samples with our data $(\textbf{x}_1, …., \textbf{x}_n)$. Our goal is now to classify whether a random sample $\u$ from this mixture came from the data-generating distribution $p$ or the noise $\pnoise$. We do so by calculating posterior probabilities, using our unnormalised model $\phi(\u; \thetab)$ as a surrogate for the true probability of the data $p(\u)$. If $\nu = \frac{m}{n}$, then:
 \begin{align}
-    \P( \u \sim \pdata; \thetab ) &= \frac{\pnn(\textbf{u}; \thetab)}{\pnn(\textbf{u}; \thetab) + \nu \pnoise(\textbf{u})} \\
-    \P( \u \sim \pnoise; \thetab ) &= \frac{\nu \pnoise(\textbf{u})}{\pnn(\textbf{u}; \thetab) + \nu \pnoise(\textbf{u})} \ .
+    \color{red}{\P( \u \sim \pdata; \thetab)} &= \color{red}{\frac{\pnn(\textbf{u}; \thetab)}{\pnn(\textbf{u}; \thetab) + \nu \pnoise(\textbf{u})}} \\
+    \color{blue}{\P( \u \sim \pnoise; \thetab)} &= \color{blue}{\frac{\nu \pnoise(\textbf{u})}{\pnn(\textbf{u}; \thetab) + \nu \pnoise(\textbf{u})}.}
 \end{align}
 Note that $\P( \u \sim \pnoise; \thetab ) = 1 - \P( \u \sim \pdata; \thetab )$, which makes sense because this is a two-class classification problem, and so we have a Bernoulli distribution over the class label. Using the average log-likelihood for a Bernoulli, we derive the following objective function:
 \begin{align}
-  J_n(\thetab)&= \frac{1}{n} \left\{\sum_{i=1}^{n} \log  \P( \x_i \sim \pdata; \thetab ) + \sum_{i=1}^{m} \log\left[\P( \y_i \sim \pnoise; \thetab )\right]\right\} \\
-  & = \frac{1}{n} \sum_{i=1}^{n} \log \left(\frac{\pnn(\x_i; \thetab)}{\pnn(\x_i; \thetab) + \nu \pnoise(\x_i)}\right)
-  + \sum_{i=1}^{m} \log \left(\frac{\nu \pnoise(\y_i)}{\pnn(\y_i; \thetab) + \nu \pnoise(\y_i)}\right) \ , 
+  J_n(\thetab)&= 
+  \frac{1}{n} \left\{ \color{red}{\sum_{i=1}^{n} \log  \P( \x_i \sim \pdata; \thetab)} 
+    + \color{blue}{\sum_{i=1}^{m} \log\left[\P( \y_i \sim \pnoise; \thetab )\right]} \right\} \\
+  & = \color{red}{\frac{1}{n} \sum_{i=1}^{n} \log \left(\frac{\pnn(\x_i; \thetab)}{\pnn(\x_i; \thetab) + \nu \pnoise(\x_i)}\right)}
+    + \color{blue}{\frac{1}{n}\sum_{i=1}^{m} \log \left(\frac{\nu \pnoise(\y_i)}{\pnn(\y_i; \thetab) + \nu \pnoise(\y_i)}\right),} 
   \label{eq:Jn}
 \end{align}
 which is the sample version of $J(\thetab)$:
 \begin{equation}
   J(\thetab) = 
-   \Ex  \log \left(\frac{\pnn(\x; \thetab)}{\pnn(\x; \thetab) + \nu \pnoise(\x)}\right) 
-  + \nu \Ey \log \left( \frac{\nu \pnoise(\y)}{\pnn(\y; \thetab) + \nu \pnoise(\y)}\right) \ .
+   \color{red}{\Ex  \log \left(\frac{\pnn(\x; \thetab)}{\pnn(\x; \thetab) + \nu \pnoise(\x)}\right)}
+  + \color{blue}{\nu \Ey \log \left( \frac{\nu \pnoise(\y)}{\pnn(\y; \thetab) + \nu \pnoise(\y)}\right).}
   \label{eq:J}
 \end{equation}
 
@@ -234,11 +245,12 @@ In the case of latent variable models, the extended version of NCE that we prese
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                                        INTRO TO VNCE
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-\subsection{Variational lower bound on NCE objective function}
+\newpage
+\section{Variational noise-contrastive estimation}
 \label{sec:VNCE}
 Guttmann [2018, unpublished] derived a \emph{variational} lower bound to the NCE objective function, which is the mathematical keystone to this thesis. Before presenting the bound, we first give a more standard introduction to the variational approach, which should make the subsequent material clearer.
 
+\subsection{Variational inference and EM}
 As discussed in section \ref{sec:mle and cd}, the expected average log-likelihood for a latent variable model is given by:
 \begin{align}
     \ell(\thetab) &= \Ex  \log \left( \int \pnorm(\x, \z;\thetab) \dif \z  \right)  \\
@@ -255,19 +267,20 @@ EM, as stated above, assumes we have an expression for $\pnorm(\z | \x; \thetab)
 
 How to perform this optimisation with respect to $\alphab$ is a matter of ongoing research. It is non-trivial because the right-hand side of $\ref{eq:elbo}$ involves an expectation with respect to $q(\z|\x; \alphab)$, so standard gradient-based methods are hard to straightforwardly apply. There are methods to cope with this obstacle, such as the reparameterisation trick \citep{kingma2015variational}, which we discuss in later chapters. 
 
-This concludes the standard application of variational inference to the log-likelihood objective function. The question remains, how can we apply a similar strategy to the NCE objective function in equation \ref{eq:J}? There are two fundamental steps: 
+\subsection{Variational lower bound for NCE}
+Inspired by the variational lower bound for the log-likelihood, it's natural to wonder how we might apply a similar strategy to the NCE objective function in equation \ref{eq:J}. There are two fundamental steps: 
 \begin{itemize}
     \item Use importance sampling to re-express the intractable integral over $\z$ as an expectation; call this E.
     \item Apply Jensen’s inequality to a concave function g(E).
 \end{itemize}
-One complication in applying such a strategy is that the intractable integral $\int \pnn(\u, \z;\thetab) \dif \z$ appears twice: inside the expectation with respect to the data:
+One complication in applying such a strategy is that the intractable integral $\int \pnn(\u, \z;\thetab) \dif \z$ appears both inside the expectation with respect to the data:
 \begin{align}
-    \Ex  \log \left(\frac{\pnn(\x; \thetab)}{\pnn(\x; \thetab) + \nu \pnoise(\x)}\right) 
+    \color{red}{\Ex  \log \left(\frac{\int \pnn(\x, \z;\thetab) \dif \z}{\int \pnn(\x, \z;\thetab) \dif \z + \nu \pnoise(\x)}\right)}
     \label{eq:J term1}
 \end{align}
 and it also appears in the second term, which is an expectation with respect to the noise distribution:
 \begin{align}
-    \nu \Ey \log \left( \frac{\nu \pnoise(\y)}{\pnn(\y; \thetab) + \nu \pnoise(\y)}\right) \ .
+    \color{blue}{\nu \Ey \log \left( \frac{\nu \pnoise(\y)}{\int \pnn(\y, \z;\thetab) \dif \z + \nu \pnoise(\y)}\right).}
     \label{eq:J term2}
 \end{align}
 Let us focus only on the first term (\ref{eq:J term1}). Introducing the notation:
@@ -280,32 +293,44 @@ and
   g(r) = -\log \left(1+\nu \frac{1}{r} \right),
 \end{equation}
 we see that:
-\begin{equation}
- \log \left(\frac{\pnn(\x; \thetab)}{\pnn(\x; \thetab) + \nu \pnoise(\x)}\right)   =   g(r(\x; \thetab)) \ .
-\end{equation}
-It can be shown that $g$ is a concave function of $r$. Since $r$ is really just an expectation, as is clear from \ref{eq:r-def}, we can apply Jensen's inequality:
 \begin{align}
- \log \left(\frac{\pnn(\x; \thetab)}{\pnn(\x; \thetab) + \nu \pnoise(\x)}\right)  &\geq   \Evar{\x} g \left( \frac{\pnn(\x, \z;\thetab)}{\q{\x}\pnoise(\x)} \right) \\
-    &\geq -\Evar{\x} \log \left(1+\nu \frac{\q{\x}\pnoise(\x)}{\pnn(\x,\z; \thetab)}\right) \ , 
+    \color{red}{\log \left(\frac{\int \pnn(\x, \z;\thetab) \dif \z}{\int \pnn(\x, \z;\thetab) \dif \z + \nu \pnoise(\x)}\right)} 
+    &= \color{red}{- \log \left( 1 + \nu \frac{\pnoise(\x)}{\int \pnn(\x, \z;\thetab) \dif \z}\right)} \\
+    &=   \color{red}{g(r(\x; \thetab)).}
+\end{align}
+It quickly follows from lemma \ref{lemma: f convex} (see appendix) that $g$ is a concave function of $r$. Since $r$ is really just an expectation, as is clear from \ref{eq:r-def}, we can apply Jensen's inequality:
+\begin{align}
+ \color{red}{g(r(\x; \thetab))}  
+    &\geq  \color{red}{\Evar{\x} g \left( \frac{\pnn(\x, \z;\thetab)}{\q{\x}\pnoise(\x)} \right)} \\
+    &\geq  \color{red}{-\Evar{\x} \log \left(1+\nu \frac{\q{\x}\pnoise(\x)}{\pnn(\x,\z; \thetab)}\right),} 
 \end{align}
 where, to get the last line, we simply substitute in the definition of $g$.
 
 It does not appear possible to apply the same combination of importance sampling and Jensen's inequality to the second term of the NCE objective (\ref{eq:J term2}). However, we don’t necessarily need to. The intractable integral in the second term can be approximated just with importance sampling, \emph{re-using} the variational distribution $q$ that we got from the first term. Thus, we obtain a variational lower bound to the NCE objective function given by:
 \begin{equation}
-  \J_1(\thetab, q) = -\Ex \E_{\z \sim q(\z|\x)} \log \left(1+\nu \frac{q(\z|\x)\pnoise(\x)}{\pnn(\x,\z; \thetab)}\right) -  \nu \Ey \log \left(1+\frac{1}{\nu} \E_{\z \sim q(\z | \y)} \left[\frac{\pnn(\y,\z; \thetab)} {q(\z | \y)\pnoise(\y)} \right]  \right).
+  \J_1(\thetab, q) 
+  = \color{red}{-\Ex \E_{\z \sim q(\z|\x)} \log \left(1+\nu \frac{q(\z|\x)\pnoise(\x)}{\pnn(\x,\z; \thetab)}\right)}
+   \color{blue}{ - \nu \Ey \log \left(1+\frac{1}{\nu} \E_{\z \sim q(\z | \y)} \left[\frac{\pnn(\y,\z; \thetab)} {q(\z | \y)\pnoise(\y)} \right]  \right).}
   \label{eq:obj1}
 \end{equation}
-We have that $J(\thetab) \ge \J_1(\thetab, q)$ for all $q$, and so we can apply variational EM, maximising $J(\thetab)$ by iterating between
+We have that $J(\thetab) \ge \J_1(\thetab, q)$ for all $q$, and so we can apply variational EM, maximising $J(\thetab)$ by iterating between maximising $\J_1(\thetab,q)$ with respect to $\thetab$, and the tightening of the bound by maximising $\J_1(\thetab,q)$ with respect to the variational distribution $q$.
+
+
+\subsection{Necessary ingredients to apply VNCE}
+\label{sec:optimisation of var objective}
+Having established the objective function \ref{eq:obj1} for VNCE, it is helpful to explicitly lay out the ingredients required for optimising it. We require:
 \begin{itemize}
-  \item Maximisation of $\J_1(\thetab,q)$ with respect to $\thetab$, and
-  \item Tightening of the bound by maximising $\J_1(\thetab,q)$ with respect to the variational distribution $q$.
+    \item A noise distribution over the visible variables $\pnoise$. This density should, ideally, be cheap to evaluate and sample from, and similar to the data distribution.
+    \item A variational distribution over latent variables $q$. This will typically have its own parameters $\alphab$, apart from the case where we set $q$ to equal the model's posterior over latents. This is only possible for models with tractable posteriors. 
+    \item If the variational distribution $q$ has parameters $\alphab$, then we need compute $\nabla_{\alphab} J_1(\alphab)$. This is difficult in general, but depending on the parameterisation of $q$, it may be possible to do analytically, perhaps using the reparameterisation trick \citep{kingma2015variational}.
+    \item The gradient $\nabla_{\thetab} J_1(\thetab)$. A derivation of this gradient is given in the appendix, section \ref{sec:appendix grad of J1}. The key term required to compute it is the gradient of the logarithm of the unnormalised model: $\nabla_{\thetab}(\log \phi(\u; \thetab))$.
 \end{itemize}
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                                        RESEARCH OBJECTIVES
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+\newpage
 \section{Research Objectives}
 \label{sec:research objectives}
 In the previous section, we established a method of parameter estimation for unnormalised, latent variable models involving the maximisation of a variational lower bound to the NCE objective function, as given in equation \ref{eq:obj1}. We will refer to this method as VNCE. The over-arching goal in the remainder of the thesis is to appraise the usefulness of VNCE across different models, data sets, and evaluation metrics. In addition, we aim to contribute a better theoretical understanding of the new estimation method, which may involve studying its asymptotic properties or its mathematical similarities with other methods such as contrastive divergence.
@@ -349,39 +374,83 @@ Secondly, and more significantly, contrastive divergence requires you to be able
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                                           RESULTS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+\newpage
 \section{Results}
 \label{sec:results}
-In this section, we present a mixture of theoretical and empirical results, including:
-\begin{itemize}
-    \item A proof that the EM algorithm for VNCE never decreases the NCE objective function.
-    \item Key steps for performing optimisation with VNCE.
-    \item Application of VNCE to a simple problem, namely an unnormalised mixture of Gaussians.
-    \item Application of VNCE to a Restricted Boltzmann Machine.
-    \item Application of VNCE to a (TODO).
-    \item An adaptive variant of VNCE.
-\end{itemize}
+In section \ref{sec:VNCE}, we presented a variational lower bound to the NCE objective function, $J_1(\thetab, q)$, that depends on an auxiliary distribution $q$ that we optimise in conjunction with the model's parameters $\thetab$. We would like to have a better theoretical understanding of how this optimisation procedure relates to ordinary NCE and also to standard variational inference with the log-likelihood. In particular, is the maximum of $J_1$ with respect to $\thetab$ and $q$ equal to the maximum of the NCE objective, $J$, with respect to $\thetab$? And what form does the optimal $q$ take? 
 
-The first result is an analog of the theorem for ordinary EM, described in section \ref{sec:VNCE}, which states that it never decreases the log-likelihood. By deriving this analog result, we shall see that the optimal choice of $q$ at each E step is given by the model's posterior over latents $p(\z| \u)$.
+We obtain a positive answer to the first question, showing that VNCE has the same maximum as NCE, and in doing so derive the optimal $q$ to be the model's posterior over latents $p(\z | \u ; \thetab)$. This is the same optimal $q$ as in standard variational inference, and implies that VNCE is not only useful for parameter estimation, but also performs approximate inference of the latent variables. As discussed in section \ref{sec:VNCE}, standard variational inference minimises the KL-divergence between the approximate and true posterior. In contrast, we show that VNCE minimises a different \emph{f-divergence} between the two posteriors. This is likely to have important consequences on the type of approximate posterior we learn whenever $q$ is not flexible enough to match the true posterior. We discuss these consequences in more detail after deriving the necessary equations. Before that however, we need to make the idea of an f-divergence precise.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                                           EM NON-DECREASING
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\theoremstyle{definition}
+\begin{definition}
+An \emph{f-divergence} $\infdiv{f}{p}{q}$ between two probability densities $p$ and $q$, is defined as
+\begin{equation}
+    \infdiv{f}{p}{q} = \mathbb{E}_{u \sim q} \left[ f\left(\frac{p(u)}{q(u)}\right) \right],
+\end{equation}
+where $f$ is a convex function satisfying $f(1) = 0$.
+\end{definition}
+It is a straight-forward application of Jensen's inequality to show that f-divergences are non-negative:
+\begin{equation}
+    \infdiv{f}{p(u)}{q(u)} = \mathbb{E}_q \left[ f\left( \frac{p(u)}{q(u)} \right) \right] \geq f\left( \mathbb{E}_q \left[  \frac{p(u)}{q(u)} \right]  \right) = f \left( \int p(u) \dif u \right) = f(1) = 0
+\end{equation}
+and obtain their minimum when $p = q$. These two properties make f-divergences useful for learning a data generating distribution $p$ by optimising the parameters of $q$ to minimise $\infdiv{f}{p(u)}{q(u)}$. In fact, maximum likelihood learning minimises the KL divergence, which is one example of an f-divergence where $f(u) = u \log(u)$.
+\begin{lemma}
+    The difference between the NCE and VNCE objective functions is equal to the expectation of an f-divergence between the true and approximate posterior. Specifically,
+    \begin{equation}
+        J(\thetab) - J_1(\thetab, q) = \Ex \left[ \infdiv{f_{\x}}{p(\z | \x; \thetab)}{q(\z | \x)} \right],
+    \end{equation}
+where
+\begin{equation}
+    f_{\x}(u) = \log(v_{\x} + (1 - v_{\x})u^{-1}), \hspace{5mm} v_{\x} = \frac{\pnn(\x; \thetab)}{\pnn(\x; \thetab) + \nu p_{y}(\x)}
+\end{equation}
+Moreover, this f-divergence can be expressed as the difference of two KL-divergences:
+\begin{equation}
+\label{eq: f-divergence is sum of two KLs}
+     \infdiv{f_{\x}}{p(\z | \x; \thetab)}{q(\z | \x)} = \infdiv{KL}{q(\z | \x)}{p(\z | \x; \thetab)} - \infdiv{KL}{q(\z | \x)}{m(\z, \x ; \thetab)},
+\end{equation}
+where $m(\z, \x ; \thetab) = v_{\x}p(\z | \x; \thetab) + (1 - v_{\x})q(\z | \x)$ is a convex combination of the true and approximate posteriors.
+\end{lemma}
+\begin{proof}
+Recall that the NCE objective $J$ (\ref{eq:J}) and the VNCE objective $J_1$ (\ref{eq:obj1}) consist of two terms: the first is an expectation with respect to the data, the second an expectation with respect to the noise distribution $\pnoise$. The second terms of $J$ and $J_1$ are identical, so their difference equals the difference between their first terms:
+\begin{align}
+    J(\thetab) - J_1(\thetab, q) 
+    &= \Ex \log \left( \frac{\pnn(\x)}{\pnn(\x) + \nu p_{y}(\x)} \right) 
+    - \Ex \Evar{x} \log \left( \frac{\pnn(\x, \z)}{\pnn(\x, \z) + \nu q(\z | \x) p_{y}(\x)} \right) \\
+    &= \Ex \Evar{x} \left[ \log \left( \frac{\pnn(\x)}{\pnn(\x) + \nu p_{y}(\x)} \right) + \log \left( 1 + \frac{q(\z | \x) p_{y}(\x)}{\phi(\x) p(\z | \x)} \right) \right] \\
+    &= \Ex \Evar{x} \left[ \log \left( \frac{\pnn(\x)}{\pnn(\x) + \nu p_{y}(\x)} + \frac{ \pnn(\x) p_{y}(\x)}{(\pnn(\x) + \nu p_{y}(\x))\phi(\x)} \frac{q(\z | \x)}{p(\z | \x)} \right) \right] \\
+    \label{eq: f divergence formula}
+    &= \Ex \Evar{x} \left[ \log \left( v_{\x} + (1 - v_{\x}) \frac{q(\z | \x)}{p(\z | \x)} \right) \right] \\
+    &=  \Ex \left[ \infdiv{f_{\x}}{p(\z | \x; \thetab)}{q(\z | \x)} \right],
+\end{align}
+where $f_{\x}(u) = \log(v_{\x} + (1 - v_{\x})u^{-1})$. To ensure that that $D_{f_{\x}}$ is a valid f-divergence, we need to prove that $f$ is convex and $f_{\x}(1) = 0$. The latter is trivial, since $f_{\x}(1) = \log(v_{\x} + (1 - v_{\x})) = \log(1) = 0$, and convexity follows directly from lemma \ref{lemma: f convex} in the appendix.
 
+We now prove that this f-divergence can be expressed as the difference of two KL-divergences as in equation \ref{eq: f-divergence is sum of two KLs}. To do this, we pull $q/p$ outside of the log in equation \ref{eq: f divergence formula}:
+\begin{align}
+    \infdiv{f_{\x}}{p(\z | \x; \thetab)}{q(\z | \x)} 
+    &= \Evar{x} \left[ \log( \frac{q(\z | \x)}{p(\z | \x)}) \right] 
+    + \Evar{x} \left[ \log \left( v_{\x}\frac{p(\z | \x)}{q(\z | \x)} + (1 - v_{\x}) \right) \right] \\
+    &= \Evar{x} \left[ \log( \frac{q(\z | \x)}{p(\z | \x)}) \right] 
+    - \Evar{x} \left[ \log \left( \frac{q(\z | \x)}{v_{\x}p(\z | \x) + (1 - v_{\x})q(\z | \x)} \right) \right] \\
+    &= \infdiv{KL}{q(\z | \x)}{p(\z | \x; \thetab)} - \infdiv{KL}{q(\z | \x)}{m(\z, \x ; \thetab)}.
+\end{align}
+where $m(\z, \x ; \thetab) = v_{\x}p(\z | \x; \thetab) + (1 - v_{\x})q(\z | \x)$.
+\end{proof}
 \begin{theorem}
-    Given the VNCE objective function:
-        \begin{equation}
-          \J_1(\thetab, q) = -\Ex \E_{\z \sim q(\z|\x)} \log \left(1+\nu \frac{q(\z|\x)\pnoise(\x)}{\pnn(\x,\z; \thetab)}\right) -  \nu \Ey \log \left(1+\frac{1}{\nu} \E_{\z \sim q(\z | \y)} \left[\frac{\pnn(\y,\z; \thetab)} {q(\z | \y)\pnoise(\y)} \right]  \right) \ ,
-          \label{eq:J1}
-        \end{equation}
-    a random initial starting point $\thetab_0$, and the following optimisation procedure: $ $
+
+\end{theorem}
+The above results lead directly to an expectation described in section \ref{sec:VNCE}, which states that it never decreases the log-likelihood.
+\begin{corollary}
+    Given a random initial starting point $\thetab_0$, and the following optimisation procedure:
     \begin{enumerate}
-        \item $q_k(\z | \u) = p(\z | \u ; \thetab_k) $ (E-step)
-        \item $\thetab_{k+1} = \argmax{\thetab} J_1(\thetab, q_k) $ (M-step)
+        \item (E-step) $q_k(\z | \u) = p(\z | \u ; \thetab_k) $ 
+        \item (M-step) $\thetab_{k+1} = \argmax{\thetab} J_1(\thetab, q_k) $ 
         \item Unless converged, repeat steps 1 and 2
     \end{enumerate}
-Then it follows that, for all $k \in \mathbb{N}$, we have:  $J(\thetab_{k+1}) \geq J(\thetab_k)$, where $J$ is the NCE objective function.
-\end{theorem}
+it follows that, for all $k \in \mathbb{N}$, we have:  $J(\thetab_{k+1}) \geq J(\thetab_k)$, where $J$ is the NCE objective function.
+\end{corollary}
 \begin{proof}
     Let $k \in \mathbb{N}$. In section \ref{sec:VNCE}, we showed that that the NCE objective is lower bounded by the VNCE objective, so that: $J(\thetab_k) \geq J_1(\thetab_k, q)$ for all $q$. We derived this by applying Jensen's inequality to the first term of the NCE objective function. Specifically, we showed that:
     \begin{align}
@@ -412,24 +481,10 @@ Then it follows that, for all $k \in \mathbb{N}$, we have:  $J(\thetab_{k+1}) \g
 \end{proof}
 Observe that, just as in the ordinary EM algorithm, the above result does not hold in general if we only take a `partial' E-step, by making $q$ close, but not exactly equal, to $p_{\z | \x}$. However, we can always take a partial M-step, increasing the value of $J_1(\thetab, q_k)$ through a few gradient steps without computing the true argmax.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%                                           OPTIMISATION OF VNCE
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-\subsection{Optimisation of the variational objective function}
-\label{sec:optimisation of var objective}
-In section \ref{sec:VNCE}, we presented the objective function $J_1(\thetab)$ needed for NCE and described how it might be optimised with a variational EM type algorithm. Namely, we alternate between optimising $\thetab$ and optimising the parameters of an variational distribution $q$ that approximates the latent posterior of the model. Here, we lay out the ingredients required for optimisation:
-\begin{itemize}
-    \item A noise distribution over the visible variables $\pnoise$. This density should be cheap to evaluate and sample from.
-    \item A variational distribution over latent variables $q$. This will typically have its own parameters $\alphab$, apart from the case where we set $q$ to equal the model's posterior over latents. This is only possible for models with tractable posteriors. 
-    \item If the variational has parameters $\alphab$, then we need compute $\nabla_{\alphab} J_1(\alphab)$. This is difficult in general, but depending on the parameterisation of $q$, it may be possible to do analytically, perhaps using the reparameterisation trick \citep{kingma2015variational}.
-    \item The gradient $\nabla_{\thetab} J_1(\thetab)$. A derivation of this gradient is given in the appendix, section \ref{sec:appendix grad of J1}. The key term required to compute the gradient is the gradient of the logarithm of the model: $\nabla_{\thetab}(\log \phi(\u; \thetab))$
-\end{itemize}
-
 
 \subsection{Mixture of Gaussian model}
 \label{sec:mog}
-As a simple illustration of the effectiveness of VNCE, we apply it to a toy mixture of two Gaussians model, where the only unknown parameter is the standard deviation of one of the Gaussians. We consider two cases: firstly a normalised MoG, and then an unnormalised version. Finally, for the unnormalised version, we run a population analysis to compare the performance of VNCE against both NCE and maximum likelihood estimation across multiple sample sizes.
+As a simple illustration of the correctness of VNCE, we apply it to a toy mixture of two Gaussians model, where the only unknown parameter is the standard deviation of one of the Gaussians. We consider two cases: firstly a normalised MoG, and then an unnormalised version. Finally, for the unnormalised version, we run a population analysis to compare the performance of VNCE against both NCE and maximum likelihood estimation across multiple sample sizes.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                                        NORMALISED MIXTURE OF GAUSSIANS
@@ -437,25 +492,26 @@ As a simple illustration of the effectiveness of VNCE, we apply it to a toy mixt
 
 \subsubsection{The normalised case}
 
-\begin{figure}[ht]
-  \centering
-  \includegraphics[scale=0.4]{em-loss-curve-mog.pdf}
-    \caption{\label{fig:mog-em-loss-curve} EM type algorithm applied to a normalised Mixture of Gaussians model. The red lines indicate when we make the update $q(z|u) = p(z|u; \theta_k)$ where $\theta_k$ is the value of $\theta$ at that point during the optimisation.}.
-\end{figure}
+%\begin{figure}[ht]
+%  \centering
+%  \includegraphics[scale=0.4]{em-loss-curve-mog.pdf}
+%    \caption{\label{fig:mog-em-loss-curve} EM type algorithm applied to a normalised Mixture of Gaussians %model. The red lines indicate when we make the update $q(z|u) = p(z|u; \theta_k)$ where $\theta_k$ is the %value of $\theta$ at that point during the optimisation.}.
+%\end{figure}
 
 \noindent A common latent variable model is the Mixture of Gaussian (MoG) model. For a mixture with two components, a single binary latent variable $z \sim \mathcal{B}er(\pi)$ determines which of two Gaussians the data was generated from. if $\pi = 1/2$, we have the following joint:
 \begin{equation}
-\pnorm(u, z; \theta) = \frac{(1-z)}{2} \mathcal{N}(u; 0, \theta) + \frac{z}{2} \mathcal{N}(u; 0, \sigma_1)
+\pnorm(u, z; \theta) = \frac{(1-z)}{2} \mathcal{N}(u; 0, \theta) + \frac{z}{2} \mathcal{N}(u; 0, \sigma_1).
 \label{eq:mog standard}
 \end{equation}
 We assume that the variance of the second component, $\sigma_1^2$, is known, and our task is to estimate the value of $\theta$. Whilst this estimation problem does not involve an unnormalised model, we can still apply VNCE to it. This provides a useful sanity check of the method's validity in a simple setting where we do not have a scaling parameter to estimate in conjunction with $\theta$.
 
 For a simple experiment, we set $\sigma_1 = 1$ and let $\theta^* = 4$ be the true value of $\theta$. We then make the following choices of noise and variational distribution:
 \begin{align}
+    \label{eq:normalised mog posterior}
     \pnoise(u) &= \mathcal{N}(u; 0, \theta^*) \\
-    q(z|u) &= p(z=0 \ | \ u; \theta) = \left(  1 + \frac{\theta_k}{\sigma_1} \exp \left(\frac{- u^2}{2} \left( \frac{1}{\sigma_1^2} - \frac{1}{\theta^2} \right) \right) \right)^{-1}
+    q(z|u) &= p(z=0 \ | \ u; \theta) = \left(  1 + \frac{\theta_k}{\sigma_1} \exp \left(\frac{- u^2}{2} \left( \frac{1}{\sigma_1^2} - \frac{1}{\theta^2} \right) \right) \right)^{-1}.
 \end{align}
-The choice of noise distribution is not too important for this simple model, so long as it very approximately matches the data generating distribution. With this setup, we can then apply the EM type algorithm discussed in section \ref{sec:optimisation of var objective}. We can visualise this algorithm in two ways: firstly through the training curve in figure \ref{fig:mog-em-loss-curve}, and secondly through iteratively plotting the variational bound, for all values of $\theta$, each time we update the variational distribution $q$ in figure \ref{fig:normalised-mog}. We can see that the algorithm converges to the correct value of $\theta$.
+The choice of noise distribution is not too important for this simple model, so long as it very approximately matches the data generating distribution. With this setup, we can then apply the EM type algorithm discussed in section \ref{sec:optimisation of var objective}. We can visualise this algorithm by iteratively plotting the variational bound, for all values of $\theta$, each time we update the variational distribution $q$ in figure \ref{fig:normalised-mog}. It is clear from the figure that the algorithm converges to the correct value of $\theta$.
 
 \afterpage{
     \thispagestyle{empty}
@@ -493,14 +549,25 @@ As before, fix $\sigma_1 = 1$ and $\theta^*=4$. Using equation \ref{eq:mog norma
          \mathcal{N}(u; 0, \sigma_1), & \text{if } w = 1
         \end{array}
 \]
-Using this synthetic data, we proceed as before, using an EM algorithm to learn the parameter $\theta$. Visualising learning is less straightforward now that our parameter set is 2-dimensional, but we can compare the contour plot of the true NCE objective function against the lower bound obtained at the end of learning. This is given in figure \ref{fig:unnormalised mog contour}. We see that the algorithm converges to the correct value of $\theta$, and correct normalising constant.
+Using this synthetic data, we can proceed as before, using an EM algorithm to learn the parameter $\theta$. To do this, we would need to use the posterior over latents, given by:
+\begin{equation}
+    p(z=0 \ | \ u) = \frac{1}{1 + \exp(\frac{-u^2}{2} (\frac{1}{\sigma_1^2} + \frac{1}{\sigma_0^2}) )}.
+\end{equation}
+However, for more complex models, we do not have access to such a posterior, and so it is important that VNCE still works when we approximate it with a parametrised variational distribution $q$. To test this, we use the following $q$:
+\begin{equation}
+    q(z=0 \ | \ u; \textbf{w}) = \frac{1}{1 + \exp(w_0 + w_1u + w_2u^2)}, 
+\end{equation}
+which clearly contains the true posterior.
+
+Visualising learning is less straightforward now that our parameter set is 2-dimensional, but we can compare the contour plot of the true NCE objective function against the lower bound obtained at the end of learning. This is given in figure \ref{fig:unnormalised mog contour}. We see that the algorithm converges to the correct value of $\theta$, and correct normalising constant.
 
 \afterpage{
     \thispagestyle{empty}
     \begin{figure}[ht]
     \centering
     \includegraphics[width = 0.8 \textwidth]{unnormalised-mog-countour.pdf}
-    \caption{\label{fig:unnormalised mog contour} contour plot of true NCE objective function compared to the variational lower bound, where we have set the variational distribution $q(z|u)$ to be the posterior $p(z|u; \tilde{\theta})$, where $\tilde{\theta}$ is our final estimate obtained after optimisation. The vertical axis corresponds to $c$, the scaling parameter.}
+    \vspace*{-18mm}
+    \caption{\label{fig:unnormalised mog contour} Contour plot of true NCE objective function compared to the variational lower bound for an unnormalised Mixture of Gaussians. For the lower bound, we have set the variational distribution $q(z|u)$ to be the posterior $p(z|u; \tilde{\theta})$, where $\tilde{\theta}$ is our final estimate obtained after optimisation. The vertical axis corresponds to $c$, the scaling parameter.}
     \end{figure}
     \clearpage
 }
@@ -508,13 +575,8 @@ Using this synthetic data, we proceed as before, using an EM algorithm to learn 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                                       MOG POPULATION ANALYSIS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-\subsubsection{Population Analysis of unnormalised Mixture of Gaussian model}
-Figure \ref{fig:mse-mog} shows the MSE $\mathbb{E} ||\theta - \theta^*||^2$ for VNCE, NCE and maximum likelihood across multiple runs and with different sample sizes. To produce it, we generated 500 distinct ground-truth values for standard deviation parameter in the unnormalised MoG, sampling uniformly from the interval $[2, 6]$. For each of the 500 $\theta^*$s, we estimate it using all three estimation methods and with a range of sample sizes. Every run was initialised from five random values and the best result out of the five was kept in order to avoid local optima, which exist since both the likelihood and NCE objective functions are bi-modal.
-
-Figure \ref{fig:mse-mog} (a) demonstrates that the estimation accuracy of VNCE increases with sample size, and is comparable to that of NCE. We note that the comparison is complicated by the fact that NCE was particularly prone to falling into local optima (despite our use of multiple random initialisations). This is why NCE's worst-case accuracy is significantly worse than that of the other two methods, as shown by the upper dashed blue line.
-
-\begin{figure}
+\begin{figure}[!tpb]
+\vspace{-15mm}
 \centering
 \begin{subfigure}{.5\textwidth}
   \centering
@@ -528,18 +590,22 @@ Figure \ref{fig:mse-mog} (a) demonstrates that the estimation accuracy of VNCE i
   \caption{Scaling parameter}
   \label{fig:sub2}
 \end{subfigure}
-\caption{log sample size against log mean-squared error (MSE) produced when estimating the standard deviation and scaling parameter for 500 different unnormalised Mixture of Gaussian models. The thick central lines show the median MSE of the 500 runs, whilst the dashed lines mark the 1st and 9th deciles.}
+\caption{log sample size against log mean-squared error (MSE) produced when estimating the standard deviation and scaling parameter for 500 different unnormalised Mixture of Gaussian models. The thick central lines show the median MSE of the 500 runs, whilst the dashed lines mark the 1st and 9th deciles. The constant negative slope of the red line is evidence of the consistency of VNCE.}
 \label{fig:mse-mog}
 \end{figure}
+\subsubsection{Population Analysis of unnormalised Mixture of Gaussian model}
+Figure \ref{fig:mse-mog} shows the MSE $\mathbb{E} ||\theta - \theta^*||^2$ for VNCE, NCE and maximum likelihood across multiple runs and with different sample sizes. To produce it, we generated 500 distinct ground-truth values for standard deviation parameter in the unnormalised MoG, sampling uniformly from the interval $[2, 6]$. For each of the 500 $\theta^*$s, we estimate it using all three estimation methods and with a range of sample sizes. Every run was initialised from five random values and the best result out of the five was kept in order to avoid local optima, which exist since both the likelihood and NCE objective functions are bi-modal.
+
+Figure \ref{fig:mse-mog} (a) demonstrates that the estimation accuracy of VNCE increases with sample size, and is comparable to that of NCE. This gives some evidence of the consistency of VNCE. We note that the comparison is complicated by the fact that NCE was particularly prone to falling into local optima (despite our use of multiple random initialisations). This is why NCE's worst-case accuracy is significantly worse than that of the other two methods, as shown by the upper dashed blue line.
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                                        RESTRICTED BOLTZMANN MACHINES
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
 \subsection{Restricted Boltzmann Machine}
 \label{sec:rbm}
 
-The Restricted Boltzmann Machine (RBM) (TODO: ref) is an unnormalised, latent variable model over binary vectors given by:
+The Restricted Boltzmann Machine (RBM) \citep{smolensky1986information} is an unnormalised, latent variable model over binary vectors given by:
 \begin{align}
 p(\u, \z, ; \thetab)  \propto \exp(\u^TW\z + \textbf{a}^{T}\u + \textbf{b}^T\z) \ ,
 \label{eq:rbm}
@@ -609,7 +675,7 @@ We gain further insight into the model's properties by not only considering it's
           &\propto \exp(\textbf{a}^T\u) \prod_{i=1}^m (1 + \exp(b_i + \u^T W_{:, i})) \ ,
           \label{eq:marginal of rbm}
 \end{align}
-where $W_{:, i}$ is the $i^{th}$ column of the weight matrix $W$. Since $p(\u)$ is a product over $m+1$ terms, we can think of the RBM as a `product of experts' (TODO: REF):
+where $W_{:, i}$ is the $i^{th}$ column of the weight matrix $W$. Since $p(\u)$ is a product over $m+1$ terms, we can think of the RBM as a `product of experts' \citep{hinton2006training}:
 \begin{equation}
     p(\u) \propto \prod_{i=1}^{m+1} f_i(\u)
 \end{equation}
@@ -630,7 +696,7 @@ which cannot be further factorised due to the presence of $\u$ in every term of 
 
 Hence, we are not dealing with the general case that VNCE was designed for: when \emph{both} marginalising out the hiddens and computing the partition function are intractable. Since only the latter is intractable, we can apply NCE to the problem. As with the mixture of Gaussians, this is useful since we can compare the performance of NCE to VNCE.
 
-Another important comparison to make is with contrastive divergence or its cousin, persistent contrastive divergence, since they are perhaps the most common methods for training an RBM. As discussed in section \ref{sec:mle and cd}, contrastive divergence roughly approximates the gradient ascent rule for maximum likelihood learning, using updates of the form:
+Another important comparison to make is with contrastive divergence since it is perhaps the most common method for training an RBM. As discussed in section \ref{sec:mle and cd}, contrastive divergence roughly approximates the gradient ascent rule for maximum likelihood learning, using updates of the form:
 \begin{align}
     \label{eq:cd grad update for rbm}
     \nabla_{W} \ell(\thetab) &= \Edata \E_{\z \sim p(\z | \x)} \left[ \nabla_{W} \log \pnn(\x, \z;\thetab) \right] - \E_{\x, \z \sim p_k(\x, \z)} \left[\nabla_{W} \log \left(\pnn(\x, \z;\thetab) \right) \right] \\
@@ -638,7 +704,7 @@ Another important comparison to make is with contrastive divergence or its cousi
 \end{align}
 for the weight matrix $W$ (similar updates are used for the biases). The notation $p_k$ refers to the distribution obtained after running a Markov Chain Monte Carlo method for $k$ steps, starting at the data generating distribution $p^*$. If we took $k \rightarrow \infty$, then we would obtain $p$ (the current model). Whilst we are free to choose amy MCMC method, in the case of an RBM, the conditional independence statements in equation \ref{eq: rbm conditional indpendicies} allow us to implement efficient block-Gibbs sampling, where we alternate between sampling $\u | \z$ and $\z | \u$.
 
-To our knowledge, there is no other work comparing NCE to contrastive divergence in the case of the RBM, so a three way comparison of VNCE, NCE and contrastive divergence is a useful contribution in multiple respects.
+To our knowledge, there is no prior work comparing NCE to contrastive divergence in the case of the RBM, so the following experiments consider all three pairwise comparisons of VNCE, NCE and contrastive divergence.
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -647,34 +713,33 @@ To our knowledge, there is no other work comparing NCE to contrastive divergence
 
 \subsubsection{Experimental Setup}
 
-Similar to the work of Perpinan & Hinton (TODO: REF), we use a toy dataset derived from all mutually exclusive $3 \times 3$ patches of the 11,000 $16 \times 16$ images of handwritten digits from the USPS dataset\footnote{TODO: LINK}. After thresholding the 256 intensity levels at 150, we obtained 275,000 9-dimensional binary vectors. We use this relatively low-dimensional toy dataset in order to make computing the partition function, and hence the log-likelihood, feasible.
+Following \citet{carreira2005contrastive}, we use a toy dataset derived from all mutually exclusive $3 \times 3$ patches of the 11,000 $16 \times 16$ images of handwritten digits from the USPS dataset.\footnote{https://cs.nyu.edu/~roweis/data.html} After thresholding the 256 intensity levels at 150, we obtained 275,000 9-dimensional binary vectors. We use this relatively low-dimensional toy dataset in order to make computing the partition function, and hence the log-likelihood, cheap.
 
 For all three estimation methods, we train RBMs with varying number of hidden units: $m \in \{2, 4, 6, 8\}$. For each value of $m$, we use the same initial weights and biases across all three methods, sampling the weights and hidden biases with: $W_{i, j} \sim \mathcal{U}(-4 \sqrt{\frac{6}{d + m}}, 4 \sqrt{\frac{6}{d + m})$ and setting the visible biases to $\frac{\log(p_i)}{1 - \log(p_i)}$ where $p_i$ is the empirical frequency of $u_i = 1$. Setting the visible biases in this way ensures that the initial model approximately matches the empirical marginals, and hence most of training consists in discovering the correlations between the visibles. For VNCE and NCE we must also initialise the scaling parameter; we set it to $-m \log(2) + \sum_{i=0}^{d}(\log(1 - p_i))$, which approximately normalises the initial model (it would exactly normalise it if the weight matrix and hidden biases were initialised to zero).
 
-For contrastive divergence, we use the largest stable learning rate, which is 0.1 (TODO: double-check), a batch size of 100 and train for X epochs (TODO). For each data point in a batch, we initialise a Markov chain at that point and run it for 1 step to produce 100 `fantasy' samples. Many implementations of CD do not actually take samples of the latent variables on the \emph{final} step of Gibbs sampling. Instead they directly use the probability of the latents to compute the gradient update. Whilst this is a useful property of CD in the case of the RBM, for many other models we will be forced to take samples. Hence, to make our comparison of VNCE and CD fair for the general case, we always take samples.
+For contrastive divergence, we use the largest stable learning rate, which is 0.1, a batch size of 100 and train for 100 epochs. For each data point in a batch, we initialise a Markov chain at that point and run it for 1 step to produce 100 `fantasy' samples. Many implementations of CD \citep{hinton2012practical} do not actually take samples of the latent variables on the \emph{final} step of Gibbs sampling. Instead they directly use the probability of the latents to compute the gradient update. Whilst this is a useful property of CD in the case of the RBM, for many other models we will be forced to take samples. Hence, to make our comparison of VNCE and CD fair for the general case, we always take samples.
 
-For both VNCE and NCE, we set the noise distribution over visible units to be a product of marginals. Each marginal is a Bernoulli distribution, with parameter $p_i$ as defined above. We set the ratio of noise to data samples, $\nu$, equal to 1. For both methods we optimise their objective functions with two different methods: stochastic gradient ascent (SGD) and L-BFGS-B(TODO: REF). For SGD, we use the same settings as for contrastive divergence. When using NCE with L-BFGS-B, we follow the built-in convergence criterion from the scipy.minimize library. When using VNCE with L-BFGS-B inside the inner loop of the EM-algorithm, waiting for the built-in convergence criterion causes slow overall convergence and so we limit it to 10 iterations. For VNCE, note that we update the variational distribution $q$ to equal the model's current posterior over latents at every E-step of the EM algorithm. Recall that in the general case $q$ will have its own parameters; for the RBM this is not necessary since we have an analytic expression for $p(\z | \u)$ given in equation \ref{eq: rbm conditional indpendicies} that is efficient to sample from.
+For both VNCE and NCE, we set the noise distribution over visible units to be a product of marginals. Each marginal is a Bernoulli distribution, with parameter $p_i$ equal to the empirical marginal probability. We set the ratio of noise to data samples, $\nu$, equal to 1. We optimise their objective functions using stochastic gradient ascent (SGD) with the same settings as for contrastive divergence. We also investigated using a non-linear optimiser such as L-BFGS-B, however they tend not to scale well to large datasets. In addition, when using VNCE with L-BFGS-B inside the inner loop of the EM-algorithm, we have found that waiting for the built-in convergence criterion causes slow overall convergence. This can be remedied however by limiting the number of iterations to a small number rather than waiting for convergence.
 
+For VNCE, we update the variational distribution $q$ to equal the model's current posterior over latents at every E-step of the EM algorithm. In the general case $q$ will have its own parameters but for the RBM this is not necessary since we have an analytic expression for $p(\z | \u)$ given in equation \ref{eq: rbm conditional indpendicies} that is efficient to sample from.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                                         RBM EXPERIMENTAL RESULTS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 \subsubsection{Experimental Results}
-TODO: measure (with a ruler) how much slower each method was than the last to converge
-TODO: add LBFGSB figs to the graphs (perhaps zooming in slightly to make things clearer)
-TODO: do one more experiment using smaller initial weights to see if has a big impact.
+Figure \ref{fig:usps-rbm} shows the learning curves for training RBMs with SGD using a range of latent dimensions: $m \in \{2, 4, 6, 8\}$. In all cases, we see contrastive divergence converges to a higher log-likelihood than NCE or VNCE, although the gap in final log-likelihoods is very small for $m=2$ hidden units, and grows with $m$. NCE and VNCE converge to the same final log-likelihood, showing that the variational approximation has not compromised the quality of the final model. The estimation methods differ significantly in terms of speed: The log-likelihood reached by VNCE at convergence is obtained 2-5x more quickly by NCE, and 10-50x more quickly by contrastive divergence. We note that the final gap between NCE/VNCE and contrastive divergence could be narrowed with a more sophisticated choice of noise distribution or by using a larger ratio of noise to data samples, at the cost of speed.
 
-Figure \ref{fig:usps-rbm} shows the learning curves for RBMs with varying number of hidden units: $m \in \{2, 4, 6, 8\}$. In all cases, contrastive divergence is both faster and converges to a higher log-likelihood than NCE or VNCE, although the gap in final log-likelihoods is very small for $m=2$ hidden units, and grows with $m$. NCE and VNCE converge to the same final log-likelihood, but NCE does so X (TODO) times faster. We note that the final gap between NCE/VNCE and contrastive divergence could be narrowed with a more sophisticated choice of noise distribution or by using a larger ratio of noise to data samples, but at the cost of speed.
-
-These results are strongly in favour of contrastive divergence as a method for training RBMs, particularly as we increase the number of hidden units. This observation is consistent with the limited theory that exists for contrastive divergence. As discussed in section \ref{sec:mle and cd}, the difference between the maximum likelihood gradient updates and contrastive divergence updates as stated in equation \ref{eq:cd bias}, can be analytically bounded in the case of the RBM. Bengio & Dellaleau (TODO:CITE) provided a bound, later improved by Igel & Fischer (TODO: CITE), which was demonstrated to be both tight and small on a toy problem. More generally the authors show that the bound will be small when the absolute values of the RBM parameters are small, which is encouraged by the use of weight-decay. This theory gives us some assurance that contrastive divergence will work well for the RBM, and the theory appears to borne out in practice.
+These results are strongly in favour of contrastive divergence as a method for training RBMs, particularly as we increase the number of hidden units. This observation is consistent with the limited theory that exists for contrastive divergence. As discussed in section \ref{sec:mle and cd}, the difference between the maximum likelihood gradient updates and contrastive divergence updates as stated in equation \ref{eq:cd bias}, can be analytically bounded in the case of the RBM. \citet{bengio2009justifying} provided a bound, later improved by \citet{fischer2011bounding}, which was demonstrated to be both tight and small on a toy problem. More generally the authors show that the bound will be small when the absolute values of the RBM parameters are small. This theory gives us some assurance that contrastive divergence will work well for the RBM, and the theory appears to borne out in practice.
 
 Nevertheless, the amount of bias in contrastive divergence learning can be much larger for particular data generating distributions \citep{marlin2010inductive}, and may be larger for other classes of models. In particular, one might expect that for models where MCMC sampling is less efficient (because we cannot do block sampling, say), that contrastive divergence will be less effective. We investigate these possibilities in subsequent experiments.
 
 \begin{figure}[ht]
-  \centeringe
+\vspace{-5mm}
+  \centering
   \includegraphics[width=0.8\linewidth, height=300]{usps-different_num_hiddens.pdf}
-    \caption{Learning curves for CD, NCE and VNCE when training Restricted Boltzmann Machines on 3x3 binarised image patches using varying numbers of hidden units. The green dashed line is the log-likelihood of the noise distribution used in (V)NCE, which in this case is a product of the empirical marginals.}
+  \vspace{-5mm}
+    \caption{Learning curves for CD, NCE and VNCE when training Restricted Boltzmann Machines on 3x3 binarised image patches using varying numbers of hidden units. All models here were trained with SGD. The green dashed line is the log-likelihood of the noise distribution used in NCE, which in this case is a product of the empirical marginals.}
     \label{fig:usps-rbm}
 \end{figure}
 
@@ -682,9 +747,9 @@ Nevertheless, the amount of bias in contrastive divergence learning can be much 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                                        SELF-CONTRASTIVE VNCE
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-\section{Self-contrastive VNCE}
-Goodfellow (TODO: CITE) proposed an variation of NCE where, after each update of the parameters $\thetab$, we reset the noise distribution to be equal to the current model. He showed that this scheme, termed `self-contrastive estimation', yields the same gradient updates as maximum likelihood learning. We prove an analog of this result for the latent-variable case, and investigate how to efficiently implement it (TODO: modify this bit once/if I have done some experiments with this setup).
+\newpage
+\section{Adaptive VNCE}
+\citet{goodfellow2014distinguishability} proposed a variation of NCE where, after each update of the parameters $\thetab$, we reset the noise distribution to be equal to the current model. He showed that this scheme, termed `self-contrastive estimation', yields the same gradient updates as maximum likelihood learning. We prove an analog of this result for the latent-variable case, and investigate how to efficiently implement it.
 
 In the the appendix, section \ref{sec:appendix grad of J1}, we derive the gradient of the VNCE objective function, which is:
 \begin{align}
@@ -734,74 +799,30 @@ In terms of theory, there is also plenty of work remaining. In particular, we ha
 
 \newpage
 \section{Appendix}
-\subsection{Variational lower bound J1($\theta$)}
-\label{sec:appendix derivation of J1}
-\label{lower bound}
-\begin{align}
-  - \log [1+\nu \exp(-h(\u;\thetab))] & =  - \log \left[1+\nu \exp \left(- \log \frac{\pnn(\u;\thetab)}{\pnoise(\u)}\right) \right]\\
-  & =  - \log \left[1+\nu \exp \left( \log \frac{\pnoise(\u)}{\pnn(\u;\thetab)}\right) \right]\\
-  & =  - \log \left[1+\nu  \frac{\pnoise(\u)}{\pnn(\u;\thetab)} \right] 
-\end{align}
-Let further
-\begin{equation}
-  r(\u;\thetab) = \exp(h(\u; \thetab)) = \frac{\pnn(\u;\thetab)}{\pnoise(\u)}
-\end{equation}
-and
-\begin{equation}
-  g(r) = -\log \left(1+\nu \frac{1}{r} \right),
-\end{equation}
-we then obtain
-\begin{equation}
-  - \log [1+\nu \exp(-h(\u;\thetab))]  = g(r(\u; \thetab)).
-\end{equation}
-The first derivative of $g$ with respect to $r$ is
-\begin{align}
-\dod{g}{r} &= \frac{-1}{1+\nu \frac{1}{r}}\frac{-\nu}{r^2}\\
-&= \frac{\nu}{r^2+\nu r}
-\end{align}
-The second derivative of $g$ with respect to $r$ is thus
-\begin{align}
-\dod[2]{g}{r} &= -\nu \frac{2r +\nu}{(r^2+\nu r)^2},
-\end{align}
-which is always negative for $r>0$. The function $g(r)$ is thus concave.
 
-We now introduce an auxiliary distribution $q_u(\z)$ over $\z$ and write
-\begin{align}
-  \pnn(\u; \thetab) &= \int \pnn(\u, \z;\thetab) \dif \z\\
-  & = \int q_u(\z) \frac{\pnn(\u,\z; \thetab)}{q_u(\z)} \dif \z\\
-  & = \E_{\z \sim q_u} \left[\frac{\pnn(\u,\z; \thetab)}{q_u(\z)}\right]
-\end{align}
-This corresponds to estimating $\pnn(\u,\thetab)$ by importance sampling. The subscript for $q_u(\z)$ is meant to indicate that we can use different auxiliary distributions for different values of $\u$.
-
-We can thus write $r(\u; \thetab)$ as
-\begin{align}
-  r(\u;\thetab) &= \frac{1}{\pnoise(\u)}  \E_{\z \sim q_u} \left[\frac{\pnn(\u,\z; \thetab)}{q_u(\z)}\right] \\
-  & =  \E_{\z \sim q_u} \left[\frac{\pnn(\u,\z; \thetab)} {q_u(\z)\pnoise(\u)} \right]
-\end{align}
-and since $g$ is concave, we have
-\begin{align}
-  - \log [1+\nu \exp(-h(\u;\thetab))]  &= g(r(\u; \thetab)) \\
-  & = g\left(\E_{\z \sim q_u} \left[\frac{\pnn(\u,\z; \thetab)} {q_u(\z)\pnoise(\u)} \right]\right)\\
-  & \ge \E_{\z \sim q_u} g\left( \frac{\pnn(\u,\z; \thetab)} {q_u(\z)\pnoise(\u)} \right).
-\end{align}
-With the definition of $g$, we thus obtain
+\begin{lemma}
+\label{lemma: f convex}
+For non-negative real numbers $a, b$ and $u$, the function 
 \begin{equation}
-  - \log [1+\nu \exp(-h(\u;\thetab))]  \ge -\E_{\z \sim q_u} \log \left[1+\nu \frac{q_u(\z)\pnoise(\u)}{\pnn(\u,\z; \thetab)}\right].
+    f(u) = \log(a + bu^{-1})
 \end{equation}
-We now plug this relation into the definition of $J(\thetab)$:
-\begin{align}
-  J(\thetab)  &= - \Ex  \log \left[1+\nu \exp(-h(\x;\thetab))\right] - \nu \Ey \log \left[1+1/\nu \exp(h(\y;\thetab))\right]\\
-  & \ge  -\Ex \E_{\z \sim q(\z|\x)} \log \left[1+\nu \frac{q(\z|\x)\pnoise(\x)}{\pnn(\x,\z; \thetab)}\right] -  \nu \Ey \log \left[1+1/\nu \exp(h(\y;\thetab))\right] \\
-    &\geq -\Ex \E_{\z \sim q(\z|\x)} \log \left[1+\nu \frac{q(\z|\x)\pnoise(\x)}{\pnn(\x,\z; \thetab)}\right] -  \nu \Ey \log \left[1+\frac{1}{\nu} \E_{\z \sim q(\z | \y)} \left[\frac{\pnn(\y,\z; \thetab)} {q(\z | \y)\pnoise(\y)} \right]  \right].
-\end{align}
+is convex.
+\end{lemma}
+\begin{proof}
+Differentiating $f$ twice:
+    \begin{align}
+        f'(u) = - \frac{b}{au^2 + bu} \hspace{7mm} f''(u) = \frac{b(2au + b)}{(au^2 + bu)^2},
+    \end{align}
+we see that $f''(u) \geq 0$ since $a, b$ and $u$ are non-negative. Hence $f$ is convex.
+\end{proof}
 
 \subsection{Gradient of J1($\thetab$)}
 \label{sec:appendix grad of J1}
-To find the argmax of $J_1(\thetab)$, we need to differentiate it. To do so, let us first further reduce the notational burden, by writing:
+We can write the VNCE objective function, $J_1(\thetab)$, as follows:
 
 \begin{align}
 J_1(\thetab) & =  
-              \color{red}{ - \mathbb{E}_{\x} \mathbb{E}_{\z \sim q_k} \left[ \log(\psi_1(\x, \z; \thetab)) \right]} -        \color{blue}{ \nu \mathbb{E}_{\y}  \left[  \log(\psi_2(\y; \thetab)) \right]}
+              \color{red}{ - \mathbb{E}_{\x} \mathbb{E}_{\z \sim q_k} \left[ \log(\psi_1(\x, \z; \thetab)) \right]} -        \color{blue}{ \nu \mathbb{E}_{\y}  \left[  \log(\psi_2(\y; \thetab)) \right]},
 \end{align}
 where
 \begin{align}
@@ -813,15 +834,16 @@ Now, let us take derivative with respect to $\thetab$:
 \color{red}{ \nabla_{\thetab} \log(\psi_1(\x, \z; \thetab))}
            & = \frac{1}{\psi_1(\x, \z; \thetab)} \nabla_{\thetab} \psi_1(\x, \z; \thetab) \\
            & = \frac{1}{\psi_1(\x, \z; \thetab)} \frac{-\nu}{r(\x, \z; \thetab)^2} \nabla_{\thetab} r(\x, \z; \thetab) \\
-           & = \frac{1}{\psi_1(\x, \z; \thetab)} \frac{-\nu}{r(\x, \z; \thetab)^2} \frac{\nabla_{\thetab} \phi(\x, \z; \thetab)}{q_k(\z \ | \ \x)p_{\y}(\x)}
+           & = \frac{1}{\psi_1(\x, \z; \thetab)} \frac{-\nu}{r(\x, \z; \thetab)^2} \frac{\nabla_{\thetab} \phi(\x, \z; \thetab)}{q_k(\z \ | \ \x)p_{\y}(\x)}.
+           \label{eq:grad log psi 1}
 \end{align}
-Hence, we need:
+It is convenient to re-express $\nabla_{\thetab} \phi(\x, \z; \thetab)$ as follows:
 \begin{align}
 \nabla_{\thetab} \phi(\x, \z; \thetab) & = \nabla_{\thetab} \exp ( \log ( \phi(\x, \z; \thetab) ) ) \\
           & = \left[ \nabla_{\thetab} \log(\phi(\x, \z; \thetab)) \right] \exp ( \log ( \phi(\x, \z; \thetab) ) )\\
-          & = \left[ \nabla_{\thetab} \log(\phi(\x, \z; \thetab)) \right] \phi(\x, \z; \thetab)
+          & = \left[ \nabla_{\thetab} \log(\phi(\x, \z; \thetab)) \right] \phi(\x, \z; \thetab).
 \end{align}
-Plugging this back in, we get:
+Plugging this back into equation \ref{eq:grad log psi 1}, we get:
 \begin{align}
 \color{red}{ \nabla_{\thetab} \log(\psi_1(\x, \z; \thetab))}
     & = \frac{1}{\psi_1(\x, \z; \thetab)}
@@ -849,7 +871,7 @@ Now we find the derivative of the second (blue) term of $J_1^K(\thetab)$. Recall
 Putting this all together, we arrive at:
 \begin{align}
 \nabla_{\thetab}(J_1^k(\thetab)) & =  
-    \color{red}{  \mathbb{E}_{\x} \mathbb{E}_{\z \sim q_k} \frac{\nu}{r(\x, \z ; \thetabb) + \nu}
+    \color{red}{  \mathbb{E}_{\x} \mathbb{E}_{\z \sim q_k} \frac{\nu}{r(\x, \z ; \thetab) + \nu}
         \left[ \nabla_{\thetab} \log(\phi(\x, \z; \thetab)) \right]} \\
     &\color{blue}{ - \mathbb{E}_{\y}
                  \frac{1}{1 + \frac{1}{\nu} \mathbb{E}_{\z \sim q_k}[r(\y, \z; \thetab)]}
