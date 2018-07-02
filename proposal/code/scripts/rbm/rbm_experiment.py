@@ -33,12 +33,9 @@ START_TIME = strftime('%Y%m%d-%H%M', gmtime())
 parser = ArgumentParser(description='Experimental comparison of training an RBM using latent nce and contrastive divergence',
                         formatter_class=ArgumentDefaultsHelpFormatter)
 # Read/write arguments
-parser.add_argument('--data_dir', type=str, default='/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/data/usps',
+parser.add_argument('--data_dir', type=str, default='/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/data/',
                     help='Path to directory where data is loaded and saved')
-parser.add_argument('--save_dir', type=str, default='/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/experimental-results/rbm',
-                    help='Path to directory where model will be saved')
-# parser.add_argument('--save_dir', type=str, default='/home/ben/ben-rhodes-masters-project/proposal/experiments/rbm/synthetic/test',
-#                     help='Path to directory where model will be saved')
+parser.add_argument('--save_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/rbm', help='Path to directory where model will be saved')
 
 parser.add_argument('--exp_name', type=str, default='test', help='name of set of experiments this one belongs to')
 parser.add_argument('--name', type=str, default=START_TIME, help='name of this exact experiment')
@@ -78,7 +75,6 @@ parser.add_argument('--track_loss', dest='track_loss', action='store_true', help
 parser.add_argument('--no-track_loss', dest='track_loss', action='store_false')
 parser.set_defaults(track_loss=False)
 
-
 # Contrastive divergence optimisation arguments
 parser.add_argument('--cd_num_steps', type=int, default=1, help='number of gibbs steps used to sample from model during learning with CD')
 parser.add_argument('--cd_learn_rate', type=float, default=0.05, help='learning rate for contrastive divergence')
@@ -93,40 +89,28 @@ parser.add_argument('--nce_learn_rate', type=float, default=0.05, help='if nce_o
 parser.add_argument('--nce_batch_size', type=int, default=100, help='if nce_opt_method=SGD, this is the size of a minibatch')
 
 # Other arguments
-parser.add_argument('--num_log_like_steps', type=int, default=50, help='Number of time-steps for which we calculate log-likelihoods')
+parser.add_argument('--num_log_like_steps', type=int, default=10, help='Number of time-steps for which we calculate log-likelihoods')
 parser.add_argument('--separate_terms', dest='separate_terms', action='store_true', help='separate the two terms that make up J1/J objective functions')
 parser.add_argument('--no-separate_terms', dest='separate_terms', action='store_false')
 parser.set_defaults(separate_terms=True)
 parser.add_argument('--random_seed', type=int, default=1083463236, help='seed for np.random.RandomState')
 
 args = parser.parse_args()
-
-SAVE_DIR = os.path.join(args.save_dir, args.exp_name, args.name)
-os.makedirs(SAVE_DIR)
+save_dir = os.path.join(args.save_dir, args.exp_name, args.name)
+if not os.path.exists(save_dir):
+    os.makedirs(save_dir)
 
 """
 ==========================================================================================================
-                                            SETUP
+                                            DATA
 ==========================================================================================================
 """
-
 # For reproducibility
 rng = rnd.RandomState(args.random_seed)
 
 true_data_dist = None
-# get training and test sets
-if args.which_dataset[:4] == 'usps':
-    loaded_data = np.load(os.path.join(args.data_dir, args.which_dataset + '.npz'))
-    X = loaded_data['train']
-    X_test = loaded_data['test']
-    X_mean = np.mean(X, axis=0)
-    n, d = X.shape
-
-    if d <= 12:
-        # Load empirical dist, which which treat as ground truth (this is reasonable in low dimensions)
-        true_data_dist = pickle.load(open(os.path.join(args.data_dir, 'usps_3by3_emp_dist.p'), 'rb'))
-
-elif args.which_dataset == 'synthetic':
+# get training and test sets -either from synthetic or real data
+if args.which_dataset == 'synthetic':
     n, d = args.n, args.d
 
     # generate weights of RBM that we want to learn
@@ -138,11 +122,22 @@ elif args.which_dataset == 'synthetic':
     X, Z = true_data_dist.sample(n, num_iter=args.num_gibbs_steps)
     X_test, _ = true_data_dist.sample(n, num_iter=args.num_gibbs_steps)
     X_mean = np.mean(X, axis=0)
-
 else:
-    print("Do not recognise which_dataset={}".format(args.which_dataset))
-    raise TypeError
+    loaded_data = np.load(os.path.join(args.data_dir, args.which_dataset + '.npz'))
+    X = loaded_data['train']
+    X_test = loaded_data['test']
+    X_mean = np.mean(X, axis=0)
+    n, d = X.shape
 
+    if args.which_dataset[:4] == 'usps' and d <= 12:
+        # Load empirical dist, which which treat as ground truth (this is reasonable in low dimensions)
+        true_data_dist = pickle.load(open(os.path.join(args.data_dir, 'usps_3by3_emp_dist.p'), 'rb'))
+
+"""
+==========================================================================================================
+                                       MODEL & NOISE
+==========================================================================================================
+"""
 # initialise weights, either pre-trained or randomly initialised
 if args.theta0_path:
     print('loading pre-trained theta0s')
@@ -158,8 +153,8 @@ else:
             high=args.theta0scale * np.sqrt(6. / (d + args.m)),
             size=(d + 1, args.m + 1)
         ))
-    theta0[1:, 0] = np.log(X_mean / (1 - X_mean))  # visible biases
-    theta0[0, 0] = -args.m * np.log(2) + np.sum(np.log(1 - X_mean))  # scaling parameter
+    theta0[1:, 0] = np.log(X_mean + 1e-6 / (1 - X_mean + + 1e-6))  # visible biases
+    theta0[0, 0] = -args.m * np.log(2) + np.sum(np.log(1 - X_mean + + 1e-6))  # scaling parameter
     # theta0[0, 1:] = 0  # hidden biases
 
     vnce_theta0 = theta0
@@ -180,6 +175,12 @@ elif args.noise == 'chow_liu':
 
 # generate noise
 Y = noise_dist.sample(int(n * args.nu))
+
+"""
+==========================================================================================================
+                                LOSS FUNCTIONS AND OPTIMISERS
+==========================================================================================================
+"""
 
 # initialise loss function
 use_sgd = (args.opt_method == 'SGD')
@@ -276,6 +277,9 @@ print('finished nce optimisation!')
 vnce_thetas, vnce_alphas, vnce_losses, vnce_times = optimiser.get_flattened_result_arrays()
 m_step_ids, e_step_ids, _, _ = optimiser.get_m_and_e_step_ids()
 
+vnce_plot = plot_vnce_loss(vnce_losses, vnce_times, e_step_ids)
+save_fig(vnce_plot, save_dir, 'vnce_loss')
+
 nce_losses_for_vnce_params = None
 J_plot = None
 if args.separate_terms:
@@ -283,11 +287,11 @@ if args.separate_terms:
                                                               nce_optimiser,
                                                               optimiser,
                                                               separate_terms=args.separate_terms)
-    J_plot = make_nce_minus_vnce_loss_plot(nce_losses_for_vnce_params,
-                                           vnce_losses,
-                                           vnce_times,
-                                           e_step_ids)
-    J_plot.savefig('{}/J-optimisation-curve.pdf'.format(SAVE_DIR))
+    J_plot = plot_nce_minus_vnce_loss(nce_losses_for_vnce_params,
+                                      vnce_losses,
+                                      vnce_times,
+                                      e_step_ids)
+    J_plot.savefig('{}/J-optimisation-curve.pdf'.format(save_dir))
 
 # reduce results, since calculating log-likelihood is expensive
 reduced_vnce_thetas, reduced_vnce_times = get_reduced_thetas_and_times(vnce_thetas, vnce_times[m_step_ids], args.num_log_like_steps)
@@ -303,7 +307,7 @@ print('finished!')
 
 # calculate average log-likelihood of empirical, initial & noise distributions on test set, for comparison
 init_log_like = average_log_likelihood(init_model, X_test)
-noise_log_like = np.mean(np.log(noise_dist(X_test)))
+noise_log_like = np.mean(np.log(noise_dist(X_test) + 1e-6))
 if args.which_dataset[:4] == 'usps' and true_data_dist:
     true_log_like = np.mean(np.log(true_data_dist(X_test)))
 elif args.which_dataset == 'synthetic':
@@ -320,13 +324,13 @@ if true_data_dist:
 # plot log-likelihood during training
 like_training_plot = plot_log_likelihood_training_curves(training_curves, static_lines)
 like_training_plot.gca().set_ylim((noise_log_like - 0.5, av_log_like_cd.max() + 0.3))
-like_training_plot.savefig('{}/likelihood-optimisation-curve.pdf'.format(SAVE_DIR))
+like_training_plot.savefig('{}/likelihood-optimisation-curve.pdf'.format(save_dir))
 
 # plot rbm weights for each model (including ground truth and random initialisation)
 params = [model.theta, cd_model.theta, init_model.theta]
 titles = ['Latent NCE parameters', 'Contrastive divergence parameters', 'Randomly initialised parameters']
 rbm_weights_plot = plot_rbm_parameters(params, titles, d, args.m)
-rbm_weights_plot.savefig('{}/rbm-weight-visualisation.pdf'.format(SAVE_DIR))
+rbm_weights_plot.savefig('{}/rbm-weight-visualisation.pdf'.format(save_dir))
 
 # check that latent nce has produced an approximately normalised model
 model.reset_norm_const()
@@ -343,23 +347,26 @@ END_TIME = strftime('%Y%m%d-%H%M', gmtime())
 
 # save everything
 config = vars(args)
+config['d'] = d
 config.update({'start_time': START_TIME, 'end_time': END_TIME, 'random_seed': 1083463236})
-with open(os.path.join(SAVE_DIR, "config.txt"), 'w') as f:
+with open(os.path.join(save_dir, "config.txt"), 'w') as f:
     for key, value in config.items():
         f.write("{}: {}\n".format(key, value))
 
-pickle.dump(config, open(os.path.join(SAVE_DIR, "config.p"), "wb"))
-pickle.dump(like_training_plot, open(os.path.join(SAVE_DIR, "likelihood_training_plot.p"), "wb"))
-pickle.dump(J_plot, open(os.path.join(SAVE_DIR, "J_plot.p"), "wb"))
-pickle.dump(rbm_weights_plot, open(os.path.join(SAVE_DIR, "rbm_weights_plot.p"), "wb"))
-pickle.dump(optimiser, open(os.path.join(SAVE_DIR, "vnce_optimiser.p"), "wb"))
-pickle.dump(cd_optimiser, open(os.path.join(SAVE_DIR, "cd_optimiser.p"), "wb"))
-pickle.dump(nce_optimiser, open(os.path.join(SAVE_DIR, "nce_optimiser.p"), "wb"))
+pickle.dump(config, open(os.path.join(save_dir, "config.p"), "wb"))
+pickle.dump(like_training_plot, open(os.path.join(save_dir, "likelihood_training_plot.p"), "wb"))
+pickle.dump(J_plot, open(os.path.join(save_dir, "J_plot.p"), "wb"))
+pickle.dump(rbm_weights_plot, open(os.path.join(save_dir, "rbm_weights_plot.p"), "wb"))
 
-np.savez(os.path.join(SAVE_DIR, "data"), X=X, X_test=X_test, Y=Y)
-np.savez(os.path.join(SAVE_DIR, "init_theta_and_likelihood"), theta0=vnce_theta0, init_log_like=init_log_like)
+pickle.dump(vnce_loss_function, open(os.path.join(save_dir, "vnce_loss_function.p"), "wb"))
+pickle.dump(optimiser, open(os.path.join(save_dir, "vnce_optimiser.p"), "wb"))
+pickle.dump(cd_optimiser, open(os.path.join(save_dir, "cd_optimiser.p"), "wb"))
+pickle.dump(nce_optimiser, open(os.path.join(save_dir, "nce_optimiser.p"), "wb"))
 
-np.savez(os.path.join(SAVE_DIR, "vnce_results"),
+np.savez(os.path.join(save_dir, "data"), X=X, X_test=X_test, Y=Y)
+np.savez(os.path.join(save_dir, "init_theta_and_likelihood"), theta0=vnce_theta0, init_log_like=init_log_like)
+
+np.savez(os.path.join(save_dir, "vnce_results"),
          vnce_thetas=vnce_thetas,
          vnce_alphas=vnce_alphas,
          vnce_times=vnce_times,
@@ -370,14 +377,14 @@ np.savez(os.path.join(SAVE_DIR, "vnce_results"),
          m_step_ids=m_step_ids,
          e_step_ids=e_step_ids)
 
-np.savez(os.path.join(SAVE_DIR, "cd_results"),
+np.savez(os.path.join(save_dir, "cd_results"),
          cd_thetas=cd_optimiser.thetas,
          cd_times=cd_optimiser.times,
          reduced_cd_thetas=reduced_cd_thetas,
          reduced_cd_times=reduced_cd_times,
          av_log_like_cd=av_log_like_cd)
 
-np.savez(os.path.join(SAVE_DIR, "nce_results"),
+np.savez(os.path.join(save_dir, "nce_results"),
          nce_thetas=nce_optimiser.thetas,
          nce_times=nce_optimiser.times,
          nce_losses=nce_optimiser.Js,

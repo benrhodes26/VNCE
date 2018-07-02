@@ -13,7 +13,7 @@ from matplotlib import pyplot as plt
 
 def save_fig(fig, save_dir, title):
     fig.savefig(save_dir + title + '.png', bbox_inches="tight", dpi=300)
-    fig.savefig(save_dir + title + '.pdf', bbox_inches="tight", dpi=300)
+    fig.savefig(save_dir + title + '.pdf', bbox_inches="tight")
     pickle.dump(fig, open(os.path.join(save_dir, title + '.p'), "wb"))
 
 
@@ -119,13 +119,11 @@ def get_true_weights(d, m):
     return true_W
 
 
-def make_nce_minus_vnce_loss_plot(nce_loss_for_vnce_params, vnce_losses, times, e_step_ids):
+def plot_nce_minus_vnce_loss(nce_loss_for_vnce_params, vnce_losses, times, e_step_ids):
     """plot J (NCE objective function) minus J1 (lower bound to NCE objective)"""
 
-    fig, axs = plt.subplots(1, 1, figsize=(15, 20))
-    axs = [axs]
+    fig, ax = plt.subplots(1, 1, figsize=(15, 20))
 
-    ax = axs[0]
     diff = np.sum(nce_loss_for_vnce_params, axis=1) - np.sum(vnce_losses, axis=1)
     ax.plot(times, diff, c='k', label='J - J1')
     diff1 = nce_loss_for_vnce_params[:, 0] - vnce_losses[:, 0]
@@ -141,6 +139,25 @@ def make_nce_minus_vnce_loss_plot(nce_loss_for_vnce_params, vnce_losses, times, 
             ax.plot((time, time), (min_y_val, max_y_val), c='0.5')
         ax.set_xlabel('time (seconds)', fontsize=16)
         ax.legend()
+
+    return fig
+
+def plot_vnce_loss(vnce_losses, times, e_step_ids):
+    fig, ax = plt.subplots(1, 1, figsize=(5.7, 2.5))
+
+    if vnce_losses.ndim ==2:
+        vnce_losses = np.sum(vnce_losses, axis=1)
+
+    ax.plot(times, vnce_losses, c='k', label='J1')
+
+    max_y_val = vnce_losses.max()
+    min_y_val = vnce_losses.min()
+
+    for time_id in e_step_ids:
+        time = times[time_id]
+        ax.plot((time, time), (min_y_val, max_y_val), c='0.5')
+    ax.set_xlabel('time (seconds)', fontsize=16)
+    ax.legend()
 
     return fig
 
@@ -227,9 +244,10 @@ def plot_rbm_parameters(params, titles, d, m, with_bias=False, figsize=(15, 25))
     return fig
 
 
-def get_reduced_thetas_and_times(thetas, times, time_step_size):
+def get_reduced_thetas_and_times(thetas, times, time_step_size, max_time=None):
     """reduce to #time_step_size results, evenly spaced on a log scale"""
-    log_times = np.exp(np.linspace(-3, np.log(times[-1]), num=time_step_size))
+    max_time = max_time if max_time else times[-1]
+    log_times = np.exp(np.linspace(-3, np.log(max_time), num=time_step_size))
     log_time_ids = np.unique(np.array([take_closest(times, t) for t in log_times]))
     reduced_times = deepcopy(times[log_time_ids])
     reduced_thetas = deepcopy(thetas[log_time_ids])

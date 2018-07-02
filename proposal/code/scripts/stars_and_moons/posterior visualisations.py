@@ -65,13 +65,13 @@ def plot_contours(ax, f, lim, num_contours, levels=None):
 
 
 def plot_prior(ax, z):
-    ax.set_title(r'Prior: $P(Z)$')
+    ax.set_title(r'$P(z): \mathcal{N}(0, \textbf{I})$', fontsize=8)
     sns.regplot(x=z[:, 0], y=z[:, 1], fit_reg=False, color='grey', ax=ax, scatter_kws={'s': 1})
     plot_contours(ax, lambda x: multivariate_normal.pdf(x, np.zeros(2), np.identity(2)), 10, 10)
 
 
 def plot_p_x(ax, x, x_landmarks):
-    ax.set_title(r'Marginal: $P(X)$')
+    ax.set_title(r'$P(x): \mathcal{N}(\textbf{w}, c \textbf{I})$', fontsize=8)
     sns.regplot(x=x[:, 0], y=x[:, 1], fit_reg=False, color='grey', ax=ax, scatter_kws={'s': 1})
     landmark_cols = ['red', 'green', 'blue']
     # landmark_cols = ['red', 'orange', 'green', 'blue', 'purple']
@@ -80,7 +80,10 @@ def plot_p_x(ax, x, x_landmarks):
 
 
 def plot_noise(ax, noise, sample_size, noise_num):
-    ax.set_title(r'Noise {}: $P_y(Y)$'.format(noise_num))
+    if noise_num == 1:
+        ax.set_title(r'$P_y^1(Y): \mathcal{N}(\bar{\textbf{x}}, \bar{\Sigma})$', fontsize=8)
+    if noise_num == 2:
+        ax.set_title(r'$P_y^2(Y): \mathcal{N}(0, 10 \textbf{I})$', fontsize=8)
     y = noise.sample(sample_size)
     sns.regplot(x=y[:, 0], y=y[:, 1], fit_reg=False, color='grey', ax=ax, scatter_kws={'s': 1})
     plot_contours(ax, lambda x: noise(x), 10, 10)
@@ -153,7 +156,7 @@ def plot_landmark_posteriors(x_landmarks,
         ax.set_aspect('equal')
 
     # add label to each row
-    rows = ['True', 'KL', 'Noise 1', 'Noise 2', 'Noise 2\n' + r'$\nu=100$']
+    rows = ['True', 'KL', 'Noise 1\n' + r'$\nu=1$', 'Noise 2\n' + r'$\nu=1$', 'Noise 2\n' + r'$\nu=100$']
     pad = 5  # in points
     for ax, row in zip(axs[:, 0], rows):
         ax.annotate(row, xy=(0, 0.5), xytext=(-ax.yaxis.labelpad - pad, 0), xycoords=ax.yaxis.label,
@@ -182,23 +185,24 @@ def print_landmark_prob_of_noise_class(model, noise, bad_noise, vnce_pos, bad_vn
 
 
 def main():
+    load_dir = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/experimental-results/stars-and-moons/'
     save_dir = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/experiments/stars-and-moons/'
 
-    model = pickle.load(open(os.path.join(save_dir, 'truncate=False_model.p'), 'rb'))
+    model = pickle.load(open(os.path.join(load_dir, 'truncate=False_model.p'), 'rb'))
     # model_trunc = pickle.load(open(os.path.join(save_dir, 'truncate=True_model.p'), 'rb'))
 
-    fe_pos = pickle.load(open(os.path.join(save_dir, 'FreeEnergyLoss_truncate_gaussian=False_good_noise_nu1_var_dist.p'), 'rb'))
-    vnce_pos = pickle.load(open(os.path.join(save_dir, 'VnceLoss_truncate_gaussian=False_good_noise_nu1_var_dist.p'), 'rb'))
-    bad_vnce_pos = pickle.load(open(os.path.join(save_dir, 'VnceLoss_truncate_gaussian=False_bad_noise_nu1_var_dist.p'), 'rb'))
-    bad_vnce_pos_nu50 = pickle.load(open(os.path.join(save_dir, 'VnceLoss_truncate_gaussian=False_bad_noise_nu50_var_dist.p'), 'rb'))
+    fe_pos = pickle.load(open(os.path.join(load_dir, 'FreeEnergyLoss_truncate_gaussian=False_good_noise_nu1_var_dist.p'), 'rb'))
+    vnce_pos = pickle.load(open(os.path.join(load_dir, 'VnceLoss_truncate_gaussian=False_good_noise_nu1_var_dist.p'), 'rb'))
+    bad_vnce_pos = pickle.load(open(os.path.join(load_dir, 'VnceLoss_truncate_gaussian=False_bad_noise_nu1_var_dist.p'), 'rb'))
+    bad_vnce_pos_nu50 = pickle.load(open(os.path.join(load_dir, 'VnceLoss_truncate_gaussian=False_bad_noise_nu50_var_dist.p'), 'rb'))
 
     # fe_pos_trunc = pickle.load(open(os.path.join(save_dir, 'FreeEnergyLoss_truncate_gaussian=True_good_noise_nu1_var_dist.p'), 'rb'))
     # vnce_pos_trunc = pickle.load(open(os.path.join(save_dir, 'VnceLoss_truncate_gaussian=True_good_noise_nu1_var_dist.p'), 'rb'))
     # bad_vnce_pos_trunc = pickle.load(open(os.path.join(save_dir, 'VnceLoss_truncate_gaussian=True_bad_noise_nu1_var_dist.p'), 'rb'))
     # bad_vnce_pos_nu50_trunc = pickle.load(open(os.path.join(save_dir, 'VnceLoss_truncate_gaussian=True_bad_noise_nu50_var_dist.p'), 'rb'))
 
-    noise = pickle.load(open(os.path.join(save_dir, 'good_noise.p'), 'rb'))
-    bad_noise = pickle.load(open(os.path.join(save_dir, 'bad_noise.p'), 'rb'))
+    noise = pickle.load(open(os.path.join(load_dir, 'good_noise.p'), 'rb'))
+    bad_noise = pickle.load(open(os.path.join(load_dir, 'bad_noise.p'), 'rb'))
 
     sample_size = 500
     Z, X = model.sample(sample_size)

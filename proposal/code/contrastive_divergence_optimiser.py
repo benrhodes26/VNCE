@@ -35,7 +35,7 @@ class CDOptimiser:
             - U is (n, d) array of data
         :param rng: random number generator
         """
-        self.phi = model
+        self.model = model
         self.thetas = []  # for storing values of parameters during optimisation
         self.times = []  # seconds spent to reach each iteration during optimisation
         if not rng:
@@ -79,7 +79,7 @@ class CDOptimiser:
             values of model parameters (theta) after each gradient step
         """
         # initialise parameters
-        self.phi.theta = deepcopy(theta0)
+        self.model.theta = deepcopy(theta0)
         self.thetas.append(deepcopy(theta0))
         self.times.append(time.time())
         n = X.shape[0]
@@ -89,24 +89,24 @@ class CDOptimiser:
             X = X[perm]
             for i in range(0, n, batch_size):
                 X_batch = X[i:i+batch_size]
-                Z, X_model, Z_model = self.phi.sample_for_contrastive_divergence(
+                Z, X_model, Z_model = self.model.sample_for_contrastive_divergence(
                     X_batch, num_iter=num_gibbs_steps)
 
-                data_grad = self.phi.grad_log_wrt_params(X_batch, Z)  # (len(theta), 1, n)
+                data_grad = self.model.grad_log_wrt_params(X_batch, Z)  # (len(theta), 1, n)
                 data_grad = np.mean(data_grad, axis=(1, 2))  # (len(theta), )
 
-                model_grad = self.phi.grad_log_wrt_params(X_model, Z_model)
+                model_grad = self.model.grad_log_wrt_params(X_model, Z_model)
                 model_grad = np.mean(model_grad, axis=(1, 2))  # (len(theta), )
 
                 grad = data_grad - model_grad  # (len(theta), )
-                self.phi.theta += learning_rate * grad
+                self.model.theta += learning_rate * grad
 
                 # save a result at start of learning
                 if i == 0 and j == 0:
-                    self.thetas.append(deepcopy(self.phi.theta))
+                    self.thetas.append(deepcopy(self.model.theta))
                     self.times.append(time.time())
 
-            self.thetas.append(deepcopy(self.phi.theta))
+            self.thetas.append(deepcopy(self.model.theta))
             self.times.append(time.time())
 
         self.thetas = np.array(self.thetas)
@@ -121,16 +121,16 @@ class CDOptimiser:
         NOTE: this method can only be applied to small models, where
         computing the partition function is not too costly
         """
-        theta = deepcopy(self.phi.theta)
+        theta = deepcopy(self.model.theta)
         if thetas is None:
             thetas = self.thetas
 
         av_log_likelihoods = np.zeros(len(thetas))
         for i in np.arange(0, len(thetas)):
-            self.phi.theta = deepcopy(thetas[i])
-            av_log_likelihoods[i] = average_log_likelihood(self.phi, X)
+            self.model.theta = deepcopy(thetas[i])
+            av_log_likelihoods[i] = average_log_likelihood(self.model, X)
 
-        self.phi.theta = theta  # reset theta to its original value
+        self.model.theta = theta  # reset theta to its original value
         return av_log_likelihoods
 
     def get_reduced_results(self, time_step_size):

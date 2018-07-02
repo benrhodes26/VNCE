@@ -810,9 +810,9 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         """Reset normalisation constant using current theta"""
         W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
         d, m = W.shape[0] - 1, W.shape[1] - 1
-        assert d*(2**m) <= 10**7, "Calculating the normalisation" \
+        assert d*(2**m) <= 10**9, "Calculating the normalisation" \
             "constant has O(d 2**m) cost. Assertion raised since d*2^m " \
-            "equal to {}, which exceeds the current limit of 10^7,".format(d*(2**m))
+            "equal to {}, which exceeds the current limit of 10^9,".format(d*(2**m))
 
         W_times_all_latents = self.get_z_marginalization_matrix(W)  # (d+1, 2**m)
         W_times_all_latents = np.exp(W_times_all_latents)
@@ -837,9 +837,9 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         """
         W = self.theta.reshape(self.W_shape)  # (d+1, m+1)
         d, m = W.shape[0] - 1, W.shape[1] - 1
-        assert d*(2**m) <= 10**7, "Calculating the normalisation" \
+        assert d*(2**m) <= 10**9, "Calculating the normalisation" \
             "constant has O(d 2**m) cost. Assertion raised since d*2^m " \
-            "equal to {}, which exceeds the current limit of 10^7,".format(d*(2**m))
+            "equal to {}, which exceeds the current limit of 10^9,".format(d*(2**m))
 
         phi_u = self.marginalised_over_z(U)  # (n, ), (d+1, 2**m)
 
