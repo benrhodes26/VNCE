@@ -3,6 +3,7 @@
 import numpy as np
 
 from abc import ABCMeta, abstractmethod
+from copy import deepcopy
 from numpy import random as rnd
 from pomegranate import BayesianNetwork
 from scipy.stats import norm, multivariate_normal
@@ -355,7 +356,7 @@ class StarsAndMoonsPosterior(Distribution):
         _, cov = self.get_mean_and_cov(U, outputs)  # (n, 2)
         return 1 + np.log(2*np.pi) + (0.5*np.log(np.product(cov, axis=1)))  # (n, )
 
-    def grad_of_entropy_wrt_nn_outputs(self, outputs):
+    def grad_log_wrt_nn_outputs(self, outputs, Z):
         grad_shape = outputs.shape  # (n, 2)
         grad = np.zeros(grad_shape)
 
@@ -363,6 +364,230 @@ class StarsAndMoonsPosterior(Distribution):
         grad[:, 2:] = 1
 
         return grad
+
+
+class MissingDataProductOfTruncNormsPosterior(Distribution):
+
+    def __init__(self, nn, data_dim, rng=None):
+        self.nn = nn
+        self.dim = data_dim
+        if rng:
+            self.rng = rng
+        else:
+            self.rng = rnd.RandomState(DEFAULT_SEED)
+
+    def __call__(self, Z, U, log=False, nn_outputs=None):
+        miss_mask = self.get_miss_mask(Z)  # (n, k)
+        mean, chol = self.get_mean_and_chol(U, miss_mask, nn_outputs)  # (n, k)  - cholesky of diagonal precision matrix
+        precision = chol**2
+        V = Z + U  # (nz, n, k)
+        truncation_mask = np.all(V > 0, axis=-1)  # (nz, n)
+
+        power = -(1/2) * precision * (V - mean)**2  # (nz, n, k)
+        log_norm_const_1 = (-1/2) * np.log(2 * np.pi) + np.log(chol)  # (n, k) - norm const for usual Gaussian
+        log_norm_const_2 = np.log(chol) - np.log(1 - norm.cdf(-mean * chol))  # (n, k) - norm const due to truncation
+        log_probs = power + log_norm_const_1 + log_norm_const_2  # (nz, n, k)
+
+        log_probs *= miss_mask  # mask out observed data
+        val = np.sum(log_probs, axis=-1)  # (nz, n)
+        if log:
+            val = truncation_mask * val + (1 - truncation_mask) * -15  # should be -infty, but -15 avoids numerical issues
+        else:
+            val = truncation_mask * np.exp(val)
+
+        return val
+
+    def grad_log_wrt_nn_outputs(self, nn_outputs, grad_z_wrt_nn_outputs, Z):
+        miss_mask = self.get_miss_mask(Z)  # (n, k)
+        mean, chol = self.get_mean_and_chol(U=None, miss_mask=miss_mask, nn_outputs=nn_outputs)  # (n, k)  - cholesky of diagonal precision matrix
+        precision = chol**2
+
+        grad_Z_wrt_nn_output1 = grad_z_wrt_nn_outputs[:, :, :self.mean_len]  # (nz, n, k) - grads wrt mean
+        grad_Z_wrt_nn_output2 = grad_z_wrt_nn_outputs[:, :, self.mean_len:]  # (nz, n, k) - grads wrt to np.log(cholesky)
+
+        grad_log_wrt_z = - precision * (Z - mean)  # (nz, n, k)
+        self.checkMask(grad_log_wrt_z, miss_mask)
+
+        grad_log_through_z_1 = np.transpose(grad_log_wrt_z * grad_Z_wrt_nn_output1, [2, 0, 1])  # (k, nz, n)
+        grad_log_through_z_2 = np.transpose(grad_log_wrt_z * grad_Z_wrt_nn_output2, [2, 0, 1])  # (k, nz, n)
+        grad_log_through_z = np.concatenate((grad_log_through_z_1, grad_log_through_z_2), axis=0)  # (len(nn_outputs), nz, n)
+
+        a = (2 * np.pi)**(-0.5) * chol * np.exp(-0.5 * precision * mean**2)  # (n, k)
+        b = chol * (1 / (1 - norm.cdf(-chol * mean)))
+        c = a * b * miss_mask
+
+        grad_log_wrt_nn_output1 = (0.5 * precision * (Z - mean)) - c  # (nz, n, k)
+        grad_log_wrt_nn_output2 = -2 + (precision * (Z - mean)**2) + (c * mean)  # (nz, n, k)
+        grad_log_wrt_nn_output1 *= miss_mask
+        grad_log_wrt_nn_output2 *= miss_mask
+
+        grad_log_wrt_nn_output1 = np.transpose(grad_log_wrt_nn_output1, [2, 0, 1])  # (k, nz, n)
+        grad_log_wrt_nn_output2 = np.transpose(grad_log_wrt_nn_output2, [2, 0, 1])  # (k, nz, n)
+        grad_log_wrt_nn_outputs = np.concatenate((grad_log_wrt_nn_output1, grad_log_wrt_nn_output2), axis=0)  # (len(nn_outputs), nz, n)
+
+        grad = grad_log_through_z + grad_log_wrt_nn_outputs  # (len(nn_outputs), nz, n)
+
+        return grad
+
+    def grad_of_Z_wrt_nn_outputs(self, nn_outputs, Z, E=None):
+        """gradient of Z w.r.t to the outputs of the neural network
+
+        :param outputs: array (n, len(nn_outputs))
+            outputs of neural net
+        :param E: array (nz, n, self.dim)
+            random variable to be transformed into Z (via reparam trick)
+        :return: array (nz, n, len(nn_outputs))
+            grad of each z_i w.r.t neural net output
+        """
+        miss_mask = self.get_miss_mask(Z)  # (nz, n, k)
+        grad_shape = Z.shape[:2] + (outputs.shape[1], )  # (nz, n, len(nn_outputs))
+        mean, chol = self.get_mean_and_chol(U=None, nn_outputs=nn_outputs)  # (n, k)  - cholesky of diagonal precision matrix
+
+        one_minus_E = (1 - E) * miss_mask
+        a = (norm.cdf(-mean * chol) * one_minus_E) + E
+        a = norm.ppf(a)   # (self.num_missing, )
+        b = 1 / norm.pdf(a)
+        c = norm.pdf(-mean * chol)
+
+        a *= miss_mask
+        b *= miss_mask
+        c *= miss_mask
+
+        grad_wrt_mean = -b * one_minus_E * c
+        grad_Z_wrt_log_chol = a + b * one_minus_E * c * mean * chol**2
+
+        self.checkMask(grad_wrt_mean, miss_mask)
+        self.checkMask(grad_Z_wrt_log_chol, miss_mask)
+
+        grad = np.zeros(grad_shape)
+        grad[:, :, :self.dim] = grad_wrt_mean  # (nz, n, k)
+        grad[:, :, self.dim:] = grad_Z_wrt_log_chol  # (nz, n, k)
+
+        return grad  # (nz, n, len(nn_outputs))
+
+    def sample(self, nz, U, miss_mask=None, nn_outputs=None):
+        if miss_mask is None:
+            miss_mask = np.zeros_like(U)
+        E = self.sample_E(nz, miss_mask, len(U))  # (nz, n, 2)
+        Z = self.get_Z_samples_from_E(nz, E, U, miss_mask, nn_outputs=nn_outputs)  # (nz, n, 2)
+        return Z
+
+    def sample_E(self, nz, miss_mask):
+        return self.rng.uniform(0, 1, size=(nz, ) + miss_mask.shape) * miss_mask
+
+    def get_Z_samples_from_E(self, nz, E, U, miss_mask, nn_outputs=None):
+        """Converts samples E from some simple base distribution to samples from posterior
+
+        This function is needed to apply the reparametrization trick. E is from a uniform distribution
+        and Z is from a product of truncated normals whose location & scale depend on a neural network with parameters alpha.
+
+        :param E: array (nz, n, k)
+            random variable to be transformed into Z (via reparam trick)
+        :param U: array (n, k)
+        """
+        mean, chol = self.get_mean_and_chol(U=U, miss_mask=miss_mask, outputs=nn_outputs)  # (n, k)  - cholesky of diagonal precision matrix
+        one_minus_E = (1 - E) * miss_mask  # (nz, n, k)
+        a = (norm.cdf(-mean * chol) * one_minus_E) + E  # (nz, n, k)
+        Z = norm.ppf(a)  # (nz, n, k)
+        a *= miss_mask  # (nz, n, k)
+        Z *= (1 / chol)  # check that division 0/0 is fine (if we get non-neg/0, then there is a bug in my masking)
+        Z += mean
+
+        checkMask(Z, miss_mask)
+        return Z  # (nz, n, k)
+
+    def get_mean_and_chol(self, U, miss_mask, nn_outputs=None):
+        """
+        :param U: array (n, k)
+        :return mean, cov: arrays (n, k)
+        """
+        if nn_outputs is None:
+            nn_outputs = self.nn.fprop(U)[-1]
+        mean, chol = nn_outputs[:, :self.dim], np.exp(nn_outputs[:, self.dim:])  # diagonal cholesky of precision
+        return mean * miss_mask, chol * miss_mask
+
+    def get_miss_mask(self, Z):
+        """ Get 2d array of missing data mask
+        :param Z: array (nz, n, k)
+        :return: array (n, k)
+        """
+        miss_mask = np.zeros_like(Z[0])
+        miss_mask[np.nonzero(Z[0])] = 1
+        return miss_mask
+
+    def checkMask(self, array, mask):
+        if array.ndim == 3:
+            # mask is 2d, but Z arrays are 3d due to multiple latents per visible
+            new_mask = np.ones_like(array)
+            new_mask *= mask
+        else:
+            new_mask = mask
+        return np.nonzero(array) == np.nonzero(new_mask)
+
+
+class MissingDataProductOfTruncNormNoise(Distribution):
+
+    def __init__(self, mean, chol, rng=None):
+        self.mean_len = len(mean)
+        if rng:
+            self.rng = rng
+        else:
+            self.rng = rnd.RandomState(DEFAULT_SEED)
+
+        # cholesky of precision with log of diagonal elements (to enforce positivity)
+        alpha = np.concatenate((mean.reshape(-1), chol.reshape(-1)))
+        super().__init__(alpha, rng=rng)
+
+    def __call__(self, U, log=False, nn_outputs=None):
+        mean, chol = self.get_mean_and_chol()  # (n, k)
+        precision = chol**2
+        truncation_mask = np.all(U > 0, axis=-1)  # (nz, n)
+
+        power = -(1/2) * precision * (U - mean)**2  # (nz, n, k)
+        log_norm_const_1 = (-1/2) * np.log(2 * np.pi) + np.log(chol)  # (n, k) - norm const for usual Gaussian
+        log_norm_const_2 = np.log(chol) - np.log(1 - norm.cdf(-mean * chol))  # (n, k) - norm const due to truncation
+        log_probs = power + log_norm_const_1 + log_norm_const_2  # (nz, n, k)
+
+        val = np.sum(log_probs, axis=-1)  # (nz, n)
+        if log:
+            val = truncation_mask * val + (1 - truncation_mask) * -15  # should be -infty, but -15 avoids numerical issues
+        else:
+            val = truncation_mask * np.exp(val)
+
+        return val
+
+    def sample(self, n):
+        E = self.sample_E(n)  # (n, k)
+        Z = self.get_Z_samples_from_E(E)  # (n, k)
+        return Z
+
+    def sample_E(self, n):
+        return self.rng.uniform(0, 1, size=(n, self.mean_len))
+
+    def get_Z_samples_from_E(self, E):
+        """Converts samples E from some simple base distribution to samples from posterior
+
+        This function is needed to apply the reparametrization trick. E is from a uniform distribution
+        and U is from a product of truncated normals whose location & scale depend on a neural network with parameters alpha.
+
+        :param E: array (nz, n, k)
+            random variable to be transformed into U (via reparam trick)
+        :param U: array (n, k)
+        """
+        mean, chol = self.get_mean_and_chol()  # (n, k)  - cholesky of diagonal precision matrix
+        a = (norm.cdf(-mean * chol) * (1 - E)) + E
+        U = norm.ppf(a)  # (n, k)
+        U *= (1 / chol)
+        U += mean
+        return U  # (n, k)
+
+    def get_mean_and_chol(self):
+        """
+        :param U: array (n, k)
+        :return mean, cov: arrays (n, k)
+        """
+        mean, chol = self.alpha[:self.mean_len], np.exp(self.alpha[self.mean_len:])  # diagonal cholesky of precision
+        return mean, chol
 
 
 # noinspection PyPep8Naming,PyMissingConstructor

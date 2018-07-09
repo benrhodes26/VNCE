@@ -1067,7 +1067,7 @@ class StarsAndMoonsModel(LatentVarModel):
         pass
 
     def grad_log_wrt_nn_outputs(self, U, Z, grad_z_wrt_nn_outputs):
-        """ Evaluate gradient of model w.r.t the variational parameters
+        """ Evaluate gradient of log model w.r.t the output of the variational inference network
 
         Note that the model depends on the variational parameters because we are using
         the reparameterisation trick.
@@ -1076,7 +1076,7 @@ class StarsAndMoonsModel(LatentVarModel):
              either data or noise for NCE
         :param Z: (nz, n, 2) or (n, 2)
             latent data
-        :param grad_z_wrt_nn_outputs: array (len(alpha), nz, n, 2)
+        :param grad_z_wrt_nn_outputs: array (4, nz, n, 2)
         :return grad: array (4, nz, n)
         """
         grad_Z = grad_z_wrt_nn_outputs  # (4, nz, n, 2)
@@ -1114,3 +1114,163 @@ class StarsAndMoonsModel(LatentVarModel):
             noise = np.abs(noise)
 
         return z, z1_z2 + noise  # (n, 2)
+
+
+class MissingDataUnnormalisedTruncNorm(LatentVarModel):
+
+    def __init__(self, mean, chol, rng=None):
+        self.mean_len = len(mean)
+
+        # cholesky of precision with log of diagonal elements (to enforce positivity)
+        theta = np.concatenate((mean.reshape(-1), chol.reshape(-1)))
+        super().__init__(theta, rng=rng)
+
+    def get_mean_and_chol(self):
+        """get mean and lower triangular cholesky of the precision matrix"""
+        mean, chol = self.theta[:self.mean_len], self.theta[self.mean_len:]
+
+        # lower-triangular cholesky decomposition of the precision
+        chol_mat = chol.reshape(self.mean_len, self.mean_len)
+
+        # exp the diagonal, to enforce positivity
+        idiag = np.diag_indices_from(chol_mat)
+        chol_mat[idiag] = np.exp(chol_mat[idiag])
+
+        return mean, chol_mat, chol_mat[idiag]
+
+    def __call__(self, U, Z, log=False):
+        """Evaluate unnormalised model
+
+        :param U: array (n, k)
+            observed data (elements set to 0 are missing)
+        :param Z: array (nz, n, k)
+            filled-in missing data (elements set to 0 are not missing)
+        :param log: boolean
+            if True, return value of logphi, where phi is the unnormalised model
+        """
+        V = U + Z  # (nz, n, k) - fill in the missing data
+        mean, chol, chol_diag = self.get_mean_and_chol()
+        truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)
+
+        P = np.dot(chol, chol.T)  # (k, k) - precision matrix
+        VP = np.dot(V, P)  # (nz, n, k)
+        power = -0.5 * np.sum(VP * V, axis=-1)  # (nz, n)
+        log_norm_const = (-self.mean_len / 2) * np.log(2 * np.pi) + np.sum(np.log(chol_diag))
+
+        val = log_norm_const + power
+        if log:
+            val = truncation_mask * val + (1 - truncation_mask) * -15  # should be -infty, but -15 avoids numerical issues
+        else:
+            val = truncation_mask * np.exp(val)
+
+        return val  # (nz, n)
+
+    def grad_log_wrt_params(self, U, Z):
+        """ Nabla_theta(log(phi(x,z; theta))) where phi is the unnormalised model
+
+        :param U: array (n, d)
+             either data or noise for NCE
+        :param Z: (nz, n, m) or (n, m)
+            m-dimensional latent variable samples. nz per datapoint in U.
+        :return grad: array (len(theta), nz, n)
+        """
+        V = U + Z  # (nz, n, k) - fill in the missing data
+        mean, chol, chol_diag = self.get_mean_and_chol()
+        V_centred = V - mean
+        P = np.dot(chol, chol.T)  # (k, k) - precision matrix
+        truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)
+
+        grad_wrt_to_mean = np.dot(V_centred, P.T)  # (nz, n, k)
+        grad_wrt_to_mean = np.transpose(grad_wrt_to_mean, [2, 0, 1])  # (k, nz, n)
+
+        V1 = np.repeat(V_centred, self.mean_len, axis=-1)  # (nz, n, k*k)
+        V2 = np.tile(V_centred, self.mean_len)  # (nz, n, k*k)
+        v3_shape = Z.shape[:2] + (self.mean_len, self.mean_len)
+        V3 = (V1 * V2).reshape(v3_shape)  # (nz, n, k, k)
+        V4 = np.dot(V3, chol)  # (nz, n, k, k)
+        V4 *= np.diag(chol_diag)  # (nz, n, k, k)
+
+        grad_wrt_chol = (np.identiy(v3_shape) - V4).reshape(Z.shape[:2], -1)  # (nz, n, k*k)
+        grad_wrt_chol = np.transpose(grad_wrt_chol, [2, 0, 1])  # (k*k, nz, n)
+
+        grad = np.concatenate((grad_wrt_to_mean, grad_wrt_chol), axis=0)  # (k + k*k, nz, n)
+        grad *= truncation_mask  # truncate
+
+        return grad
+
+    def grad_log_wrt_nn_outputs(self, U, Z, grad_z_wrt_nn_outputs):
+        """ Evaluate gradient of log model w.r.t the output of the variational inference network
+
+        Note that the model depends on the variational parameters because we are using
+        the reparameterisation trick.
+
+        :param U: array (n, k)
+             either data or noise for NCE
+        :param Z: (nz, n, k) or (n, k)
+            latent data
+        :param grad_z_wrt_nn_outputs: array (len(nn_outputs), nz, n, k)
+        :return grad: array (len(nn_outputs), nz, n)
+        """
+        mean, chol, chol_diag = self.get_mean_and_chol()
+        V = U + Z  # (nz, n, k) - fill in the missing data
+        miss_mask = np.zeros_like(Z)
+        miss_mask[np.nonzero(Z)] = 1
+        truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)
+
+        grad_Z_wrt_nn_output1 = grad_z_wrt_nn_outputs[:, :, :self.mean_len]  # (nz, n, k) - grads wrt mean
+        grad_Z_wrt_nn_output2 = grad_z_wrt_nn_outputs[:, :, self.mean_len:]  # (nz, n, k) - grads wrt to np.log(cholesky)
+
+        P = np.dot(chol, chol.T)  # (k, k) - precision matrix
+        V_centred = V - mean
+        grad_log_model_wrt_z = - np.dot(V_centred, P.T)  # (nz, n, k)
+        grad_log_model_wrt_z *= miss_mask
+
+        grad_log_model_wrt_nn_output1 = np.transpose(grad_Z_wrt_nn_output1 * grad_log_model_wrt_z, [2, 0, 1])  # (k, nz, n)
+        grad_log_model_wrt_nn_output2 = np.transpose(grad_Z_wrt_nn_output2 * grad_log_model_wrt_z, [2, 0, 1])  # (k, nz, n)
+        grad_log_model_wrt_nn_outputs = np.concatenate((grad_log_model_wrt_nn_output1, grad_log_model_wrt_nn_output2), axis=0)  # (len(nn_outputs), nz, n)
+        grad_log_model_wrt_nn_outputs *= truncation_mask  # Since Gaussian is truncated
+
+        return grad_log_model_wrt_nn_outputs
+
+    def sample(self, n):
+        """ Sample from a truncated multivariate normal with rejection sampling with uniform proposal (note: this won't scale)
+        :param n: sample size
+        """
+        mean, chol, chol_diag = self.get_mean_and_chol()
+        stds = (1 / chol_diag)
+        low_proposal = np.maximum(mean - (5 * stds), 0)
+        high_proposal = mean + (5 * stds)
+        k = len(mean)
+
+        sample = np.zeros((n, k))
+        total_n_accepted = 0
+        expected_num_proposals_per_accept = (25 / (2 * np.pi))**(k/2)
+        proposal_size = int(1.5 * n * expected_num_proposals_per_accept)
+        if proposal_size > 10**8:
+            print('WARNING: GENERATING THE MAXIMUM NUMBER (10**8) OF SAMPLES FROM THE PROPOSAL DISTRIBUTION INSIDE A WHILE LOOP,'
+                  ' AS PART OF THE ACCEPT-REJECT ALGORITHM. THIS COULD TAKE A VERY LONG TIME. THE DIMENSIONALITY OF YOUR DATA MAY'
+                  ' BE TOO HIGH')
+            proposal_size = 10**8
+
+        while total_n_accepted < n:
+            print('total num accepted: {}'.format(total_n_accepted))
+            proposal = self.rng.uniform(low_proposal, high_proposal, (proposal_size, k))  # (proposal_size, k)
+            V = proposal - mean
+
+            P = np.dot(chol, chol.T)  # (k, k) - precision matrix
+            VP = np.dot(V, P)  # (proposal_size, k)
+            acceptance_prob = np.exp(-0.5 * np.sum(VP * V, axis=-1))  # (proposal_size, )
+            # print('acceptance prob: {}'.format(acceptance_prob))
+            accept = self.rng.uniform(0, 1, proposal_size) < acceptance_prob
+            # print('binary acceptance variable: {}'.format(accept))
+            accepted = proposal[accept]
+
+            n_accepted = len(accepted)
+            if total_n_accepted + n_accepted >= n:
+                remain = n - total_n_accepted
+                sample[total_n_accepted:] = accepted[:remain]
+            else:
+                sample[total_n_accepted: total_n_accepted+n_accepted] = accepted
+            total_n_accepted += n_accepted
+
+        return sample

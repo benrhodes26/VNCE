@@ -113,7 +113,7 @@ class Optimiser(object):
         """Trains a model for a set number of epochs.
 
         Args:
-            num_epochs: Number of epochs (complete passes through trainin
+            num_epochs: Number of epochs (complete passes through training
                 dataset) to train for.
             stats_interval: Training statistics will be recorded and logged
                 every `stats_interval` epochs.

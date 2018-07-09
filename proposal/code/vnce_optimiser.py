@@ -230,16 +230,11 @@ class SgdEmStep:
         """
         for _ in range(self.num_batches_per_em_step):
             if self.do_m_step:
-                grad = loss_function.grad_wrt_theta(next_minibatch=True)
-                current_theta = loss_function.get_theta()
-                new_param = current_theta + self.learning_rate * grad
-                loss_function.set_theta(new_param)
+                loss_function.take_grad_step_wrt_theta(self.learning_rate)
+                new_param = loss_function.get_theta()
             else:
-                grad = loss_function.grad_wrt_alpha(next_minibatch=True)
-                current_alpha = loss_function.get_alpha()
-                new_param = current_alpha + self.learning_rate * grad
-                loss_function.set_alpha(new_param)
-
+                loss_function.take_grad_step_wrt_alpha(self.learning_rate)
+                new_param = loss_function.get_alpha()
         loss = loss_function() if self.track_loss else 0
 
         return [new_param], [loss], [time.time()]
@@ -370,8 +365,14 @@ class MonteCarloVnceLoss:
                  variational_noise,
                  noise_to_data_ratio,
                  num_latent_per_data,
+                 use_neural_model=False,
+                 use_neural_variational_noise=False,
+                 missing_data_mask=None,
                  use_minibatches=False,
                  batch_size=None,
+                 use_reparam_trick=False,
+                 use_score_function=False,
+                 use_rejection_reparam_trick=False,
                  separate_terms=False,
                  use_importance_sampling=True,
                  eps=1e-7,
@@ -392,51 +393,43 @@ class MonteCarloVnceLoss:
         self.variational_noise = variational_noise
         self.nu = noise_to_data_ratio
         self.nz = num_latent_per_data
+        self.use_neural_model = use_neural_model
+        self.use_neural_variational_noise = use_neural_variational_noise
+        self.use_reparam_trick = use_reparam_trick
+        self.use_score_function = use_score_function
+        self.use_rejection_reparam_trick = use_rejection_reparam_trick
         self.separate_terms = separate_terms
         self.use_importance_sampling = use_importance_sampling
         self.eps = eps
+        self.miss_mask = missing_data_mask
+        if missing_data_mask is not None:
+            self.data = data[missing_data_mask]
 
         self.use_minibatches = use_minibatches
-        if use_minibatches:
-            self.X = None
-            self.Y = None
-        else:
-            self.X = data
-            self.Y = noise_samples
+        self.X = None
+        self.Y = None
+        self.X_mask = None  # missing data mask
+        if not self.use_minibatches:
+            self.X = self.data
+            self.Y = self.noise_samples
+            if missing_data_mask is not None:
+                self.X_mask = self.missing_data_mask
+
         self.batch_size = batch_size
         if batch_size:
-            self.batches_per_epoch = int(len(data) / batch_size)
+            self.batches_per_epoch = int(len(self.data) / self.batch_size)
         self.current_batch_id = 0
         self.current_epoch = 0
 
+        self.E_ZX = None  # samples from a simple 'base' distribution needed if using reparameterisation trick
         self.ZX = None
         self.ZY = None
         self.resample_from_variational_noise = True
         self.current_loss = None
-
         if rng:
             self.rng = rng
         else:
             self.rng = np.random.RandomState(DEFAULT_SEED)
-
-    def get_theta(self):
-        return deepcopy(self.model.theta)
-
-    def get_alpha(self):
-        return deepcopy(self.variational_noise.alpha)
-
-    def get_current_loss(self, get_float=False):
-        loss = deepcopy(self.current_loss)
-        if get_float:
-            loss = np.sum(loss) if isinstance(loss, np.ndarray) else loss
-        return loss
-
-    def set_theta(self, new_theta):
-        self.model.theta = deepcopy(new_theta)
-
-    def set_alpha(self, new_alpha):
-        self.variational_noise.alpha = deepcopy(new_alpha)
-        self.resample_from_variational_noise = True
 
     def __call__(self, next_minibatch=False):
         """Return Monte Carlo estimate of Lower bound of NCE objective
@@ -456,6 +449,60 @@ class MonteCarloVnceLoss:
         self.current_loss = val
 
         return val
+
+    def grad_wrt_theta(self, next_minibatch=False):
+        """Computes grad of loss w.r.t theta using Monte-Carlo
+
+        :return grad: array of shape (len(model.theta), )
+        """
+        if next_minibatch and self.use_minibatches:
+            self.next_minibatch()
+        self.resample_latents_if_necessary()
+
+        first_term = self.first_term_of_grad_wrt_theta()
+        second_term = self.second_term_grad_wrt_theta()
+        grad = first_term + second_term
+
+        # If theta is 1-dimensional, grad will be a float.
+        if isinstance(grad, float):
+            grad = np.array(grad)
+        validate_shape(grad.shape, self.model.theta_shape)
+
+        return grad
+
+    def grad_wrt_model_nn_params(self, next_minibatch=False):
+        """ returns gradient of parameters of neural network parametrising the model
+        :param next_minibatch:
+        :return:
+        """
+        raise NotImplementedError
+
+    def grad_wrt_alpha(self, next_minibatch=False):
+        raise NotImplementedError
+
+    def grad_wrt_variational_noise_nn_params(self, next_minibatch=False):
+        """ returns gradient of parameters of neural network parametrising the variational distribution
+        :param next_minibatch:
+        :return:
+        """
+        if next_minibatch and self.use_minibatches:
+            self.next_minibatch()
+        self.resample_latents_if_necessary()
+
+        activations = self.variational_noise.nn.fprop(self.X)
+        nn_outputs = activations[-1]
+        if self.use_reparam_trick:
+            grad_wrt_nn_outputs = self.reparam_trick_grad_wrt_nn_output(nn_outputs)
+        elif self.use_score_function:
+            grad_wrt_nn_outputs = self.score_function_grad_wrt_nn_output(nn_outputs)
+        elif self.use_rejection_reparam_trick:
+            grad_wrt_nn_outputs = self.rejection_reparam_trick_grad_wrt_nn_output(nn_outputs)
+        else:
+            print('No method has been specified to backpropagate through stochastic nodes in the loss function.'
+                  'Set one of the following to True: "use_reparam_trick", "use_score_function" or "use_rejection_reparam_trick"')
+
+        grads_wrt_params = self.variational_noise.nn.grads_wrt_params(activations, grad_wrt_nn_outputs)
+        return grads_wrt_params
 
     def first_term_of_loss(self):
         nu = self.nu
@@ -520,38 +567,18 @@ class MonteCarloVnceLoss:
 
         return val
 
-    def grad_wrt_theta(self, next_minibatch=False):
-        """Computes grad of loss w.r.t theta using Monte-Carlo
-
-        :return grad: array of shape (len(model.theta), )
-        """
-        if next_minibatch and self.use_minibatches:
-            self.next_minibatch()
-        self.resample_latents_if_necessary()
-
-        first_term = self.first_term_of_grad()
-        second_term = self.second_term_grad()
-        grad = first_term + second_term
-
-        # If theta is 1-dimensional, grad will be a float.
-        if isinstance(grad, float):
-            grad = np.array(grad)
-        validate_shape(grad.shape, self.model.theta_shape)
-
-        return grad
-
-    def first_term_of_grad(self):
+    def first_term_of_grad_wrt_theta(self):
         h_x = self.h(self.X, self.ZX)
         a0 = (h_x > 0) * (1 / (1 + ((1 / self.nu) * np.exp(h_x))))
         a1 = (h_x < 0) * (np.exp(-h_x) / ((1 / self.nu) + np.exp(-h_x)))
-        a = a0 + a1
+        a = a0 + a1  # (nz, n)
 
         gradX = self.model.grad_log_wrt_params(self.X, self.ZX)  # (len(theta), nz, n)
         first_term = np.mean(gradX * a, axis=(1, 2))  # (len(theta), )
 
         return first_term
 
-    def second_term_grad(self):
+    def second_term_grad_wrt_theta(self):
 
         if self.use_importance_sampling:
             gradY = self.model.grad_log_wrt_params(self.Y, self.ZY)  # (len(theta), nz, n)
@@ -571,18 +598,72 @@ class MonteCarloVnceLoss:
         """Return array (n, )"""
         return 1 + ((1/self.nu) * np.mean(np.exp(self.h(U, Z)), axis=0))
 
-    def grad_wrt_alpha(self):
+    def reparam_trick_grad_wrt_nn_output(self, nn_outputs, separate_terms=False):
+        """ grad of VNCE loss w.r.t to variational parameters (belonging to a neural network)
+        :param nn_outputs: array
+            output of a neural network parametrising the variational distribution
+        :param separate_terms: boolean
+            if True, return separate terms that can be reused in self.rejection_reparam_trick_grad_wrt_nn_output
+        :return: array (n, nn_output_dim)
+        """
+        X, Z = self.X, self.ZX
+        grad_z_wrt_nn_outputs = self.variational_noise.grad_of_Z_wrt_nn_outputs(nn_outputs=nn_outputs, Z=Z, E=self.E_ZX)  # (output_dim, nz, n, m)
+        grad_log_model = self.model.grad_log_wrt_nn_outputs(U=X, Z=Z, grad_z_wrt_nn_outputs=grad_z_wrt_nn_outputs)  # (output_dim, nz, n)
+        grad_log_var_dist = self.variational_noise.grad_log_wrt_nn_outputs(outputs=nn_outputs, grad_z_wrt_nn_outputs=grad_z_wrt_nn_outputs, Z=Z)  # (n, output_dim)
+
+        joint_noise = (self.nu * self.noise(X) * self.variational_noise(Z, X))
+        a = joint_noise / (self.model(X, Z) + joint_noise)  # (nz, n)
+
+        term1 = np.mean(a * grad_log_model, axis=1).T  # (n, output_dim)
+        term2 = (np.mean(a, axis=0) * grad_log_var_dist.T).T  # (n, output_dim)
+
+        if separate_terms:
+            return term1 + term2, a, grad_log_model, grad_log_var_dist
+        else:
+            return term1 + term2
+
+    def score_function_grad_wrt_nn_output(self, nn_outputs):
+        print('The score function grad for VNCE can be derived, but we have yet to implement it')
         raise NotImplementedError
+
+    def rejection_reparam_trick_grad_wrt_nn_output(self, nn_outputs):
+        reparam_grad, a, _, grad_log_var_dist = self.reparam_trick_grad_wrt_nn_output(nn_outputs, separate_terms=True)  # (n, nn_output_dim)
+        grad_log_proposal = self.variational_noise.grad_log_proposal(nn_ouputs)  # (output_dim, nz, n)
+
+        score_function_term = np.mean((grad_log_var_dist - grad_log_proposal) * np.log(a), axis=1).T  # (n, output_dim)
+
+        return reparam_grad + score_function_term  # (n, output_dim)
+
+    def take_grad_step_wrt_theta(self, learning_rate):
+        if self.use_neural_model:
+            raise NotImplementedError
+        else:
+            grad = self.grad_wrt_theta(next_minibatch=True)
+            current_theta = self.get_theta()
+            new_param = current_theta + learning_rate * grad
+            self.set_theta(new_param)
+
+    def take_grad_step_wrt_alpha(self, learning_rate):
+        if self.use_neural_variational_noise:
+            grad_wrt_nn_params = self.grad_wrt_variational_noise_nn_params(next_minibatch=True)
+            for param, grad in zip(self.variational_noise.nn.params, grad_wrt_nn_params):
+                param += self.learning_rate * grad
+        else:
+            grad = self.grad_wrt_alpha(next_minibatch=True)
+            current_alpha = self.get_alpha()
+            new_param = current_alpha + learning_rate * grad
+            self.set_alpha(new_param)
 
     def next_minibatch(self):
         batch_start = self.current_batch_id * self.batch_size
         batch_slice = slice(batch_start, batch_start + self.batch_size)
-
         noise_batch_start = int(batch_start * self.nu)
         noise_batch_slice = slice(noise_batch_start, noise_batch_start + int(self.batch_size * self.nu))
 
         self.X = self.data[batch_slice]
         self.Y = self.noise_samples[noise_batch_slice]
+        if self.miss_mask is not None:
+            self.X_mask = self.miss_mask[batch_slice]
         self.resample_from_variational_noise = True
 
         self.current_batch_id += 1
@@ -600,9 +681,40 @@ class MonteCarloVnceLoss:
 
     def resample_latents_if_necessary(self):
         if (self.ZX is None) or (self.ZY is None) or self.resample_from_variational_noise:
-            self.ZX = self.variational_noise.sample(self.nz, self.X)
+            if self.use_reparam_trick:
+                self.E_ZX = self.variational_noise.sample_E(self.nz, self.X_mask)  # samples from the 'base' distribution when using reparameterisation trick
+                self.ZX = self.variational_noise.get_Z_samples_from_E(self.nz, self.E_ZX, self.X, self.X_mask)
+            else:
+                self.ZX = self.variational_noise.sample(self.nz, self.X, self.X_mask)
             self.ZY = self.variational_noise.sample(self.nz, self.Y)
             self.resample_from_variational_noise = False
+
+    def get_theta(self):
+        return deepcopy(self.model.theta)
+
+    def get_alpha(self):
+        if self.use_neural_variational_noise:
+            alpha = deepcopy(self.variational_noise.nn.params)
+        else:
+            alpha = deepcopy(self.variational_noise.alpha)
+
+        return alpha
+
+    def get_current_loss(self, get_float=False):
+        loss = deepcopy(self.current_loss)
+        if get_float:
+            loss = np.sum(loss) if isinstance(loss, np.ndarray) else loss
+        return loss
+
+    def set_theta(self, new_theta):
+        self.model.theta = deepcopy(new_theta)
+
+    def set_alpha(self, new_alpha):
+        if self.use_neural_variational_noise:
+            self.variational_noise.nn.params = new_alpha
+        else:
+            self.variational_noise.alpha = deepcopy(new_alpha)
+        self.resample_from_variational_noise = True
 
     def __repr__(self):
         return "MonteCarloVnceLoss"
@@ -840,6 +952,12 @@ class AdaptiveMonteCarloVnceLoss:
 
     def grad_wrt_alpha(self):
         raise NotImplementedError
+
+    def take_grad_step_wrt_theta(self, learning_rate):
+        grad = self.grad_wrt_theta(next_minibatch=True)
+        current_theta = self.get_theta()
+        new_param = current_theta + learning_rate * grad
+        self.set_theta(new_param)
 
     def next_minibatch(self):
         batch_start = self.current_batch_id * self.batch_size

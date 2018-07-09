@@ -119,15 +119,15 @@ if args.which_dataset == 'synthetic':
 
     # generate synthetic training and test sets
     true_data_dist = RestrictedBoltzmannMachine(true_theta, rng=rng)
-    X, Z = true_data_dist.sample(n, num_iter=args.num_gibbs_steps)
+    X_train, Z = true_data_dist.sample(n, num_iter=args.num_gibbs_steps)
     X_test, _ = true_data_dist.sample(n, num_iter=args.num_gibbs_steps)
-    X_mean = np.mean(X, axis=0)
+    X_mean = np.mean(X_train, axis=0)
 else:
     loaded_data = np.load(os.path.join(args.data_dir, args.which_dataset + '.npz'))
-    X = loaded_data['train']
+    X_train = loaded_data['train']
     X_test = loaded_data['test']
-    X_mean = np.mean(X, axis=0)
-    n, d = X.shape
+    X_mean = np.mean(X_train, axis=0)
+    n, d = X_train.shape
 
     if args.which_dataset[:4] == 'usps' and d <= 12:
         # Load empirical dist, which which treat as ground truth (this is reasonable in low dimensions)
@@ -171,7 +171,7 @@ init_model = RestrictedBoltzmannMachine(deepcopy(vnce_theta0), rng=rng)  # rbm w
 if args.noise == 'marginal':
     noise_dist = MultivariateBernoulliNoise(X_mean, rng=rng)
 elif args.noise == 'chow_liu':
-    noise_dist = ChowLiuTree(X, rng=rng)
+    noise_dist = ChowLiuTree(X_train, rng=rng)
 
 # generate noise
 Y = noise_dist.sample(int(n * args.nu))
@@ -190,7 +190,7 @@ if args.loss == 'MonteCarloVnceLoss':
     var_dist = RBMLatentPosterior(vnce_theta0, rng=rng)
 
     vnce_loss_function = MonteCarloVnceLoss(model=model,
-                                            data=X,
+                                            data=X_train,
                                             noise=noise_dist,
                                             noise_samples=Y,
                                             variational_noise=var_dist,
@@ -207,7 +207,7 @@ elif args.loss == 'AdaptiveMonteCarloVnceLoss':
     variational_noise = RestrictedBoltzmannMachine(deepcopy(vnce_theta0), rng=rng)
 
     vnce_loss_function = AdaptiveMonteCarloVnceLoss(model=model,
-                                                    data=X,
+                                                    data=X_train,
                                                     variational_noise=variational_noise,
                                                     noise_to_data_ratio=args.nu,
                                                     num_latent_per_data=args.nz,
@@ -252,7 +252,7 @@ optimiser.fit(loss_function=vnce_loss_function,
 print('finished!')
 print('starting cd optimisation...')
 # perform contrastive divergence optimisation
-_ = cd_optimiser.fit(X=X,
+_ = cd_optimiser.fit(X=X_train,
                      theta0=cd_theta0.reshape(-1),
                      num_gibbs_steps=args.cd_num_steps,
                      learning_rate=args.cd_learn_rate,
@@ -260,7 +260,7 @@ _ = cd_optimiser.fit(X=X,
                      num_epochs=args.cd_num_epochs)
 print('finished!')
 print('starting nce optimisation...')
-_ = nce_optimiser.fit(X=X,
+_ = nce_optimiser.fit(X=X_train,
                       theta0=nce_theta0.reshape(-1),
                       opt_method=args.nce_opt_method,
                       maxiter=args.maxiter_nce,
@@ -283,7 +283,7 @@ save_fig(vnce_plot, save_dir, 'vnce_loss')
 nce_losses_for_vnce_params = None
 J_plot = None
 if args.separate_terms:
-    nce_losses_for_vnce_params = get_nce_loss_for_vnce_params(X,
+    nce_losses_for_vnce_params = get_nce_loss_for_vnce_params(X_train,
                                                               nce_optimiser,
                                                               optimiser,
                                                               separate_terms=args.separate_terms)
@@ -300,9 +300,13 @@ reduced_nce_thetas, reduced_nce_times = get_reduced_thetas_and_times(nce_optimis
 
 # calculate average log-likelihood at each iteration for both models on test set
 print('calculating log-likelihoods...')
-av_log_like_vnce = optimiser.av_log_like_for_each_iter(X_test, loss_function=vnce_loss_function, thetas=reduced_vnce_thetas)
-av_log_like_cd = cd_optimiser.av_log_like_for_each_iter(X_test, thetas=reduced_cd_thetas)
-av_log_like_nce = nce_optimiser.av_log_like_for_each_iter(X_test, thetas=reduced_nce_thetas)
+av_log_like_vnce_train = get_av_log_like(reduced_vnce_thetas, init_model, X_train)
+av_log_like_vnce_test = get_av_log_like(reduced_vnce_thetas, init_model, X_test)
+av_log_like_cd_train = get_av_log_like(reduced_cd_thetas, init_model, X_train)
+av_log_like_cd_test = get_av_log_like(reduced_cd_thetas, init_model, X_test)
+av_log_like_nce_train = get_av_log_like(reduced_nce_thetas, init_model, X_train)
+av_log_like_nce_test = get_av_log_like(reduced_nce_thetas, init_model, X_test)
+init_model.theta = vnce_theta0.reshape(-1)
 print('finished!')
 
 # calculate average log-likelihood of empirical, initial & noise distributions on test set, for comparison
@@ -313,18 +317,19 @@ if args.which_dataset[:4] == 'usps' and true_data_dist:
 elif args.which_dataset == 'synthetic':
     true_log_like = average_log_likelihood(true_data_dist, X_test)
 
-training_curves = [[reduced_vnce_times, av_log_like_vnce, 'vnce'],
-                   [reduced_cd_times, av_log_like_cd, 'cd'],
-                   [reduced_nce_times, av_log_like_nce, 'nce']]
-static_lines = [[init_log_like, 'initial'],
-                [noise_log_like, 'noise']]
+train_curves = [[reduced_vnce_times, av_log_like_vnce_train, 'vnce', 'blue'],
+                [reduced_cd_times, av_log_like_cd_train, 'cd', 'red'],
+                [reduced_nce_times, av_log_like_nce_train, 'nce', 'green']]
+test_curves = [[reduced_vnce_times, av_log_like_vnce_test, 'vnce', 'blue'],
+               [reduced_cd_times, av_log_like_cd_test, 'cd', 'red'],
+               [reduced_nce_times, av_log_like_nce_test, 'nce', 'green']]
+static_lines = [[init_log_like, 'initial'], [noise_log_like, 'noise']]
 if true_data_dist:
     static_lines.append([true_log_like, 'empirical'])
 
 # plot log-likelihood during training
-like_training_plot = plot_log_likelihood_training_curves(training_curves, static_lines)
-like_training_plot.gca().set_ylim((noise_log_like - 0.5, av_log_like_cd.max() + 0.3))
-like_training_plot.savefig('{}/likelihood-optimisation-curve.pdf'.format(save_dir))
+plot_log_likelihood_learning_curves(train_curves, static_lines, save_dir, file_name='train')
+plot_log_likelihood_learning_curves(test_curves, static_lines, save_dir, file_name='test')
 
 # plot rbm weights for each model (including ground truth and random initialisation)
 params = [model.theta, cd_model.theta, init_model.theta]
@@ -354,7 +359,6 @@ with open(os.path.join(save_dir, "config.txt"), 'w') as f:
         f.write("{}: {}\n".format(key, value))
 
 pickle.dump(config, open(os.path.join(save_dir, "config.p"), "wb"))
-pickle.dump(like_training_plot, open(os.path.join(save_dir, "likelihood_training_plot.p"), "wb"))
 pickle.dump(J_plot, open(os.path.join(save_dir, "J_plot.p"), "wb"))
 pickle.dump(rbm_weights_plot, open(os.path.join(save_dir, "rbm_weights_plot.p"), "wb"))
 
@@ -363,7 +367,7 @@ pickle.dump(optimiser, open(os.path.join(save_dir, "vnce_optimiser.p"), "wb"))
 pickle.dump(cd_optimiser, open(os.path.join(save_dir, "cd_optimiser.p"), "wb"))
 pickle.dump(nce_optimiser, open(os.path.join(save_dir, "nce_optimiser.p"), "wb"))
 
-np.savez(os.path.join(save_dir, "data"), X=X, X_test=X_test, Y=Y)
+np.savez(os.path.join(save_dir, "data"), X_train=X_train, X_test=X_test, Y=Y)
 np.savez(os.path.join(save_dir, "init_theta_and_likelihood"), theta0=vnce_theta0, init_log_like=init_log_like)
 
 np.savez(os.path.join(save_dir, "vnce_results"),
@@ -373,7 +377,8 @@ np.savez(os.path.join(save_dir, "vnce_results"),
          vnce_losses=vnce_losses,
          reduced_vnce_thetas=reduced_vnce_thetas,
          reduced_vnce_times=reduced_vnce_times,
-         av_log_like_vnce=av_log_like_vnce,
+         av_log_like_vnce_train=av_log_like_vnce_train,
+         av_log_like_vnce_test=av_log_like_vnce_test,
          m_step_ids=m_step_ids,
          e_step_ids=e_step_ids)
 
@@ -382,7 +387,8 @@ np.savez(os.path.join(save_dir, "cd_results"),
          cd_times=cd_optimiser.times,
          reduced_cd_thetas=reduced_cd_thetas,
          reduced_cd_times=reduced_cd_times,
-         av_log_like_cd=av_log_like_cd)
+         av_log_like_cd_train=av_log_like_cd_train,
+         av_log_like_cd_test=av_log_like_cd_test)
 
 np.savez(os.path.join(save_dir, "nce_results"),
          nce_thetas=nce_optimiser.thetas,
@@ -391,6 +397,7 @@ np.savez(os.path.join(save_dir, "nce_results"),
          nce_losses_for_vnce_params=nce_losses_for_vnce_params,
          reduced_nce_thetas=reduced_nce_thetas,
          reduced_nce_times=reduced_nce_times,
-         av_log_like_nce=av_log_like_nce)
+         av_log_like_nce_train=av_log_like_nce_train,
+         av_log_like_nce_test=av_log_like_nce_test)
 
 

@@ -14,7 +14,7 @@ from distribution import RBMLatentPosterior, MultivariateBernoulliNoise, ChowLiu
 from fully_observed_models import VisibleRestrictedBoltzmannMachine
 from latent_variable_model import RestrictedBoltzmannMachine
 import matplotlib as matplotlib
-from utils import plot_log_likelihood_training_curves, take_closest, plot_vnce_loss, save_fig
+from utils import plot_log_likelihood_learning_curves, take_closest, plot_vnce_loss, save_fig
 
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from copy import deepcopy
@@ -50,8 +50,10 @@ if not os.path.exists(save_dir):
 
 sorted_files = sorted([float(learning_rate) for learning_rate in os.listdir(load_dir)])
 
-fig, axs = plt.subplots(3, 2, figsize=(5.7, 8))
-axs = axs.ravel()
+train_fig, train_axs = plt.subplots(3, 2, figsize=(5.7, 8))
+test_fig, test_axs = plt.subplots(3, 2, figsize=(5.7, 8))
+train_axs, test_axs = train_axs.ravel(), test_axs.ravel()
+
 for i, file in enumerate(sorted_files):
     file = str(file)
     exp = os.path.join(load_dir, file)
@@ -60,41 +62,31 @@ for i, file in enumerate(sorted_files):
     globals().update(np.load(os.path.join(exp, 'vnce_results.npz')))
     globals().update(np.load(os.path.join(exp, 'cd_results.npz')))
     globals().update(np.load(os.path.join(exp, 'nce_results.npz')))
+    config = pickle.load(open(os.path.join(exp, 'config.p'), 'rb'))
 
     # to avoid log(0) and inconsistencies in starting points
     reduced_vnce_times[0] += 1e-4
     reduced_cd_times[0] += 1e-4
     reduced_nce_times[0] += 1e-4
-    av_log_like_vnce[0] = init_log_like
-    av_log_like_cd[0] = init_log_like
-    av_log_like_nce[0] = init_log_like
+    av_log_like_vnce_train[0] = init_log_like
+    av_log_like_cd_train[0] = init_log_like
+    av_log_like_nce_train[0] = init_log_like
 
-    # LOG-LIKELIHOOD PLOT
-    ax = axs[i]
-    ax.semilogx(reduced_vnce_times, av_log_like_vnce, label='AVNCE', color='blue')
-    ax.annotate(r"{}".format(round(av_log_like_vnce[-1], 2)), xy=(reduced_vnce_times[-1], av_log_like_vnce[-1] + 1), fontsize=5, color='blue')
+    train_ax, test_ax = train_axs[i], test_axs[i]
 
-    ax.semilogx(reduced_cd_times, av_log_like_cd, label='CD', color='red')
-    ax.annotate(r"{}".format(round(av_log_like_cd[-1], 2)), xy=(reduced_cd_times[-1], av_log_like_cd[-1] - 1), fontsize=5, color='red')
+    train_curves = [[reduced_vnce_times, av_log_like_vnce_train, 'vnce', 'blue'], [reduced_cd_times, av_log_like_cd_train, 'cd', 'red']]
+    test_curves = [[reduced_vnce_times, av_log_like_vnce_test, 'vnce', 'blue'], [reduced_cd_times, av_log_like_cd_test, 'cd', 'red']]
 
-    # ax.semilogx(reduced_nce_times, av_log_like_nce, label='NCE')
-    # ax.annotate(r"{}".format(round(av_log_like_nce[-1], 2)), xy=(reduced_nce_times[-1], av_log_like_nce[-1]), fontsize=5)
+    x_lim = (1, reduced_vnce_times[-1] + 100)
+    title = 'learning rate: {}'.format(config['cd_learn_rate'])
+    plot_log_likelihood_learning_curves(train_curves, [], save_dir, x_lim=x_lim, file_name='train', title=title, logx=True, ax=train_ax)
+    plot_log_likelihood_learning_curves(test_curves, [], save_dir, x_lim=x_lim, file_name='test', title=title, logx=True, ax=test_ax)
 
-    # Set axes limits and add labels
-    ax.set_xlim(1, axs[i].get_xlim()[1] + 100)
-    y_max = max(av_log_like_cd.max(), av_log_like_vnce.max())
-    ax.set_ylim(top=y_max + 5)
-
-    ax.set_title('learning rate: {}'.format(file[-4:]))
-    ax.set_xlabel('time (seconds)', fontsize=10)
-    ax.set_ylabel('log likelihood', fontsize=10)
-    ax.legend(loc='lower right')
-
-    config = pickle.load(open(os.path.join(exp, 'config.p'), 'rb'))
     with open(os.path.join(save_dir, "config-{}.txt".format(file)), 'w') as f:
         for key, value in config.items():
             f.write("{}: {}\n".format(key, value))
 
-fig.tight_layout()
-save_fig(fig, save_dir, 'av_log_like')
-
+train_fig.tight_layout()
+save_fig(train_fig, save_dir, 'train_learning_curves')
+test_fig.tight_layout()
+save_fig(test_fig, save_dir, 'test_learning_curves')

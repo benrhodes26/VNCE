@@ -28,7 +28,7 @@ class FreeEnergyLoss(object):
         :return loss: float
         """
         X = (inputs * self.data_std) + self.data_mean
-        Z = self.var_dist.sample(nz=self.nz, U=inputs, outputs=nn_outputs)  # (nz, n, m)
+        Z = self.var_dist.sample(nz=self.nz, U=inputs, nn_outputs=nn_outputs)  # (nz, n, m)
         log_model = self.model(U=X, Z=Z, log=True)  # (nz, n)
         var_dist_entropy = self.var_dist.entropy(U=inputs, outputs=nn_outputs)
 
@@ -51,12 +51,13 @@ class FreeEnergyLoss(object):
         grad_of_log_model = self.model.grad_log_wrt_nn_outputs(X, Z, grad_z_wrt_nn_outputs)  # (output_dim, nz, n)
         av_grad_of_log_model = np.mean(grad_of_log_model, axis=1).T  # (n, output_dim)
 
-        grad_of_var_dist_entropy = self.var_dist.grad_of_entropy_wrt_nn_outputs(outputs=nn_outputs)  # (n, output_dim)
+        grad_of_var_dist_entropy = self.var_dist.grad_log_wrt_nn_outputs(outputs=nn_outputs)  # (n, output_dim)
 
         return - av_grad_of_log_model - grad_of_var_dist_entropy
 
     def __repr__(self):
         return 'FreeEnergyLoss'
+
 
 class VnceLoss(object):
 
@@ -78,11 +79,11 @@ class VnceLoss(object):
         :return loss: float
         """
         X = (inputs * self.data_std) + self.data_mean  # inputs to the nn were scaled and centred, so undo this
-        ZX = self.var_dist.sample(nz=self.nz, U=inputs, outputs=nn_outputs)  # (nz, n, m)
+        ZX = self.var_dist.sample(nz=self.nz, U=inputs, nn_outputs=nn_outputs)  # (nz, n, m)
 
         Y = self.noise.sample(self.nu * len(X))
         Y2 = (Y - self.data_mean) / self.data_std
-        ZY = self.var_dist.sample(nz=self.nz, U=Y2, outputs=None)
+        ZY = self.var_dist.sample(nz=self.nz, U=Y2, nn_outputs=None)
 
         term1 = self.first_term_of_loss(X, ZX)  # (nz, n)
         term2 = self.second_term_of_loss(Y, ZY)  # (nz, n*nu)
@@ -146,7 +147,7 @@ class VnceLoss(object):
 
         grad_z_wrt_nn_outputs = self.var_dist.grad_of_Z_wrt_nn_outputs(nn_outputs, E)  # (output_dim, nz, n, m)
         grad_of_log_model = self.model.grad_log_wrt_nn_outputs(X, Z, grad_z_wrt_nn_outputs)  # (output_dim, nz, n)
-        grad_of_var_dist_entropy = self.var_dist.grad_of_entropy_wrt_nn_outputs(outputs=nn_outputs)  # (n, output_dim)
+        grad_of_var_dist_entropy = self.var_dist.grad_log_wrt_nn_outputs(outputs=nn_outputs)  # (n, output_dim)
 
         joint_noise = (self.nu * self.noise(X) * self.var_dist(Z, X))
         a = joint_noise / (self.model(X, Z) + joint_noise)  # (nz, n)

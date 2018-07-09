@@ -98,7 +98,7 @@ def train(train_data, valid_data, config, log=True, plot=True):
     train_data.batch_size = config['batch_size']
     valid_data.batch_size = config['batch_size']
 
-    # Create multi-layer nn (outputs are logs of unnormalised class probabilities)
+    # Create multi-layer nn
     layers = compose_layers(config)
     nn = MultipleLayerModel(layers)
 

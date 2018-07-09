@@ -142,6 +142,7 @@ def plot_nce_minus_vnce_loss(nce_loss_for_vnce_params, vnce_losses, times, e_ste
 
     return fig
 
+
 def plot_vnce_loss(vnce_losses, times, e_step_ids):
     fig, ax = plt.subplots(1, 1, figsize=(5.7, 2.5))
 
@@ -255,31 +256,51 @@ def get_reduced_thetas_and_times(thetas, times, time_step_size, max_time=None):
     return reduced_thetas, reduced_times
 
 
-def plot_log_likelihood_training_curves(training_curves, static_lines):
+def plot_log_likelihood_learning_curves(training_curves, static_lines, save_dir, x_lim=None, y_lim=None, file_name='train', title=None, logx=False, ax=None):
     """plot log-likelihood training curves
 
     :param training_curves: list of lists
-        each inner list is of the form: [times, log-likelihoods, label]
+        each inner list is of the form: [times, log-likelihoods, label, color]
         where times & log-likelihoods are arrays for plotting
     :param static_lines: list of lists
         each inner list is of the form [log-likelihood, label] where
         log-likelihood is a single value that will plotted as a
         horizontal line
-    :param maxiter: int
-        index of final time in seconds to plot on x-axis
-    :param fig_ax: tuple
-        figure, axes
     """
-    fig, ax = plt.subplots(1, 1, figsize=(10, 7))
+    create_fig = False
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(5.5, 5.5))
+        create_fig = True
+
     for triple in training_curves:
-        ax.plot(triple[0], triple[1], label=triple[2])
+        if logx:
+            ax.semilogx(triple[0], triple[1], label=triple[2], color=triple[3])
+        else:
+            ax.plot(triple[0], triple[1], label=triple[2])
+        ax.annotate(r"{}".format(round(triple[1][-1], 2)), xy=(triple[1][-1], triple[1][-1] + 1), fontsize=5, color=triple[3])
     for pair in static_lines:
         ax.plot(plt.get(ax, 'xlim'), (pair[0], pair[0]), label=pair[1])
-    ax.set_xlabel('time (seconds)', fontsize=16)
-    ax.set_ylabel('log likelihood', fontsize=16)
-    ax.legend(loc='lower right')
 
-    return fig
+    if title:
+        ax.set_title(title)
+    ax.set_xlabel('time (seconds)')
+    ax.set_ylabel('log likelihood')
+    ax.legend(loc='lower right')
+    if x_lim:
+        ax.set_xlim(x_lim)
+    if y_lim:
+        ax.set_ylim(y_lim)
+
+    if create_fig:
+        save_fig(fig, save_dir, '{}_likelihood_optimisation_curve'.format(file_name))
+
+
+def get_av_log_like(thetas, model, X):
+    av_log_like = np.zeros(len(thetas))
+    for i in np.arange(0, len(thetas)):
+        model.theta = deepcopy(thetas[i])
+        av_log_like[i] = average_log_likelihood(model, X)
+    return av_log_like
 
 
 def average_log_likelihood(model, X):

@@ -6,7 +6,7 @@ from abc import ABCMeta, abstractmethod
 from itertools import product
 from numpy import random as rnd
 from matplotlib import pyplot as plt
-from scipy.stats import norm
+from scipy.stats import norm, multivariate_normal
 from sklearn.neighbors import KernelDensity as kd
 from utils import sigmoid, validate_shape
 DEFAULT_SEED = 1083463236
@@ -587,3 +587,4 @@ class VisibleRestrictedBoltzmannMachine(Model):
         all_binary_vectors = np.array(list(product(*binary_pairs)))  # (2**k, k)
 
         return all_binary_vectors
+

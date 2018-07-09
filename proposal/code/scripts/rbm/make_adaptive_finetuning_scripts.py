@@ -14,14 +14,14 @@ parser.add_argument('--save_dir', type=str, default='~/masters-project/ben-rhode
                     help='Path to directory where scripts will be saved')
 
 args = parser.parse_args()
-save_dir = os.path.expanduser(args.save_dir) + "adaptive_finetuned_test/"
+# save_dir = os.path.expanduser(args.save_dir) + "adaptive_finetuned_test/"
 # save_dir = os.path.expanduser(args.save_dir) + "adaptive_finetuned_lr=0.001/"
-# save_dir = os.path.expanduser(args.save_dir) + "adaptive_finetuned/"
+save_dir = os.path.expanduser(args.save_dir) + "adaptive_finetuned/"
 os.makedirs(save_dir)
 
 data_sets = ['usps', 'adult', 'connect4', 'dna', 'mushrooms', 'nips', 'ocr_letters', 'rcv1', 'web']
-# learn_rates = [0.001, 0.003, 0.01, 0.03, 0.1, 0.3]
-learn_rates = [0.001]
+learn_rates = [0.001, 0.003, 0.01, 0.03, 0.1, 0.3]
+# learn_rates = [0.001]
 
 for data_set in data_sets:
     for learn_rate in learn_rates:
@@ -32,7 +32,7 @@ for data_set in data_sets:
         --name={1}/ \
         --which_dataset={0} \
         --m=18 \
-        --cd_num_epochs=5 \
+        --cd_num_epochs=500 \
         --cd_learn_rate={1} \
         --max_num_em_steps=1 \
         --nce_num_epochs=1 \
@@ -54,12 +54,12 @@ for data_set in data_sets:
         --nce_num_epochs=1 \
         --no-separate_terms \
         --theta0_path='/disk/scratch/ben-rhodes-masters-project/experimental-results/rbm/adaptive/adaptive_finetuned/{0}/{1}' \
-        --opt_method=L-BFGS-B \
-        --max_num_em_steps=1 \
-        --maxiter=1 \
+        --opt_method=CG \
+        --max_num_em_steps=10 \
+        --maxiter=10 \
         --num_gibbs_steps_for_adaptive_vnce=50 \
         --cd_learn_rate={1} \
-        --cd_num_epochs=1 \
+        --cd_num_epochs=100 \
         --cd_num_steps=50 \
         --num_log_like_steps=1 \n".format(data_set, learn_rate)
 

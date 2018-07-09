@@ -37,6 +37,7 @@ def combine_times(times_1, times_2):
     return combined_times
 
 loaded_data = np.load(os.path.join(args.load_dir, args.results_1, 'data.npz'))
+X_train = loaded_data['X_train']
 X_test = loaded_data['X_test']
 
 loaded_1 = np.load(os.path.join(args.load_dir, args.results_1, 'cd_results.npz'))
@@ -76,24 +77,16 @@ model = RestrictedBoltzmannMachine(np.zeros((config['d'] + 1, config['m'] + 1)))
 
 # calculate average log-likelihood at each iteration for both models on test set
 print('calculating log-likelihoods...')
-av_log_like_cd = np.zeros(len(reduced_cd_thetas))
-for i in np.arange(0, len(reduced_cd_thetas)):
-    model.theta = deepcopy(reduced_cd_thetas[i])
-    av_log_like_cd[i] = average_log_likelihood(model, X_test)
-
-av_log_like_vnce = np.zeros(len(reduced_vnce_thetas))
-for i in np.arange(0, len(reduced_vnce_thetas)):
-    model.theta = deepcopy(reduced_vnce_thetas[i])
-    av_log_like_vnce[i] = average_log_likelihood(model, X_test)
+av_log_like_vnce_train = get_av_log_like(reduced_vnce_thetas, model, X_train)
+av_log_like_vnce_test = get_av_log_like(reduced_vnce_thetas, model, X_test)
+av_log_like_cd_train = get_av_log_like(reduced_cd_thetas, model, X_train)
+av_log_like_cd_test = get_av_log_like(reduced_cd_thetas, model, X_test)
 print('finished!')
 
-training_curves = [[reduced_vnce_times, av_log_like_vnce, 'vnce'],
-                   [reduced_cd_times, av_log_like_cd, 'cd']]
-# plot log-likelihood during training
-like_training_plot = plot_log_likelihood_training_curves(training_curves, [])
-like_training_plot.gca().set_ylim((av_log_like_cd.max() - 1.7, av_log_like_cd.max() + 0.3))
-like_training_plot.savefig('{}/likelihood-optimisation-curve.pdf'.format(save_dir))
-pickle.dump(like_training_plot, open(os.path.join(save_dir, "likelihood_training_plot.p"), "wb"))
+train_curves = [[reduced_vnce_times, av_log_like_vnce_train, 'vnce', 'blue'], [reduced_cd_times, av_log_like_cd_train, 'cd', 'red']]
+test_curves = [[reduced_vnce_times, av_log_like_vnce_test, 'vnce', 'blue'], [reduced_cd_times, av_log_like_cd_test, 'cd', 'red']]
+plot_log_likelihood_learning_curves(train_curves, [], save_dir, file_name='train')
+plot_log_likelihood_learning_curves(test_curves, [], save_dir, file_name='test')
 
 pickle.dump(config, open(os.path.join(save_dir, "config.p"), "wb"))
 np.savez(os.path.join(save_dir, "data"), **loaded_data)
@@ -102,14 +95,16 @@ np.savez(os.path.join(save_dir, "vnce_results"),
          vnce_times=vnce_fine_tuned_times,
          reduced_vnce_thetas=reduced_vnce_thetas,
          reduced_vnce_times=reduced_vnce_times,
-         av_log_like_vnce=av_log_like_vnce)
+         av_log_like_vnce_train=av_log_like_vnce_train,
+         av_log_like_vnce_test=av_log_like_vnce_test)
 
 np.savez(os.path.join(save_dir, "cd_results"),
          cd_thetas=cd_thetas,
          cd_times=cd_times,
          reduced_cd_thetas=reduced_cd_thetas,
          reduced_cd_times=reduced_cd_times,
-         av_log_like_cd=av_log_like_cd)
+         av_log_like_cd_train=av_log_like_cd_train,
+         av_log_like_cd_test=av_log_like_cd_test)
 
 # these are not actually used - we just save them to match the output structure of the original experiment, so we can run make-combined-experiment-plot.py
 loaded_nce = np.load(os.path.join(args.load_dir, args.results_1, 'nce_results.npz'))

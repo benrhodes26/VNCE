@@ -37,5 +37,5 @@ nce_batch_size: 100
 num_log_like_steps: 1
 separate_terms: False
 random_seed: 1083463236
-start_time: 20180701-1754
-end_time: 20180701-1758
+start_time: 20180705-0614
+end_time: 20180705-0619

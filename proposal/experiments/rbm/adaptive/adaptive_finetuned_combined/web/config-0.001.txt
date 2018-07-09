@@ -28,7 +28,7 @@ track_loss: False
 cd_num_steps: 1
 cd_learn_rate: 0.001
 cd_batch_size: 100
-cd_num_epochs: 5
+cd_num_epochs: 500
 nce_opt_method: SGD
 maxiter_nce: 500
 nce_num_epochs: 1
@@ -37,5 +37,5 @@ nce_batch_size: 100
 num_log_like_steps: 1
 separate_terms: False
 random_seed: 1083463236
-start_time: 20180702-1229
-end_time: 20180702-1230
+start_time: 20180704-2128
+end_time: 20180704-2146
