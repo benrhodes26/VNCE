@@ -21,6 +21,7 @@ from latent_variable_model import MissingDataUnnormalisedTruncNorm
 from layers import AffineLayer, ReluLayer, TanhLayer
 from models import MultipleLayerModel
 from vnce_optimiser import VemOptimiser, SgdEmStep, MonteCarloVnceLoss
+from utils import *
 
 # Seed a random number generator
 seed = 10102016
@@ -32,8 +33,10 @@ parser = ArgumentParser(description='Experimental comparison of training an RBM 
 # Read/write arguments
 parser.add_argument('--data_dir', type=str, default='/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/data/',
                     help='Path to directory where data is loaded and saved')
-parser.add_argument('--save_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm', help='Path to directory where model will be saved')
-
+parser.add_argument('--save_dir', type=str, default='/home/ben/ben-rhodes-masters-project/experimental_results/trunc_norm',
+                    help='Path to directory where model will be saved')
+# parser.add_argument('--save_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm',
+#                    help='Path to directory where model will be saved')
 parser.add_argument('--exp_name', type=str, default='test', help='name of set of experiments this one belongs to')
 parser.add_argument('--name', type=str, default=START_TIME, help='name of this exact experiment')
 
@@ -47,10 +50,8 @@ parser.add_argument('--num_gibbs_steps', type=int, default=1000,
 
 # Model arguments
 parser.add_argument('--theta0_path', type=str, default=None, help='path to pre-trained weights')
-parser.add_argument('--theta0scale', type=float, default=1.0, help='multiplier on initial weights of RBM.')
-parser.add_argument('--true_sd', type=float, default=1.0, help='standard deviation of gaussian rv for synthetic ground truth weights')
 parser.add_argument('--d', type=int, default=9, help='dimension of visibles for synthetic dataset')
-parser.add_argument('--m', type=int, default=8, help='dimension of hiddens')
+parser.add_argument('--frac_missing', type=float, default=0.1, help='fraction of data missing at random')
 
 # Latent NCE optimisation arguments
 parser.add_argument('--loss', type=str, default='MonteCarloVnceLoss', help='loss function class to use. See vnce_optimisers.py for options')
@@ -59,7 +60,8 @@ parser.add_argument('--opt_method', type=str, default='SGD', help='optimisation 
 parser.add_argument('--maxiter', type=int, default=10, help='number of iterations performed by L-BFGS-B optimiser inside each M step of EM')
 parser.add_argument('--stop_threshold', type=float, default=0, help='Tolerance used as stopping criterion in EM loop')
 parser.add_argument('--max_num_em_steps', type=int, default=10000, help='Maximum number of EM steps to perform')
-parser.add_argument('--learn_rate', type=float, default=0.05, help='if opt_method=SGD, this is the learning rate used')
+parser.add_argument('--model_learn_rate', type=float, default=0.05, help='if opt_method=SGD, this is the learning rate used to train the model')
+parser.add_argument('--var_learn_rate', type=float, default=0.05, help='if opt_method=SGD, this is the learning rate used to train the variational dist')
 parser.add_argument('--batch_size', type=int, default=100, help='if opt_method=SGD, this is the size of a minibatch')
 parser.add_argument('--num_batch_per_em_step', type=int, default=1, help='if opt_method=SGD, this is the number of batches per EM step')
 parser.add_argument('--num_em_steps_per_save', type=int, default=1, help='Every X EM steps save the current params, loss and time')
@@ -86,68 +88,162 @@ save_dir = os.path.join(args.save_dir, args.exp_name, args.name)
 if not os.path.exists(save_dir):
     os.makedirs(save_dir)
 
+# NOTE: I include the output layer when counting num_layers, so num_layers=3 implies 2 hidden layers.
+nn_config = {'num_layers': 3,
+             'hidden_dim': 100,
+             'weights_init': UniformInit(-0.05, 0.05, rng=rng),
+             'biases_init': ConstantInit(0.),
+             'final_biases_init': ConstantVectorInit(np.array([0., 0., -1, -1])),
+             'activation_layer': TanhLayer()}
+args.update(nn_config)
+
+
+# def compose_layers(p):
+#     """ Compose layers of a feed-forward neural network"""
+#
+#     first_layer = [AffineLayer(p['input_dim'], p['hidden_dim'], p['weights_init'], p['biases_init']),
+#                    p['activation_layer']]
+#
+#     hidden_layers = []
+#     for i in range(p['num_layers'] - 2):
+#         hidden_layers.append(AffineLayer(p['hidden_dim'], p['hidden_dim'], p['weights_init'], p['biases_init']))
+#         hidden_layers.append(p['activation_layer'])
+#
+#     final_layer = [AffineLayer(p['hidden_dim'], p['output_dim'], p['weights_init'], p['final_biases_init'])]
+#
+#     return first_layer + hidden_layers + final_layer
 
 def compose_layers(p):
-    """Return the layers for a multi-layer neural network according to the specified hyperparameters
-
-    PARAMETERS
-    ----------------------
-    p: dict
-        Contains the hyperparameters: num_layers, input_dim, output_dim, hidden_dim, batch_size,
-        learning_rate, num_epochs, stats_interval, activation_layer, weights_init, biases_init
-    """
-
-    first_layer = [AffineLayer(p['input_dim'], p['hidden_dim'], p['weights_init'], p['biases_init']),
-                   p['activation_layer']]
-
-    hidden_layers = []
-    for i in range(p['num_layers'] - 2):
-        hidden_layers.append(AffineLayer(p['hidden_dim'], p['hidden_dim'], p['weights_init'], p['biases_init']))
-        hidden_layers.append(p['activation_layer'])
-
-    final_layer = [AffineLayer(p['hidden_dim'], p['output_dim'], p['weights_init'], p['final_biases_init'])]
-
-    return first_layer + hidden_layers + final_layer
+    """ Compose layers of a feed-forward neural network"""
+    affine_layer = [AffineLayer(p['input_dim'],  p['output_dim'], p['weights_init'], p['biases_init']), p['activation_layer']]
+    return affine_layer
 
 
-def init_training(args):
+def make_loss_functions(args):
     """ """
-    # Create variational distribution, which uses a multi-layer nn
+    # initialise model parameters
+    model_mean = np.uniform(0, 1, args.d)
+    model_chol = np.identity(args.d)
+    idiag = np.diag_indices_from(model_chol)
+    model_chol[idiag] = np.log(model_chol[idiag])
+
+    # initialise the model p(x, z)
+    model = MissingDataUnnormalisedTruncNorm(mean=model_mean, chol=model_chol, rng=args.rng)
+    args['theta0'] = deepcopy(model.theta)
+
+    # generate synthetic data and masks, which are used for simulating missing data
+    X_train = model.sample(args.n)
+    X_val = model.sample(int(args.n / 5))
+    train_missing_data_mask = args.rng.uniform(0, 1, X_train.shape) < args.frac_missing
+    val_missing_data_mask = args.rng.uniform(0, 1, X_val.shape) < args.frac_missing
+
+    # extract statistics from the data to choose a noise distribution (for vnce)
+    X_train_mean = X.mean(axis=0)
+    X_train_diag_std = X.std(axis=0)  # ignore covariances
+    X_train_chol = 1 / np.log(X_train_diag_std)  # (log) cholesky of diagonal precision matrix
+
+    # make noise distribution and noise samples for vnce
+    noise = MissingDataProductOfTruncNormNoise(mean=X_train_mean, chol=X_train_chol, rng=args.rng)
+    Y = noise.sample(args.n * args.nu)
+
+    # create variational distribution, which uses a multi-layer neural network
     layers = compose_layers(args)
     nn = MultipleLayerModel(layers)
     var_dist = MissingDataProductOfTruncNormsPosterior(nn=nn, data_dim=args.d, rng=args.rng)
 
-    # initialise the model p(x, z)
-    model = MissingDataUnnormalisedTruncNorm()
-    X_train = model.sample(args.n)
-    X_test = model.sample(args.n)
-    data_mean = X.mean(axis=0)
-    noise = MissingDataProductOfTruncNormNoise(mean=data_mean, cov=data_cov)
+    # create loss function
+    use_sgd = (args.opt_method == 'SGD')
+    vnce_loss_function = MonteCarloVnceLoss(model=model,
+                                            train_data=X_train,
+                                            val_data=X_val,
+                                            noise=noise,
+                                            noise_samples=Y,
+                                            variational_noise=var_dist,
+                                            noise_to_data_ratio=args.nu,
+                                            num_latent_per_data=args.nz,
+                                            use_neural_model=False,
+                                            use_neural_variational_noise=True,
+                                            train_missing_data_mask=train_missing_data_mask,
+                                            val_missing_data_mask=val_missing_data_mask,
+                                            use_minibatches=use_sgd,
+                                            batch_size=args.batch_size,
+                                            use_reparam_trick=True,
+                                            separate_terms=args.separate_terms,
+                                            rng=rng)
 
-    e_step = SgdEmStep()
-    loss = MonteCarloVnceLoss()
-    optimiser = VemOptimiser()
+    return vnce_loss_function
 
-    return model, var_dist
+
+def make_optimisers(args):
+    if args.opt_method == 'SGD':
+        m_step = SgdEmStep(do_m_step=True,
+                           learning_rate=args.model_learn_rate,
+                           num_batches_per_em_step=args.num_batch_per_em_step,
+                           noise_to_data_ratio=args.nu,
+                           track_loss=args.track_loss,
+                           rng=rng)
+    else:
+        m_step = ScipyMinimiseEmStep(do_m_step=True,
+                                     optimisation_method=args.opt_method,
+                                     max_iter=args.maxiter)
+    e_step = SgdEmStep(do_m_step=False,
+                       learning_rate=args.var_learn_rate,
+                       num_batches_per_em_step=args.num_batch_per_em_step,
+                       noise_to_data_ratio=args.nu,
+                       track_loss=args.track_loss,
+                       rng=rng)
+    vnce_optimiser = VemOptimiser(m_step=m_step, e_step=e_step, num_em_steps_per_save=args.num_em_steps_per_save)
+    # nce_optimiser = NCEOptimiser(model=nce_model, noise=noise_dist, noise_samples=Y, nu=args.nu)
+    return vnce_optimiser
+
+
+def plot_and_save_results(args, vnce_loss, optimiser):
+    vnce_thetas, vnce_alphas, vnce_losses, vnce_val_losses, vnce_times = optimiser.get_flattened_result_arrays()
+    m_step_ids, e_step_ids, m_step_start_ids, e_step_start_ids = optimiser.get_m_and_e_step_ids()
+    vnce_plot = plot_vnce_loss(vnce_losses, vnce_val_losses, vnce_times, m_step_start_ids, e_step_start_ids)
+    save_fig(vnce_plot, save_dir, 'vnce_loss')
+
+    save_dir = args.save_dir
+    with open(os.path.join(SAVE_DIR, "{}_config.txt".format(exp_name)), 'w') as f:
+        for key, value in args.items():
+            f.write("{}: {}\n".format(key, value))
+
+    pickle.dump(args, open(os.path.join(save_dir, "config.p"), "wb"))
+    pickle.dump(optimiser, open(os.path.join(save_dir, "vnce_optimiser.p"), "wb"))
+    pickle.dump(vnce_loss.model, open(os.path.join(save_dir, "model.p"), "wb"))
+    pickle.dump(vnce_loss.variational_noise, open(os.path.join(save_dir, "var_dist.p"), "wb"))
+
+    np.savez(os.path.join(save_dir, "data"),
+             X_train=vnce_loss.X_train,
+             X_train_mask=vnce_loss.train_miss_mask,
+             X_val=vnce_loss.X_val,
+             X_val_mask=vnce_loss.val_miss_mask,
+             Y=vnce_loss.Y)
+    np.savez(os.path.join(save_dir, "theta0"), theta0=args.theta0)
+
+    np.savez(os.path.join(save_dir, "vnce_results"),
+             vnce_thetas=vnce_thetas,
+             vnce_alphas=vnce_alphas,
+             vnce_times=vnce_times,
+             vnce_losses=vnce_losses,
+             vnce_val_losses=vnce_val_losses,
+             m_step_ids=m_step_ids,
+             e_step_ids=e_step_ids,
+             m_step_start_ids=m_step_start_ids,
+             e_step_start_ids=e_step_start_ids)
 
 
 def main(args):
-    # NOTE: I include the output layer when counting num_layers, so num_layers=3 implies 2 hidden layers.
-    nn_config = {'num_layers': 3,
-                 'hidden_dim': 100,
-                 'weights_init': UniformInit(-0.05, 0.05, rng=rng),
-                 'biases_init': ConstantInit(0.),
-                 'final_biases_init': ConstantVectorInit(np.array([0., 0., -1, -1])),
-                 'activation_layer': TanhLayer()}
-    args.update(nn_config)
-    model, var_dist = init_training(args)
+    vnce_loss = make_loss_functions(args)
+    vnce_optimiser = make_optimisers(args)
 
-    with open(os.path.join(SAVE_DIR, "{}_config.txt".format(exp_name)), 'w') as f:
-        for key, value in nn_config.items():
-            f.write("{}: {}\n".format(key, value))
+    vnce_optimiser.fit(loss_function=vnce_loss,
+                       theta0=deepcopy(vnce_loss.model.theta),
+                       alpha0=deepcopy(vnce_loss.variational_noise.nn.params),
+                       stop_threshold=args.stop_threshold,
+                       max_num_em_steps=args.max_num_em_steps)
 
-    pickle.dump(model, open(os.path.join(args.save_dir, "model.p"), "wb"))
-    pickle.dump(var_dist, open(os.path.join(args.save_dir, "var_dist.p"), "wb"))
+    plot_and_save_results(args, vnce_loss, vnce_optimiser)
 
 
 if __name__ == "__main__":

@@ -37,23 +37,24 @@ class VemOptimiser:
     provided at initialisation as objects with particular methods: see SgdEmStep or ScipyMinimiseEmStep for examples.
     """
 
-    def __init__(self, m_step, e_step, num_em_steps_per_save=1):
+    def __init__(self, m_step, e_step, num_em_steps_per_epoch=1):
         """
         :param e_step: object
             see e.g. SgdEmStep
         :param m_step: object
             see e.g SgdEmStep
-        :param num_em_steps_per_save: int
+        :param num_em_steps_per_epoch: int
             we save a results triple (parameter, loss, time) every X iterations of the EM outer loop
         """
         self.m_step = m_step
         self.e_step = e_step
-        self.num_em_steps_per_save = num_em_steps_per_save
+        self.num_em_steps_per_save = num_em_steps_per_epoch
 
         # results during optimisation. Each is a list of lists. The inner lists pertain to a specific E or M step.
         self.thetas = []  # model parameters
         self.alphas = []  # variational parameters
         self.losses = []
+        self.val_losses = []
         self.times = []
 
     def fit(self, loss_function, theta0, alpha0, stop_threshold=1e-6, max_num_em_steps=100):
@@ -85,6 +86,7 @@ class VemOptimiser:
             e_results = self.e_step(loss_function)
             if e_results and save_results:
                 self.update_results(*e_results, e_step=True)
+                self.val_losses.append(loss_function.compute_val_loss())
 
             prev_loss = current_loss
             current_loss = loss_function.get_current_loss(get_float=True)
@@ -114,10 +116,11 @@ class VemOptimiser:
         thetas = np.array([theta for sublist in self.thetas for theta in sublist])
         alphas = np.array([alpha for sublist in self.alphas for alpha in sublist])
         losses = np.array([loss for sublist in self.losses for loss in sublist])
+        val_losses = np.array(self.val_losses)
         times = np.array([t for sublist in self.times for t in sublist])
 
         times -= times[0]
-        return thetas, alphas, losses, times
+        return thetas, alphas, losses, val_losses, times
 
     def av_log_like_for_each_iter(self, X, loss_function, thetas=None):
         """Calculate average log-likelihood at each iteration
@@ -359,7 +362,8 @@ class MonteCarloVnceLoss:
 
     def __init__(self,
                  model,
-                 data,
+                 train_data,
+                 val_data,
                  noise,
                  noise_samples,
                  variational_noise,
@@ -367,7 +371,8 @@ class MonteCarloVnceLoss:
                  num_latent_per_data,
                  use_neural_model=False,
                  use_neural_variational_noise=False,
-                 missing_data_mask=None,
+                 train_missing_data_mask=None,
+                 val_missing_data_mask=None,
                  use_minibatches=False,
                  batch_size=None,
                  use_reparam_trick=False,
@@ -387,7 +392,8 @@ class MonteCarloVnceLoss:
             If separate_terms=True, then the loss function outputs a each term separately in an array. This is useful for plotting / debugging.
         """
         self.model = model
-        self.data = data
+        self.train_data = train_data
+        self.val_data = val_data
         self.noise = noise
         self.noise_samples = noise_samples
         self.variational_noise = variational_noise
@@ -401,23 +407,25 @@ class MonteCarloVnceLoss:
         self.separate_terms = separate_terms
         self.use_importance_sampling = use_importance_sampling
         self.eps = eps
-        self.miss_mask = missing_data_mask
-        if missing_data_mask is not None:
-            self.data = data[missing_data_mask]
+        self.train_miss_mask = train_missing_data_mask
+        self.val_miss_mask = val_missing_data_mask
+        if self.train_miss_mask is not None:
+            self.train_data = train_data[self.train_miss_mask]
+            self.val_data = val_data[self.val_miss_mask]
 
         self.use_minibatches = use_minibatches
         self.X = None
         self.Y = None
         self.X_mask = None  # missing data mask
         if not self.use_minibatches:
-            self.X = self.data
+            self.X = self.train_data
             self.Y = self.noise_samples
-            if missing_data_mask is not None:
-                self.X_mask = self.missing_data_mask
+            if self.train_miss_mask is not None:
+                self.X_mask = self.train_miss_mask
 
         self.batch_size = batch_size
         if batch_size:
-            self.batches_per_epoch = int(len(self.data) / self.batch_size)
+            self.batches_per_epoch = int(len(self.train_data) / self.batch_size)
         self.current_batch_id = 0
         self.current_epoch = 0
 
@@ -660,7 +668,7 @@ class MonteCarloVnceLoss:
         noise_batch_start = int(batch_start * self.nu)
         noise_batch_slice = slice(noise_batch_start, noise_batch_start + int(self.batch_size * self.nu))
 
-        self.X = self.data[batch_slice]
+        self.X = self.train_data[batch_slice]
         self.Y = self.noise_samples[noise_batch_slice]
         if self.miss_mask is not None:
             self.X_mask = self.miss_mask[batch_slice]
@@ -673,7 +681,7 @@ class MonteCarloVnceLoss:
 
     def new_epoch(self):
         """Shuffle data X and noise Y and print current loss"""
-        self.rng.shuffle(self.data)
+        self.rng.shuffle(self.train_data)
         self.rng.shuffle(self.noise_samples)
 
         print('epoch {}: J1 = {}'.format(self.current_epoch, self.current_loss))
@@ -688,6 +696,14 @@ class MonteCarloVnceLoss:
                 self.ZX = self.variational_noise.sample(self.nz, self.X, self.X_mask)
             self.ZY = self.variational_noise.sample(self.nz, self.Y)
             self.resample_from_variational_noise = False
+
+    def compute_val_loss(self):
+        self.X = self.val_data
+        self.Y = self.noise_samples[:len(self.val_data)]
+        self.resample_from_variational_noise = True
+        if self.val_miss_mask:
+            self.X_mask = val_miss_mask
+        return self.__call__()
 
     def get_theta(self):
         return deepcopy(self.model.theta)
