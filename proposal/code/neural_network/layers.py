@@ -141,7 +141,7 @@ class AffineLayer(LayerWithParameters):
                  weights_initialiser=init.UniformInit(-0.1, 0.1),
                  biases_initialiser=init.ConstantInit(0.),
                  weights_penalty=None, biases_penalty=None):
-        """Initialises a parameterised affine layer.
+        """Initialises a parametrised affine layer.
         Args:
             input_dim (int): Dimension of inputs to the layer.
             output_dim (int): Dimension of the layer outputs.

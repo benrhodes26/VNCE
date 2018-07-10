@@ -1190,7 +1190,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         V4 = np.dot(V3, chol)  # (nz, n, k, k)
         V4 *= np.diag(chol_diag)  # (nz, n, k, k)
 
-        grad_wrt_chol = (np.identiy(v3_shape) - V4).reshape(Z.shape[:2], -1)  # (nz, n, k*k)
+        grad_wrt_chol = (np.identity(self.mean_len) - V4).reshape(Z.shape[0], Z.shape[1], -1)  # (nz, n, k*k)
         grad_wrt_chol = np.transpose(grad_wrt_chol, [2, 0, 1])  # (k*k, nz, n)
 
         grad = np.concatenate((grad_wrt_to_mean, grad_wrt_chol), axis=0)  # (k + k*k, nz, n)

@@ -468,7 +468,7 @@ class MissingDataProductOfTruncNormsPosterior(Distribution):
     def sample(self, nz, U, miss_mask=None, nn_outputs=None):
         if miss_mask is None:
             miss_mask = np.zeros_like(U)
-        E = self.sample_E(nz, miss_mask, len(U))  # (nz, n, 2)
+        E = self.sample_E(nz, miss_mask)  # (nz, n, 2)
         Z = self.get_Z_samples_from_E(nz, E, U, miss_mask, nn_outputs=nn_outputs)  # (nz, n, 2)
         return Z
 
@@ -485,7 +485,7 @@ class MissingDataProductOfTruncNormsPosterior(Distribution):
             random variable to be transformed into Z (via reparam trick)
         :param U: array (n, k)
         """
-        mean, chol = self.get_mean_and_chol(U=U, miss_mask=miss_mask, outputs=nn_outputs)  # (n, k)  - cholesky of diagonal precision matrix
+        mean, chol = self.get_mean_and_chol(U=U, miss_mask=miss_mask, nn_outputs=nn_outputs)  # (n, k)  - cholesky of diagonal precision matrix
         one_minus_E = (1 - E) * miss_mask  # (nz, n, k)
         a = (norm.cdf(-mean * chol) * one_minus_E) + E  # (nz, n, k)
         Z = norm.ppf(a)  # (nz, n, k)
@@ -493,7 +493,7 @@ class MissingDataProductOfTruncNormsPosterior(Distribution):
         Z *= (1 / chol)  # check that division 0/0 is fine (if we get non-neg/0, then there is a bug in my masking)
         Z += mean
 
-        checkMask(Z, miss_mask)
+        self.checkMask(Z, miss_mask)
         return Z  # (nz, n, k)
 
     def get_mean_and_chol(self, U, miss_mask, nn_outputs=None):

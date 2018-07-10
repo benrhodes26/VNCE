@@ -392,8 +392,6 @@ class MonteCarloVnceLoss:
             If separate_terms=True, then the loss function outputs a each term separately in an array. This is useful for plotting / debugging.
         """
         self.model = model
-        self.train_data = train_data
-        self.val_data = val_data
         self.noise = noise
         self.noise_samples = noise_samples
         self.variational_noise = variational_noise
@@ -407,11 +405,15 @@ class MonteCarloVnceLoss:
         self.separate_terms = separate_terms
         self.use_importance_sampling = use_importance_sampling
         self.eps = eps
+
         self.train_miss_mask = train_missing_data_mask
         self.val_miss_mask = val_missing_data_mask
         if self.train_miss_mask is not None:
-            self.train_data = train_data[self.train_miss_mask]
-            self.val_data = val_data[self.val_miss_mask]
+            self.train_data = train_data * (1 - self.train_miss_mask)
+            self.val_data = val_data * (1 - self.val_miss_mask)
+        else:
+            self.train_data = train_data
+            self.val_data = val_data
 
         self.use_minibatches = use_minibatches
         self.X = None
@@ -422,7 +424,6 @@ class MonteCarloVnceLoss:
             self.Y = self.noise_samples
             if self.train_miss_mask is not None:
                 self.X_mask = self.train_miss_mask
-
         self.batch_size = batch_size
         if batch_size:
             self.batches_per_epoch = int(len(self.train_data) / self.batch_size)
@@ -670,8 +671,8 @@ class MonteCarloVnceLoss:
 
         self.X = self.train_data[batch_slice]
         self.Y = self.noise_samples[noise_batch_slice]
-        if self.miss_mask is not None:
-            self.X_mask = self.miss_mask[batch_slice]
+        if self.train_miss_mask is not None:
+            self.X_mask = self.train_miss_mask[batch_slice]
         self.resample_from_variational_noise = True
 
         self.current_batch_id += 1
@@ -727,7 +728,7 @@ class MonteCarloVnceLoss:
 
     def set_alpha(self, new_alpha):
         if self.use_neural_variational_noise:
-            self.variational_noise.nn.params = new_alpha
+             self.variational_noise.nn.params = new_alpha
         else:
             self.variational_noise.alpha = deepcopy(new_alpha)
         self.resample_from_variational_noise = True

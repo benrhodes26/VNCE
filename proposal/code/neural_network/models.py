@@ -72,10 +72,11 @@ class MultipleLayerModel(object):
     def __init__(self, layers):
         """Create a new multiple layer model instance.
         Args:
-            layers: List of the the layer objecst defining the model in the
+            layers: List of the the layer objects defining the model in the
                 order they should be applied from inputs to outputs.
         """
         self.layers = layers
+        self._params = None
 
     @property
     def params(self):
@@ -85,6 +86,16 @@ class MultipleLayerModel(object):
             if isinstance(layer, LayerWithParameters):
                 params += layer.params
         return params
+
+    @params.setter
+    def params(self, new_params):
+        param_counter = 0
+        for i, layer in enumerate(self.layers):
+            if isinstance(layer, LayerWithParameters):
+                for j in range(len(layer.params)):
+                    layer.params[j] = new_params[param_counter]
+                    param_counter += 1
+        self._params = None
 
     def fprop(self, inputs, stochastic=True):
         """Forward propagates a batch of inputs through the model.
