@@ -3,7 +3,8 @@ import sys
 code_dir = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/code'
 code_dir_2 = '/home/ben/ben-rhodes-masters-project/proposal/code'
 code_dir_3 = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/code/neural_network'
-code_dirs = [code_dir, code_dir_2, code_dir_3]
+code_dir_4 = '/home/ben/ben-rhodes-masters-project/proposal/code/neural_network'
+code_dirs = [code_dir, code_dir_2, code_dir_3, code_dir_4]
 for code_dir in code_dirs:
     if code_dir not in sys.path:
         sys.path.append(code_dir)
@@ -37,16 +38,16 @@ parser = ArgumentParser(description='Experimental comparison of training an RBM 
 # Read/write arguments
 parser.add_argument('--data_dir', type=str, default='/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/data/',
                     help='Path to directory where data is loaded and saved')
-# parser.add_argument('--save_dir', type=str, default='/home/ben/ben-rhodes-masters-project/experimental_results/trunc_norm',
-#                     help='Path to directory where model will be saved')
-parser.add_argument('--save_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm',
+parser.add_argument('--save_dir', type=str, default='/home/ben/ben-rhodes-masters-project/experimental_results/trunc_norm',
                     help='Path to directory where model will be saved')
+# parser.add_argument('--save_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm',
+#                     help='Path to directory where model will be saved')
 parser.add_argument('--exp_name', type=str, default='test', help='name of set of experiments this one belongs to')
 parser.add_argument('--name', type=str, default=START_TIME, help='name of this exact experiment')
 
 # Data arguments
 parser.add_argument('--which_dataset', default='synthetic', help='options: usps and synthetic')
-parser.add_argument('--n', type=int, default=100, help='Number of datapoints')
+parser.add_argument('--n', type=int, default=1000, help='Number of datapoints')
 parser.add_argument('--nz', type=int, default=1, help='Number of latent samples per datapoint')
 parser.add_argument('--nu', type=float, default=1.0, help='ratio of noise to data samples in NCE')
 
@@ -64,7 +65,7 @@ parser.add_argument('--stop_threshold', type=float, default=0, help='Tolerance u
 parser.add_argument('--max_num_epochs', type=int, default=100, help='Maximum number of loops through the dataset during training')
 parser.add_argument('--model_learn_rate', type=float, default=0.05, help='if opt_method=SGD, this is the learning rate used to train the model')
 parser.add_argument('--var_learn_rate', type=float, default=0.05, help='if opt_method=SGD, this is the learning rate used to train the variational dist')
-parser.add_argument('--batch_size', type=int, default=10, help='if opt_method=SGD, this is the size of a minibatch')
+parser.add_argument('--batch_size', type=int, default=100, help='if opt_method=SGD, this is the size of a minibatch')
 parser.add_argument('--num_batch_per_em_step', type=int, default=1, help='if opt_method=SGD, this is the number of batches per EM step')
 parser.add_argument('--num_gibbs_steps_for_adaptive_vnce', type=int, default=1, help='needed when sampling from joint noise distribution in adaptive vnce')
 parser.add_argument('--track_loss', dest='track_loss', action='store_true', help='track VNCE loss in E & M steps')

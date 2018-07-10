@@ -588,7 +588,7 @@ class MonteCarloVnceLoss:
         return first_term
 
     def second_term_grad_wrt_theta(self):
-
+        # todo: add a new elif statement when we have missing data, and don't resample ZYs!!!
         if self.use_importance_sampling:
             gradY = self.model.grad_log_wrt_params(self.Y, self.ZY)  # (len(theta), nz, n)
             r = np.exp(self.h(self.Y, self.ZY))  # (nz, n)
@@ -695,6 +695,7 @@ class MonteCarloVnceLoss:
                 self.ZX = self.variational_noise.get_Z_samples_from_E(self.nz, self.E_ZX, self.X, self.X_mask)
             else:
                 self.ZX = self.variational_noise.sample(self.nz, self.X, self.X_mask)
+            # todo: don't resample these when we have missing data (to avoid slow sampling)
             self.ZY = self.variational_noise.sample(self.nz, self.Y)
             self.resample_from_variational_noise = False
 

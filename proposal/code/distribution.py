@@ -384,8 +384,9 @@ class MissingDataProductOfTruncNormsPosterior(Distribution):
         truncation_mask = np.all(V > 0, axis=-1)  # (nz, n)
 
         power = -(1/2) * precision * (V - mean)**2  # (nz, n, k)
-        log_norm_const_1 = (-1/2) * np.log(2 * np.pi) + np.log(chol)  # (n, k) - norm const for usual Gaussian
-        log_norm_const_2 = np.log(chol) - np.log(1 - norm.cdf(-mean * chol))  # (n, k) - norm const due to truncation
+        log_chol = np.log(chol, out=np.zeros_like(chol), where=chol != 0)
+        log_norm_const_1 = (-1/2) * np.log(2 * np.pi) + log_chol  # (n, k) - norm const for usual Gaussian
+        log_norm_const_2 = log_chol - np.log(1 - norm.cdf(-mean * chol))  # (n, k) - norm const due to truncation
         log_probs = power + log_norm_const_1 + log_norm_const_2  # (nz, n, k)
 
         log_probs *= miss_mask  # mask out observed data
@@ -441,12 +442,12 @@ class MissingDataProductOfTruncNormsPosterior(Distribution):
         """
         miss_mask = self.get_miss_mask(Z)  # (nz, n, k)
         grad_shape = Z.shape[:2] + (outputs.shape[1], )  # (nz, n, len(nn_outputs))
-        mean, chol = self.get_mean_and_chol(U=None, nn_outputs=nn_outputs)  # (n, k)  - cholesky of diagonal precision matrix
+        mean, chol = self.get_mean_and_chol(U=None, miss_mask=miss_mask, nn_outputs=nn_outputs)  # (n, k)  - cholesky of diagonal precision matrix
 
-        one_minus_E = (1 - E) * miss_mask
+        one_minus_E = (1 - E) * miss_mask  # (nz, n, k)
         a = (norm.cdf(-mean * chol) * one_minus_E) + E
-        a = norm.ppf(a)   # (self.num_missing, )
-        b = 1 / norm.pdf(a)
+        a = self.normal_cdf_inverse(a)
+        b = np.divide(1, a, out=np.zeros_like(a), where=a != 0)
         c = norm.pdf(-mean * chol)
 
         a *= miss_mask
@@ -488,9 +489,9 @@ class MissingDataProductOfTruncNormsPosterior(Distribution):
         mean, chol = self.get_mean_and_chol(U=U, miss_mask=miss_mask, nn_outputs=nn_outputs)  # (n, k)  - cholesky of diagonal precision matrix
         one_minus_E = (1 - E) * miss_mask  # (nz, n, k)
         a = (norm.cdf(-mean * chol) * one_minus_E) + E  # (nz, n, k)
-        Z = norm.ppf(a)  # (nz, n, k)
-        a *= miss_mask  # (nz, n, k)
-        Z *= (1 / chol)  # check that division 0/0 is fine (if we get non-neg/0, then there is a bug in my masking)
+        Z = self.normal_cdf_inverse(a)  # (nz, n, k)
+        Z *= miss_mask  # (nz, n, k)
+        Z = np.divide(Z, chol, out=np.zeros_like(Z), where=chol != 0)
         Z += mean
 
         self.checkMask(Z, miss_mask)
@@ -515,6 +516,13 @@ class MissingDataProductOfTruncNormsPosterior(Distribution):
         miss_mask[np.nonzero(Z[0])] = 1
         return miss_mask
 
+    def normal_cdf_inverse(self, x):
+        """"Ignores any elements of x equal to 0"""
+        with np.errstate(divide='ignore', invalid='ignore'):
+            y = norm.ppf(x)
+            y[~ np.isfinite(y)] = 0  # -inf inf NaN
+        return y
+
     def checkMask(self, array, mask):
         if array.ndim == 3:
             # mask is 2d, but Z arrays are 3d due to multiple latents per visible
@@ -522,7 +530,8 @@ class MissingDataProductOfTruncNormsPosterior(Distribution):
             new_mask *= mask
         else:
             new_mask = mask
-        return np.nonzero(array) == np.nonzero(new_mask)
+        assert np.nonzero(array) == np.nonzero(new_mask), 'Non-zero elements of array do ' \
+                                                          'not match those of the missing data mask'
 
 
 class MissingDataProductOfTruncNormNoise(Distribution):
@@ -539,6 +548,7 @@ class MissingDataProductOfTruncNormNoise(Distribution):
         super().__init__(alpha, rng=rng)
 
     def __call__(self, U, log=False, nn_outputs=None):
+        # todo: get this class working with missing data!!!
         mean, chol = self.get_mean_and_chol()  # (n, k)
         precision = chol**2
         truncation_mask = np.all(U > 0, axis=-1)  # (nz, n)
