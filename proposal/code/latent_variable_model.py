@@ -5,6 +5,7 @@ import numpy as np
 from abc import ABCMeta, abstractmethod
 from copy import deepcopy
 from itertools import product
+from numpy.linalg import inv
 from numpy import random as rnd
 from matplotlib import pyplot as plt
 from scipy.stats import norm
@@ -1119,11 +1120,24 @@ class StarsAndMoonsModel(LatentVarModel):
 
 class MissingDataUnnormalisedTruncNorm(LatentVarModel):
 
-    def __init__(self, mean, chol, rng=None):
+    def __init__(self, scaling_param, mean, chol, rng=None):
+        """
+        :param scaling_param: array (1, )
+        :param mean: array (d, )
+        :param chol: array (d, d)
+            Lower triangular cholesky decomposition
+        :param rng:
+        :return:
+        """
         self.mean_len = len(mean)
 
         # cholesky of precision with log of diagonal elements (to enforce positivity)
-        theta = np.concatenate((mean.reshape(-1), chol.reshape(-1)))
+        idiag = np.diag_indices_from(chol)
+        chol[idiag] = np.log(chol[idiag])
+        lower_chol = chol[np.tril_indices(self.mean_len)]
+        self.chol_len = len(lower_chol)
+
+        theta = np.concatenate((scaling_param, mean.reshape(-1), lower_chol.reshape(-1)))
         super().__init__(theta, rng=rng)
 
     def __call__(self, U, Z, log=False):
@@ -1137,15 +1151,17 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
             if True, return value of logphi, where phi is the unnormalised model
         """
         V = U + Z  # (nz, n, k) - fill in the missing data
+        scaling_param = self.theta[0]
         mean, chol, chol_diag = self.get_mean_and_chol()
         truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)
 
+        V_centred = V - mean
         P = np.dot(chol, chol.T)  # (k, k) - precision matrix
-        VP = np.dot(V, P)  # (nz, n, k)
-        power = -0.5 * np.sum(VP * V, axis=-1)  # (nz, n)
+        VP = np.dot(V_centred, P)  # (nz, n, k)
+        power = -0.5 * np.sum(VP * V_centred, axis=-1)  # (nz, n)
         log_norm_const = (-self.mean_len / 2) * np.log(2 * np.pi) + np.sum(np.log(chol_diag))
 
-        val = log_norm_const + power
+        val = -scaling_param + log_norm_const + power
         if log:
             val = truncation_mask * val + (1 - truncation_mask) * -15  # should be -infty, but -15 avoids numerical issues
         else:
@@ -1162,27 +1178,33 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
             m-dimensional latent variable samples. nz per datapoint in U.
         :return grad: array (len(theta), nz, n)
         """
-        V = U + Z  # (nz, n, k) - fill in the missing data
+        V = U + Z  # (nz, n, d) - fill in the missing data
         truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)
 
         mean, chol, chol_diag = self.get_mean_and_chol()
+        ones_with_chol_diag = np.ones_like(chol)  # (d , d)
+        ones_with_chol_diag[np.diag_indices_from(ones_with_chol_diag)] = chol_diag
+
+        grad_wrt_to_scaling_param = np.ones((1, ) + Z.shape[:2]) * -1  # (1, nz, n)
+
         V_centred = V - mean
-        P = np.dot(chol, chol.T)  # (k, k) - precision matrix
+        P = np.dot(chol, chol.T)  # (d, d) - precision matrix
+        grad_wrt_to_mean = np.dot(V_centred, P.T)  # (nz, n, d)
+        grad_wrt_to_mean = np.transpose(grad_wrt_to_mean, [2, 0, 1])  # (d, nz, n)
 
-        grad_wrt_to_mean = np.dot(V_centred, P.T)  # (nz, n, k)
-        grad_wrt_to_mean = np.transpose(grad_wrt_to_mean, [2, 0, 1])  # (k, nz, n)
-
-        V1 = np.repeat(V_centred, self.mean_len, axis=-1)  # (nz, n, k*k)
-        V2 = np.tile(V_centred, self.mean_len)  # (nz, n, k*k)
+        V1 = np.repeat(V_centred, self.mean_len, axis=-1)  # (nz, n, d*d)
+        V2 = np.tile(V_centred, self.mean_len)  # (nz, n, d*d)
         v3_shape = Z.shape[:2] + (self.mean_len, self.mean_len)
-        V3 = (V1 * V2).reshape(v3_shape)  # (nz, n, k, k)
-        V4 = np.dot(V3, chol)  # (nz, n, k, k)
-        V4 *= np.diag(chol_diag)  # (nz, n, k, k)
+        V3 = (V1 * V2).reshape(v3_shape)  # (nz, n, d, d)
+        V4 = np.dot(V3, chol)  # (nz, n, d, d)
+        V4 *= ones_with_chol_diag  # (nz, n, d, d)
+        V5 = (np.identity(self.mean_len) - V4)  # (nz, n, d, d)
 
-        grad_wrt_chol = (np.identity(self.mean_len) - V4).reshape(Z.shape[0], Z.shape[1], -1)  # (nz, n, k*k)
-        grad_wrt_chol = np.transpose(grad_wrt_chol, [2, 0, 1])  # (k*k, nz, n)
+        ilower = np.tril_indices(self.mean_len)
+        grad_wrt_chol = V5[:, :, ilower[0], ilower[1]].reshape(Z.shape[:2] + (-1, ))  # (nz, n, d(d+1)/2)
+        grad_wrt_chol = np.transpose(grad_wrt_chol, [2, 0, 1])  # (d(d+1)/2, nz, n)
 
-        grad = np.concatenate((grad_wrt_to_mean, grad_wrt_chol), axis=0)  # (k + k*k, nz, n)
+        grad = np.concatenate((grad_wrt_to_scaling_param, grad_wrt_to_mean, grad_wrt_chol), axis=0)  # (len(theta), nz, n)
         grad *= truncation_mask  # truncate
 
         return grad
@@ -1234,7 +1256,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         sample = np.zeros((n, k))
         total_n_accepted = 0
         expected_num_proposals_per_accept = (25 / (2 * np.pi))**(k/2)
-        proposal_size = int(3 * n * expected_num_proposals_per_accept)
+        proposal_size = int(4 * n * expected_num_proposals_per_accept)
         if proposal_size > 10**8:
             print('WARNING: GENERATING THE MAXIMUM NUMBER (10**8) OF SAMPLES FROM THE PROPOSAL DISTRIBUTION INSIDE A WHILE LOOP,'
                   ' AS PART OF THE ACCEPT-REJECT ALGORITHM. THIS COULD TAKE A VERY LONG TIME. THE DIMENSIONALITY OF YOUR DATA MAY'
@@ -1266,10 +1288,12 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
 
     def get_mean_and_chol(self):
         """get mean and lower triangular cholesky of the precision matrix"""
-        mean, chol = deepcopy(self.theta[:self.mean_len]), deepcopy(self.theta[self.mean_len:])
+        mean, chol = deepcopy(self.theta[1:1+self.mean_len]), deepcopy(self.theta[1+self.mean_len:])
 
         # lower-triangular cholesky decomposition of the precision
-        chol_mat = chol.reshape(self.mean_len, self.mean_len)
+        chol_mat = np.zeros((self.mean_len, self.mean_len))
+        ilower = np.tril_indices(self.mean_len)
+        chol_mat[ilower] = chol
 
         # exp the diagonal, to enforce positivity
         idiag = np.diag_indices_from(chol_mat)

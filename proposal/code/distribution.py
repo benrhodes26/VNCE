@@ -552,13 +552,15 @@ class MissingDataProductOfTruncNormNoise(Distribution):
         else:
             self.rng = rnd.RandomState(DEFAULT_SEED)
 
-        # cholesky of precision with log of diagonal elements (to enforce positivity)
+        # log to enforce positivity
+        chol = np.log(chol)
         alpha = np.concatenate((mean.reshape(-1), chol.reshape(-1)))
         super().__init__(alpha, rng=rng)
 
     def __call__(self, U, log=False, nn_outputs=None):
         observed_mask = self.get_observed_mask(U)  # (n, k) - 0's represent missing data
         mean, chol = self.get_mean_and_chol(observed_mask)  # (n, k)
+
         precision = chol**2
         truncation_mask = np.all(U >= 0, axis=-1)  # (nz, n)
 
@@ -623,7 +625,7 @@ class MissingDataProductOfTruncNormNoise(Distribution):
 
     def checkMask(self, array, mask):
         assert np.all((array != 0) == (mask != 0)), 'Non-zero elements of array do ' \
-                                                          'not match those of the missing data mask'
+                                                    'not match those of the missing data mask'
 
 
 # noinspection PyPep8Naming,PyMissingConstructor

@@ -17,7 +17,7 @@ from copy import deepcopy
 from itertools import combinations
 from numpy import random as rnd
 from scipy.stats import norm, multivariate_normal
-from scipy.optimize import newton_krylov
+from scipy.optimize import root
 from time import gmtime, strftime
 
 from distribution import MissingDataProductOfTruncNormsPosterior, MissingDataProductOfTruncNormNoise
@@ -35,10 +35,10 @@ parser = ArgumentParser(description='Experimental comparison of training an RBM 
 # Read/write arguments
 parser.add_argument('--data_dir', type=str, default='/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/data/',
                     help='Path to directory where data is loaded and saved')
-parser.add_argument('--save_dir', type=str, default='/home/ben/ben-rhodes-masters-project/experimental_results/trunc_norm',
-                    help='Path to directory where model will be saved')
-# parser.add_argument('--save_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm',
+# parser.add_argument('--save_dir', type=str, default='/home/ben/ben-rhodes-masters-project/experimental_results/trunc_norm',
 #                     help='Path to directory where model will be saved')
+parser.add_argument('--save_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm',
+                    help='Path to directory where model will be saved')
 parser.add_argument('--exp_name', type=str, default='test', help='name of set of experiments this one belongs to')
 parser.add_argument('--name', type=str, default=START_TIME, help='name of this exact experiment')
 
@@ -114,8 +114,9 @@ def estimate_trunc_norm_params(sample_mean, sample_var):
         return np.concatenate((mean_res, var_res))
 
     guess = np.ones(4)
-    sol = newton_krylov(trunc_norm_param_residuals, guess, method='lgmres')
+    res = root(trunc_norm_param_residuals, guess, method='broyden1')
 
+    sol = res.x
     trunc_mean = sol[:d]
     trunc_std = sol[d:]
     return trunc_mean, trunc_std
@@ -126,34 +127,36 @@ def make_loss_functions(args):
     rng = args.rng
 
     # initialise ground-truth parameters for data generating distribution
-    true_mean = np.array([1, 5])
+    true_mean = np.array([3, 3], dtype=float)
+    true_chol = np.identity(2).astype(float) * 3.  # choleksy of precision
     # true_chol = np.tril(np.ones((args.d, args.d))) * 0.5
-    true_chol = np.array([[1, 0], [-1, 1]])
-    idiag = np.diag_indices_from(true_chol)
-    true_chol[idiag] = np.log(true_chol[idiag])
-    data_dist = MissingDataUnnormalisedTruncNorm(mean=true_mean, chol=true_chol, rng=rng)
+    # true_chol = np.array([[1, 0], [-1, 1]])
+
+    data_dist = MissingDataUnnormalisedTruncNorm(scaling_param=np.array([0.]), mean=true_mean, chol=true_chol, rng=rng)
     args.theta_true = data_dist.theta
 
     # generate synthetic data and masks (which are used for simulating missing data)
     X_train = data_dist.sample(args.n)
     X_val = data_dist.sample(int(args.n / 5))
 
-    X_train_sample_mean = X_train.mean(axis=0)
-    X_train_sample_diag_var = X_train.var(axis=0)  # ignore covariances
-
     train_missing_data_mask = args.rng.uniform(0, 1, X_train.shape) < args.frac_missing
     val_missing_data_mask = args.rng.uniform(0, 1, X_val.shape) < args.frac_missing
 
+    X_train_sample_mean = (X_train * (1 - train_missing_data_mask)).mean(axis=0)
+    X_train_sample_diag_var = (X_train * (1 - train_missing_data_mask)).var(axis=0)  # ignore covariances
+
     # initialise the model p(x, z)
-    mean0 = np.zeros(args.d)
-    chol0 = np.zeros((args.d, args.d))  # cholesky of precision after taking log of diagonal
-    args.theta0 = np.concatenate((mean0, chol0.reshape(-1)))
-    model = MissingDataUnnormalisedTruncNorm(mean=mean0, chol=chol0, rng=rng)
+    scale0 = np.array([0.])
+    mean0 = np.zeros(args.d).astype(float)
+    chol0 = np.identity(args.d).astype(float)  # cholesky of precision
+
+    model = MissingDataUnnormalisedTruncNorm(scaling_param=scale0, mean=mean0, chol=chol0, rng=rng)
+    args.theta0 = np.concatenate((scale0, mean0, chol0.reshape(-1)))
 
     # estimate (from the synthetic data) the parameters of a factorial truncated normal for the noise distribution
     noise_mean, noise_std = estimate_trunc_norm_params(X_train_sample_mean, X_train_sample_diag_var)
     noise_chol = np.log(1 / noise_std)  # log of cholesky of diagonal precision
-    print('estimted noise parameters: \n mean: {} \n chol: {}'.format(noise_mean, noise_chol))
+    print('estimated noise parameters: \n mean: {} \n chol: {}'.format(noise_mean, noise_chol))
 
     # make noise distribution and noise samples for vnce
     noise = MissingDataProductOfTruncNormNoise(mean=noise_mean, chol=noise_chol, rng=rng)
@@ -257,10 +260,10 @@ def main(args, save_dir):
                        stop_threshold=args.stop_threshold,
                        max_num_em_steps=args.max_num_em_steps)
 
-    mse = mean_square_error(args.theta_true, vnce_loss.model.theta)
+    mse = mean_square_error(args.theta_true[1:], vnce_loss.model.theta[1:])
     print('Mean Squared Error: {}'.format(mse))
-    print('true theta: {}'.format(args.theta_true))
-    print('estimated theta: {}'.format(vnce_loss.model.theta))
+    print('true theta: {}'.format(args.theta_true[1:]))
+    print('estimated theta: {}'.format(vnce_loss.model.theta[1:]))
     plot_and_save_results(save_dir, args, vnce_loss, vnce_optimiser, mse)
 
 
