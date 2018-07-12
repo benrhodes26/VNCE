@@ -3,6 +3,7 @@
 import numpy as np
 
 from abc import ABCMeta, abstractmethod
+from copy import deepcopy
 from itertools import product
 from numpy import random as rnd
 from matplotlib import pyplot as plt
@@ -23,7 +24,7 @@ class Model(metaclass=ABCMeta):
             theta = np.array([theta])
         assert theta.ndim == 1, 'Theta should have dimension 1, ' \
                                 'not {}'.format(theta.ndim)
-        self._theta = theta
+        self._theta = deepcopy(theta)
         self.theta_shape = theta.shape
         if not rng:
             self.rng = rnd.RandomState(DEFAULT_SEED)
@@ -588,3 +589,147 @@ class VisibleRestrictedBoltzmannMachine(Model):
 
         return all_binary_vectors
 
+
+class UnnormalisedTruncNorm(Model):
+
+    def __init__(self, scaling_param, mean, chol, rng=None):
+        """
+        :param scaling_param: array (1, )
+        :param mean: array (d, )
+        :param chol: array (d, d)
+            Lower triangular cholesky decomposition
+        :param rng:
+        :return:
+        """
+        self.mean_len = len(mean)
+
+        # cholesky of precision with log of diagonal elements (to enforce positivity)
+        chol = deepcopy(chol)
+        idiag = np.diag_indices_from(chol)
+        chol[idiag] = np.log(chol[idiag])
+        lower_chol = chol[np.tril_indices(self.mean_len)]
+        self.chol_len = len(lower_chol)
+
+        theta = np.concatenate((scaling_param, mean.reshape(-1), lower_chol.reshape(-1)))
+        super().__init__(theta, rng=rng)
+
+    def __call__(self, U, log=False):
+        """Evaluate unnormalised model
+
+        :param U: array (n, k)
+            observed data
+        :param log: boolean
+            if True, return value of logphi, where phi is the unnormalised model
+        """
+        scaling_param = deepcopy(self.theta[0])
+        mean, chol, chol_diag = self.get_mean_and_chol()
+        truncation_mask = np.all(U >= 0, axis=-1)  # (n, )
+
+        U_centred = U - mean
+        P = np.dot(chol, chol.T)  # (k, k) - precision matrix
+        VP = np.dot(U_centred, P)  # (n, k)
+        power = -0.5 * np.sum(VP * U_centred, axis=-1)  # (n, )
+        log_norm_const = (-self.mean_len / 2) * np.log(2 * np.pi) + np.sum(np.log(chol_diag))
+
+        val = -scaling_param + log_norm_const + power
+        if log:
+            val = truncation_mask * val + (1 - truncation_mask) * -15  # should be -infty, but -15 avoids numerical issues
+        else:
+            val = truncation_mask * np.exp(val)
+
+        return val  # (n, )
+
+    def grad_log_wrt_params(self, U):
+        """ Nabla_theta(log(phi(x,z; theta))) where phi is the unnormalised model
+
+        :param U: array (n, d)
+             either data or noise for NCE
+        :param Z: (nz, n, m) or (n, m)
+            m-dimensional latent variable samples. nz per datapoint in U.
+        :return grad: array (len(theta), nz, n)
+        """
+        truncation_mask = np.all(U >= 0, axis=-1)  # (n, )
+
+        mean, chol, chol_diag = self.get_mean_and_chol()
+        ones_with_chol_diag = np.ones_like(chol)  # (d , d)
+        ones_with_chol_diag[np.diag_indices_from(ones_with_chol_diag)] = chol_diag
+
+        grad_wrt_to_scaling_param = np.ones((1, len(U))) * -1  # (1, n)
+
+        U_centred = U - mean
+        P = np.dot(chol, chol.T)  # (d, d) - precision matrix
+        grad_wrt_to_mean = np.dot(U_centred, P.T).T  # (d, n)
+
+        V1 = np.repeat(U_centred, self.mean_len, axis=-1)  # (n, d*d)
+        V2 = np.tile(U_centred, self.mean_len)  # (n, d*d)
+        v3_shape = (len(U), ) + (self.mean_len, self.mean_len)
+        V3 = (V1 * V2).reshape(v3_shape)  # (n, d, d)
+        V4 = np.dot(V3, chol)  # (n, d, d)
+        V4 *= ones_with_chol_diag  # (n, d, d)
+        V5 = (np.identity(self.mean_len) - V4)  # (n, d, d)
+
+        ilower = np.tril_indices(self.mean_len)
+        grad_wrt_chol = V5[:, ilower[0], ilower[1]].reshape((len(U), -1)).T  # (d(d+1)/2, n)
+
+        grad = np.concatenate((grad_wrt_to_scaling_param, grad_wrt_to_mean, grad_wrt_chol), axis=0)  # (len(theta), n)
+        grad *= truncation_mask  # truncate
+
+        return grad
+
+    def sample(self, n):
+        """ Sample from a truncated multivariate normal with rejection sampling with uniform proposal (note: this won't scale)
+        :param n: sample size
+        """
+        mean, chol, chol_diag = self.get_mean_and_chol()
+        stds = (1 / chol_diag)
+        low_proposal = np.maximum(mean - (5 * stds), 0)
+        high_proposal = mean + (5 * stds)
+        k = len(mean)
+
+        sample = np.zeros((n, k))
+        total_n_accepted = 0
+        expected_num_proposals_per_accept = (25 / (2 * np.pi))**(k/2)
+        proposal_size = int(4 * n * expected_num_proposals_per_accept)
+        if proposal_size > 10**8:
+            print('WARNING: GENERATING THE MAXIMUM NUMBER (10**8) OF SAMPLES FROM THE PROPOSAL DISTRIBUTION INSIDE A WHILE LOOP,'
+                  ' AS PART OF THE ACCEPT-REJECT ALGORITHM. THIS COULD TAKE A VERY LONG TIME. THE DIMENSIONALITY OF YOUR DATA MAY'
+                  ' BE TOO HIGH')
+            proposal_size = 10**8
+
+        print('sampling from the model...')
+        while total_n_accepted < n:
+            proposal = self.rng.uniform(low_proposal, high_proposal, (proposal_size, k))  # (proposal_size, k)
+            V = proposal - mean
+
+            P = np.dot(chol, chol.T)  # (k, k) - precision matrix
+            VP = np.dot(V, P)  # (proposal_size, k)
+            acceptance_prob = np.exp(-0.5 * np.sum(VP * V, axis=-1))  # (proposal_size, )
+            accept = self.rng.uniform(0, 1, proposal_size) < acceptance_prob
+            accepted = proposal[accept]
+
+            n_accepted = len(accepted)
+            if total_n_accepted + n_accepted >= n:
+                remain = n - total_n_accepted
+                sample[total_n_accepted:] = accepted[:remain]
+            else:
+                sample[total_n_accepted: total_n_accepted+n_accepted] = accepted
+            total_n_accepted += n_accepted
+            print('total num samples from model accepted: {}'.format(min(total_n_accepted, n)))
+        print('finished sampling!')
+
+        return sample
+
+    def get_mean_and_chol(self):
+        """get mean and lower triangular cholesky of the precision matrix"""
+        mean, chol = deepcopy(self.theta[1:1+self.mean_len]), deepcopy(self.theta[1+self.mean_len:])
+
+        # lower-triangular cholesky decomposition of the precision
+        chol_mat = np.zeros((self.mean_len, self.mean_len))
+        ilower = np.tril_indices(self.mean_len)
+        chol_mat[ilower] = chol
+
+        # exp the diagonal, to enforce positivity
+        idiag = np.diag_indices_from(chol_mat)
+        chol_mat[idiag] = np.exp(chol_mat[idiag])
+
+        return mean, chol_mat, chol_mat[idiag]

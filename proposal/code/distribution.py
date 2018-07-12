@@ -389,7 +389,7 @@ class MissingDataProductOfTruncNormsPosterior(Distribution):
             power = -(1/2) * precision * (Z - mean)**2  # (nz, n, k)
             log_chol = np.log(chol, out=np.zeros_like(chol), where=chol != 0)
             log_norm_const_1 = (-1/2) * np.log(2 * np.pi) + log_chol  # (n, k) - norm const for usual Gaussian
-            log_norm_const_2 = log_chol - np.log(1 - norm.cdf(-mean * chol))  # (n, k) - norm const due to truncation
+            log_norm_const_2 = - np.log(1 - norm.cdf(-mean * chol))  # (n, k) - norm const due to truncation
             log_probs = power + log_norm_const_1 + log_norm_const_2  # (nz, n, k)
 
             log_probs *= miss_mask  # mask out observed data
@@ -419,11 +419,11 @@ class MissingDataProductOfTruncNormsPosterior(Distribution):
         grad_log_through_z = np.concatenate((grad_log_through_z_1, grad_log_through_z_2), axis=0)  # (len(nn_outputs), nz, n)
 
         a = (2 * np.pi)**(-0.5) * chol * np.exp(-0.5 * precision * mean**2)  # (n, k)
-        b = chol * (1 / (1 - norm.cdf(-chol * mean)))
+        b = 1 / (1 - norm.cdf(-chol * mean))
         c = a * b * miss_mask
 
         grad_log_wrt_nn_output1 = (0.5 * precision * (Z - mean)) - c  # (nz, n, k)
-        grad_log_wrt_nn_output2 = -2 + (precision * (Z - mean)**2) + (c * mean)  # (nz, n, k)
+        grad_log_wrt_nn_output2 = -1 + (precision * (Z - mean)**2) + (c * mean)  # (nz, n, k)
         grad_log_wrt_nn_output1 *= miss_mask
         grad_log_wrt_nn_output2 *= miss_mask
 
@@ -567,7 +567,7 @@ class MissingDataProductOfTruncNormNoise(Distribution):
         power = -(1/2) * precision * (U - mean)**2  # (nz, n, k)
         log_chol = np.log(chol, out=np.zeros_like(chol), where=chol != 0)
         log_norm_const_1 = (-1/2) * np.log(2 * np.pi) + log_chol  # (n, k) - norm const for usual Gaussian
-        log_norm_const_2 = log_chol - np.log(1 - norm.cdf(-mean * chol))  # (n, k) - norm const due to truncation
+        log_norm_const_2 = - np.log(1 - norm.cdf(-mean * chol))  # (n, k) - norm const due to truncation
         log_probs = power + log_norm_const_1 + log_norm_const_2  # (nz, n, k)
 
         log_probs *= observed_mask

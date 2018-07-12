@@ -25,7 +25,7 @@ class LatentVarModel(metaclass=ABCMeta):
             theta = np.array([theta])
         assert theta.ndim == 1, 'Theta should have dimension 1, ' \
                                 'not {}'.format(theta.ndim)
-        self._theta = theta
+        self._theta = deepcopy(theta)
         self.theta_shape = theta.shape
         if not rng:
             self.rng = rnd.RandomState(DEFAULT_SEED)
@@ -1132,6 +1132,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         self.mean_len = len(mean)
 
         # cholesky of precision with log of diagonal elements (to enforce positivity)
+        chol = deepcopy(chol)
         idiag = np.diag_indices_from(chol)
         chol[idiag] = np.log(chol[idiag])
         lower_chol = chol[np.tril_indices(self.mean_len)]
@@ -1151,7 +1152,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
             if True, return value of logphi, where phi is the unnormalised model
         """
         V = U + Z  # (nz, n, k) - fill in the missing data
-        scaling_param = self.theta[0]
+        scaling_param = deepcopy(self.theta[0])
         mean, chol, chol_diag = self.get_mean_and_chol()
         truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)
 
