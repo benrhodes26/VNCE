@@ -155,7 +155,7 @@ def make_loss_functions(args):
 
     # estimate (from the synthetic data) the parameters of a factorial truncated normal for the noise distribution
     noise_mean, noise_std = estimate_trunc_norm_params(X_train_sample_mean, X_train_sample_diag_var)
-    noise_chol = np.log(1 / noise_std)  # log of cholesky of diagonal precision
+    noise_chol = 1 / noise_std  # cholesky of diagonal precision
     print('estimated noise parameters: \n mean: {} \n chol: {}'.format(noise_mean, noise_chol))
 
     # make noise distribution and noise samples for vnce
