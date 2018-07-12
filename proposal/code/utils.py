@@ -12,6 +12,11 @@ from matplotlib import pyplot as plt
 
 
 def mean_square_error(estimate, true_value, plot=True):
+    """Calculate MSE(estimate, true_value)"""
+    # we want to handle three cases:
+    # 1) both of {estimate, true_value} are floats/ints
+    # 2) one of {estimate, true_value} is a float/int and the other is an array containing a float/int
+    # 3) both {estimate, true_value} are arrays
 
     estimate_float_or_int = isinstance(estimate, float) | isinstance(estimate, int)
     true_val_float_or_int = isinstance(true_value, float) | isinstance(true_value, int)
@@ -24,7 +29,6 @@ def mean_square_error(estimate, true_value, plot=True):
         elif true_value.ndim > 1:
             print('ground truth has dim {}, but estimate is an int or float'.format(true_value.ndim))
             raise TypeError
-
     elif isinstance(estimate, np.ndarray):
         if estimate.ndim == 1 and true_val_float_or_int:
             true_value = np.array([true_value])
@@ -39,6 +43,7 @@ def mean_square_error(estimate, true_value, plot=True):
     square_error = error**2
 
     if plot:
+        # plot the distribution over square_error
         num_bins = int((len(square_error))**0.5)
         plt.hist(square_error, bins=num_bins)
 
@@ -222,7 +227,7 @@ def plot_nce_minus_vnce_loss(nce_loss_for_vnce_params, vnce_losses, times, e_ste
     return fig
 
 
-def plot_vnce_loss(vnce_losses, vnce_val_losses, times, m_step_start_ids=None, e_step_start_ids=None):
+def plot_vnce_loss(vnce_losses, times, vnce_val_losses, val_times, m_step_start_ids=None, e_step_start_ids=None):
     fig, ax = plt.subplots(1, 1, figsize=(5.7, 2.5))
 
     if vnce_losses.ndim == 2:
@@ -231,7 +236,7 @@ def plot_vnce_loss(vnce_losses, vnce_val_losses, times, m_step_start_ids=None, e
         vnce_val_losses = np.sum(vnce_val_losses, axis=1)
 
     ax.plot(times, vnce_losses, c='k', label='J1 train')
-    ax.plot(times, vnce_val_losses, c='green', label='J1 val')
+    ax.plot(val_times, vnce_val_losses, c='green', label='J1 val')
 
     max_y_val = vnce_losses.max()
     min_y_val = vnce_losses.min()
@@ -245,7 +250,7 @@ def plot_vnce_loss(vnce_losses, vnce_val_losses, times, m_step_start_ids=None, e
             ax.plot((time, time), (min_y_val, max_y_val), c='0.7', label='start of M step')
 
     ax.set_xlabel('time (seconds)', fontsize=16)
-    ax.legend()
+    remove_duplicate_legends(ax)
 
     return fig
 
@@ -343,9 +348,10 @@ def plot_log_likelihood_learning_curves(training_curves,
 
 
 def save_fig(fig, save_dir, title):
-    fig.savefig(save_dir + title + '.png', bbox_inches="tight", dpi=300)
-    fig.savefig(save_dir + title + '.pdf', bbox_inches="tight")
-    pickle.dump(fig, open(os.path.join(save_dir, title + '.p'), "wb"))
+    save_path = os.path.join(save_dir, title)
+    fig.savefig(save_path + '.png', bbox_inches="tight", dpi=300)
+    fig.savefig(save_path + '.pdf', bbox_inches="tight")
+    pickle.dump(fig, open(save_path + '.p', "wb"))
 
 
 def change_fig_fontsize(fig, new_size):

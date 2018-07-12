@@ -28,9 +28,6 @@ from models import MultipleLayerModel
 from utils import *
 from vnce_optimiser import VemOptimiser, SgdEmStep, MonteCarloVnceLoss
 
-# Seed a random number generator
-seed = 10102016
-rng = np.random.RandomState(seed)
 START_TIME = strftime('%Y%m%d-%H%M', gmtime())
 
 parser = ArgumentParser(description='Experimental comparison of training an RBM using latent nce and contrastive divergence',
@@ -47,14 +44,14 @@ parser.add_argument('--name', type=str, default=START_TIME, help='name of this e
 
 # Data arguments
 parser.add_argument('--which_dataset', default='synthetic', help='options: usps and synthetic')
-parser.add_argument('--n', type=int, default=1000, help='Number of datapoints')
+parser.add_argument('--n', type=int, default=50000, help='Number of datapoints')
 parser.add_argument('--nz', type=int, default=1, help='Number of latent samples per datapoint')
 parser.add_argument('--nu', type=float, default=1.0, help='ratio of noise to data samples in NCE')
 
 # Model arguments
 parser.add_argument('--theta0_path', type=str, default=None, help='path to pre-trained weights')
 parser.add_argument('--d', type=int, default=2, help='dimension of visibles for synthetic dataset')
-parser.add_argument('--frac_missing', type=float, default=0.1, help='fraction of data missing at random')
+parser.add_argument('--frac_missing', type=float, default=0, help='fraction of data missing at random')
 
 # Latent NCE optimisation arguments
 parser.add_argument('--loss', type=str, default='MonteCarloVnceLoss', help='loss function class to use. See vnce_optimisers.py for options')
@@ -62,12 +59,11 @@ parser.add_argument('--noise', type=str, default='marginal', help='type of noise
 parser.add_argument('--opt_method', type=str, default='SGD', help='optimisation method. L-BFGS-B and CG both seem to work')
 parser.add_argument('--maxiter', type=int, default=10, help='number of iterations performed by L-BFGS-B optimiser inside each M step of EM')
 parser.add_argument('--stop_threshold', type=float, default=0, help='Tolerance used as stopping criterion in EM loop')
-parser.add_argument('--max_num_epochs', type=int, default=100, help='Maximum number of loops through the dataset during training')
-parser.add_argument('--model_learn_rate', type=float, default=0.05, help='if opt_method=SGD, this is the learning rate used to train the model')
-parser.add_argument('--var_learn_rate', type=float, default=0.05, help='if opt_method=SGD, this is the learning rate used to train the variational dist')
+parser.add_argument('--max_num_epochs', type=int, default=50, help='Maximum number of loops through the dataset during training')
+parser.add_argument('--model_learn_rate', type=float, default=0.001, help='if opt_method=SGD, this is the learning rate used to train the model')
+parser.add_argument('--var_learn_rate', type=float, default=0.001, help='if opt_method=SGD, this is the learning rate used to train the variational dist')
 parser.add_argument('--batch_size', type=int, default=100, help='if opt_method=SGD, this is the size of a minibatch')
 parser.add_argument('--num_batch_per_em_step', type=int, default=1, help='if opt_method=SGD, this is the number of batches per EM step')
-parser.add_argument('--num_gibbs_steps_for_adaptive_vnce', type=int, default=1, help='needed when sampling from joint noise distribution in adaptive vnce')
 parser.add_argument('--track_loss', dest='track_loss', action='store_true', help='track VNCE loss in E & M steps')
 parser.add_argument('--no-track_loss', dest='track_loss', action='store_false')
 parser.set_defaults(track_loss=True)
@@ -128,34 +124,43 @@ def estimate_trunc_norm_params(sample_mean, sample_var):
 def make_loss_functions(args):
     """ """
     rng = args.rng
-    # initialise model parameters
-    model_mean = rng.uniform(0, 1, args.d)
-    model_chol = np.identity(args.d)
-    idiag = np.diag_indices_from(model_chol)
-    model_chol[idiag] = np.log(model_chol[idiag])
 
-    # initialise the model p(x, z)
-    model = MissingDataUnnormalisedTruncNorm(mean=model_mean, chol=model_chol, rng=rng)
-    args.theta0 = deepcopy(model.theta)
+    # initialise ground-truth parameters for data generating distribution
+    true_mean = np.array([1, 5])
+    # true_chol = np.tril(np.ones((args.d, args.d))) * 0.5
+    true_chol = np.array([[1, 0], [-1, 1]])
+    idiag = np.diag_indices_from(true_chol)
+    true_chol[idiag] = np.log(true_chol[idiag])
+    data_dist = MissingDataUnnormalisedTruncNorm(mean=true_mean, chol=true_chol, rng=rng)
+    args.theta_true = data_dist.theta
 
     # generate synthetic data and masks (which are used for simulating missing data)
-    X_train = model.sample(args.n)
-    X_val = model.sample(int(args.n / 5))
+    X_train = data_dist.sample(args.n)
+    X_val = data_dist.sample(int(args.n / 5))
+
+    X_train_sample_mean = X_train.mean(axis=0)
+    X_train_sample_diag_var = X_train.var(axis=0)  # ignore covariances
+
     train_missing_data_mask = args.rng.uniform(0, 1, X_train.shape) < args.frac_missing
     val_missing_data_mask = args.rng.uniform(0, 1, X_val.shape) < args.frac_missing
 
+    # initialise the model p(x, z)
+    mean0 = np.zeros(args.d)
+    chol0 = np.zeros((args.d, args.d))  # cholesky of precision after taking log of diagonal
+    args.theta0 = np.concatenate((mean0, chol0.reshape(-1)))
+    model = MissingDataUnnormalisedTruncNorm(mean=mean0, chol=chol0, rng=rng)
+
     # estimate (from the synthetic data) the parameters of a factorial truncated normal for the noise distribution
-    X_train_sample_mean = X_train.mean(axis=0)
-    X_train_sample_diag_var = X_train.var(axis=0)  # ignore covariances
     noise_mean, noise_std = estimate_trunc_norm_params(X_train_sample_mean, X_train_sample_diag_var)
-    noise_chol = 1 / np.log(noise_std)  # log of cholesky of diagonal precision
+    noise_chol = np.log(1 / noise_std)  # log of cholesky of diagonal precision
+    print('estimted noise parameters: \n mean: {} \n chol: {}'.format(noise_mean, noise_chol))
 
     # make noise distribution and noise samples for vnce
     noise = MissingDataProductOfTruncNormNoise(mean=noise_mean, chol=noise_chol, rng=rng)
     Y = noise.sample(int(args.n * args.nu))
 
     # create variational distribution, which uses a multi-layer neural network
-    args.weights_init = UniformInit(-0.05, 0.05, rng=rng)
+    args.weights_init = UniformInit(-0.001, 0.001, rng=rng)
     args.biases_init = ConstantVectorInit(np.concatenate((noise_mean, noise_chol)))
     layers = compose_layers(args)
     nn = MultipleLayerModel(layers)
@@ -190,7 +195,7 @@ def make_optimisers(args):
                            num_batches_per_em_step=args.num_batch_per_em_step,
                            noise_to_data_ratio=args.nu,
                            track_loss=args.track_loss,
-                           rng=rng)
+                           rng=args.rng)
     else:
         m_step = ScipyMinimiseEmStep(do_m_step=True,
                                      optimisation_method=args.opt_method,
@@ -200,40 +205,39 @@ def make_optimisers(args):
                        num_batches_per_em_step=args.num_batch_per_em_step,
                        noise_to_data_ratio=args.nu,
                        track_loss=args.track_loss,
-                       rng=rng)
+                       rng=args.rng)
 
     vnce_optimiser = VemOptimiser(m_step=m_step, e_step=e_step, num_em_steps_per_epoch=args.num_em_steps_per_epoch)
 
     return vnce_optimiser
 
 
-def plot_and_save_results(args, vnce_loss, optimiser):
-    vnce_thetas, vnce_alphas, vnce_losses, vnce_val_losses, vnce_times = optimiser.get_flattened_result_arrays()
+def plot_and_save_results(save_dir, args, vnce_loss, optimiser, mse):
+
+    vnce_thetas, vnce_alphas, vnce_losses, vnce_times, vnce_val_losses, vnce_val_times = optimiser.get_flattened_result_arrays(flatten_params=False)
     m_step_ids, e_step_ids, m_step_start_ids, e_step_start_ids = optimiser.get_m_and_e_step_ids()
-    vnce_plot = plot_vnce_loss(vnce_losses, vnce_val_losses, vnce_times, m_step_start_ids, e_step_start_ids)
+    vnce_plot = plot_vnce_loss(vnce_losses, vnce_times, vnce_val_losses, vnce_val_times)
     save_fig(vnce_plot, save_dir, 'vnce_loss')
 
-    save_dir = args.save_dir
-    with open(os.path.join(SAVE_DIR, "{}_config.txt".format(exp_name)), 'w') as f:
-        for key, value in args.items():
+    with open(os.path.join(save_dir, "config.txt"), 'w') as f:
+        for key, value in vars(args).items():
             f.write("{}: {}\n".format(key, value))
 
     pickle.dump(args, open(os.path.join(save_dir, "config.p"), "wb"))
-    pickle.dump(optimiser, open(os.path.join(save_dir, "vnce_optimiser.p"), "wb"))
     pickle.dump(vnce_loss.model, open(os.path.join(save_dir, "model.p"), "wb"))
     pickle.dump(vnce_loss.noise, open(os.path.join(save_dir, "noise.p"), "wb"))
     pickle.dump(vnce_loss.variational_noise, open(os.path.join(save_dir, "var_dist.p"), "wb"))
+    pickle.dump(optimiser.thetas, open(os.path.join(save_dir, "vnce_thetas.p"), "wb"))
+    pickle.dump(optimiser.alphas, open(os.path.join(save_dir, "vnce_alphas.p"), "wb"))
 
-    np.savez(os.path.join(save_dir, "theta0"), theta0=args.theta0)
+    np.savez(os.path.join(save_dir, "theta0_and_theta_true"), theta0=args.theta0, theta_true=args.theta_true, mse=mse)
     np.savez(os.path.join(save_dir, "data"),
-             X_train=vnce_loss.X_train,
+             X_train=vnce_loss.train_data,
              X_train_mask=vnce_loss.train_miss_mask,
-             X_val=vnce_loss.X_val,
+             X_val=vnce_loss.val_data,
              X_val_mask=vnce_loss.val_miss_mask,
              Y=vnce_loss.Y)
     np.savez(os.path.join(save_dir, "vnce_results"),
-             vnce_thetas=vnce_thetas,
-             vnce_alphas=vnce_alphas,
              vnce_times=vnce_times,
              vnce_losses=vnce_losses,
              vnce_val_losses=vnce_val_losses,
@@ -243,7 +247,7 @@ def plot_and_save_results(args, vnce_loss, optimiser):
              e_step_start_ids=e_step_start_ids)
 
 
-def main(args):
+def main(args, save_dir):
     vnce_loss = make_loss_functions(args)
     vnce_optimiser = make_optimisers(args)
 
@@ -253,8 +257,12 @@ def main(args):
                        stop_threshold=args.stop_threshold,
                        max_num_em_steps=args.max_num_em_steps)
 
-    plot_and_save_results(args, vnce_loss, vnce_optimiser)
+    mse = mean_square_error(args.theta_true, vnce_loss.model.theta)
+    print('Mean Squared Error: {}'.format(mse))
+    print('true theta: {}'.format(args.theta_true))
+    print('estimated theta: {}'.format(vnce_loss.model.theta))
+    plot_and_save_results(save_dir, args, vnce_loss, vnce_optimiser, mse)
 
 
 if __name__ == "__main__":
-    main(args)
+    main(args, save_dir)

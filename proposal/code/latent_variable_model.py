@@ -3,6 +3,7 @@
 import numpy as np
 
 from abc import ABCMeta, abstractmethod
+from copy import deepcopy
 from itertools import product
 from numpy import random as rnd
 from matplotlib import pyplot as plt
@@ -1125,19 +1126,6 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         theta = np.concatenate((mean.reshape(-1), chol.reshape(-1)))
         super().__init__(theta, rng=rng)
 
-    def get_mean_and_chol(self):
-        """get mean and lower triangular cholesky of the precision matrix"""
-        mean, chol = self.theta[:self.mean_len], self.theta[self.mean_len:]
-
-        # lower-triangular cholesky decomposition of the precision
-        chol_mat = chol.reshape(self.mean_len, self.mean_len)
-
-        # exp the diagonal, to enforce positivity
-        idiag = np.diag_indices_from(chol_mat)
-        chol_mat[idiag] = np.exp(chol_mat[idiag])
-
-        return mean, chol_mat, chol_mat[idiag]
-
     def __call__(self, U, Z, log=False):
         """Evaluate unnormalised model
 
@@ -1175,10 +1163,11 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         :return grad: array (len(theta), nz, n)
         """
         V = U + Z  # (nz, n, k) - fill in the missing data
+        truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)
+
         mean, chol, chol_diag = self.get_mean_and_chol()
         V_centred = V - mean
         P = np.dot(chol, chol.T)  # (k, k) - precision matrix
-        truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)
 
         grad_wrt_to_mean = np.dot(V_centred, P.T)  # (nz, n, k)
         grad_wrt_to_mean = np.transpose(grad_wrt_to_mean, [2, 0, 1])  # (k, nz, n)
@@ -1230,7 +1219,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         grad_log_model_wrt_nn_outputs = np.concatenate((grad_log_model_wrt_nn_output1, grad_log_model_wrt_nn_output2), axis=0)  # (len(nn_outputs), nz, n)
         grad_log_model_wrt_nn_outputs *= truncation_mask  # Since Gaussian is truncated
 
-        return grad_log_model_wrt_nn_outputs
+        return grad_log_model_wrt_nn_outputs  # (len(nn_outputs), nz, n)
 
     def sample(self, n):
         """ Sample from a truncated multivariate normal with rejection sampling with uniform proposal (note: this won't scale)
@@ -1245,24 +1234,22 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         sample = np.zeros((n, k))
         total_n_accepted = 0
         expected_num_proposals_per_accept = (25 / (2 * np.pi))**(k/2)
-        proposal_size = int(1.5 * n * expected_num_proposals_per_accept)
+        proposal_size = int(3 * n * expected_num_proposals_per_accept)
         if proposal_size > 10**8:
             print('WARNING: GENERATING THE MAXIMUM NUMBER (10**8) OF SAMPLES FROM THE PROPOSAL DISTRIBUTION INSIDE A WHILE LOOP,'
                   ' AS PART OF THE ACCEPT-REJECT ALGORITHM. THIS COULD TAKE A VERY LONG TIME. THE DIMENSIONALITY OF YOUR DATA MAY'
                   ' BE TOO HIGH')
             proposal_size = 10**8
 
+        print('sampling from the model...')
         while total_n_accepted < n:
-            print('total num accepted: {}'.format(total_n_accepted))
             proposal = self.rng.uniform(low_proposal, high_proposal, (proposal_size, k))  # (proposal_size, k)
             V = proposal - mean
 
             P = np.dot(chol, chol.T)  # (k, k) - precision matrix
             VP = np.dot(V, P)  # (proposal_size, k)
             acceptance_prob = np.exp(-0.5 * np.sum(VP * V, axis=-1))  # (proposal_size, )
-            # print('acceptance prob: {}'.format(acceptance_prob))
             accept = self.rng.uniform(0, 1, proposal_size) < acceptance_prob
-            # print('binary acceptance variable: {}'.format(accept))
             accepted = proposal[accept]
 
             n_accepted = len(accepted)
@@ -1272,5 +1259,20 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
             else:
                 sample[total_n_accepted: total_n_accepted+n_accepted] = accepted
             total_n_accepted += n_accepted
+            print('total num samples from model accepted: {}'.format(min(total_n_accepted, n)))
+        print('finished sampling!')
 
         return sample
+
+    def get_mean_and_chol(self):
+        """get mean and lower triangular cholesky of the precision matrix"""
+        mean, chol = deepcopy(self.theta[:self.mean_len]), deepcopy(self.theta[self.mean_len:])
+
+        # lower-triangular cholesky decomposition of the precision
+        chol_mat = chol.reshape(self.mean_len, self.mean_len)
+
+        # exp the diagonal, to enforce positivity
+        idiag = np.diag_indices_from(chol_mat)
+        chol_mat[idiag] = np.exp(chol_mat[idiag])
+
+        return mean, chol_mat, chol_mat[idiag]

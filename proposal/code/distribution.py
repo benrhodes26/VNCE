@@ -378,19 +378,22 @@ class MissingDataProductOfTruncNormsPosterior(Distribution):
 
     def __call__(self, Z, U, log=False, nn_outputs=None):
         miss_mask = self.get_miss_mask(Z)  # (n, k)
-        mean, chol = self.get_mean_and_chol(U, miss_mask, nn_outputs)  # (n, k)  - cholesky of diagonal precision matrix
-        precision = chol**2
-        V = Z + U  # (nz, n, k)
-        truncation_mask = np.all(V > 0, axis=-1)  # (nz, n)
+        truncation_mask = np.all(Z >= 0, axis=-1)  # (nz, n)
+        if np.sum(miss_mask) == 0:
+            # no missing data, so log probabilities are all 0
+            val = np.zeros(Z.shape[:2])
+        else:
+            mean, chol = self.get_mean_and_chol(U, miss_mask, nn_outputs)  # (n, k)  - cholesky of diagonal precision matrix
+            precision = chol**2
 
-        power = -(1/2) * precision * (V - mean)**2  # (nz, n, k)
-        log_chol = np.log(chol, out=np.zeros_like(chol), where=chol != 0)
-        log_norm_const_1 = (-1/2) * np.log(2 * np.pi) + log_chol  # (n, k) - norm const for usual Gaussian
-        log_norm_const_2 = log_chol - np.log(1 - norm.cdf(-mean * chol))  # (n, k) - norm const due to truncation
-        log_probs = power + log_norm_const_1 + log_norm_const_2  # (nz, n, k)
+            power = -(1/2) * precision * (Z - mean)**2  # (nz, n, k)
+            log_chol = np.log(chol, out=np.zeros_like(chol), where=chol != 0)
+            log_norm_const_1 = (-1/2) * np.log(2 * np.pi) + log_chol  # (n, k) - norm const for usual Gaussian
+            log_norm_const_2 = log_chol - np.log(1 - norm.cdf(-mean * chol))  # (n, k) - norm const due to truncation
+            log_probs = power + log_norm_const_1 + log_norm_const_2  # (nz, n, k)
 
-        log_probs *= miss_mask  # mask out observed data
-        val = np.sum(log_probs, axis=-1)  # (nz, n)
+            log_probs *= miss_mask  # mask out observed data
+            val = np.sum(log_probs, axis=-1)  # (nz, n)
         if log:
             val = truncation_mask * val + (1 - truncation_mask) * -15  # should be -infty, but -15 avoids numerical issues
         else:
@@ -400,11 +403,13 @@ class MissingDataProductOfTruncNormsPosterior(Distribution):
 
     def grad_log_wrt_nn_outputs(self, nn_outputs, grad_z_wrt_nn_outputs, Z):
         miss_mask = self.get_miss_mask(Z)  # (n, k)
+        truncation_mask = np.all(Z >= 0, axis=-1)  # (nz, n)
+
         mean, chol = self.get_mean_and_chol(U=None, miss_mask=miss_mask, nn_outputs=nn_outputs)  # (n, k)  - cholesky of diagonal precision matrix
         precision = chol**2
 
-        grad_Z_wrt_nn_output1 = grad_z_wrt_nn_outputs[:, :, :self.mean_len]  # (nz, n, k) - grads wrt mean
-        grad_Z_wrt_nn_output2 = grad_z_wrt_nn_outputs[:, :, self.mean_len:]  # (nz, n, k) - grads wrt to np.log(cholesky)
+        grad_Z_wrt_nn_output1 = grad_z_wrt_nn_outputs[:, :, :self.dim]  # (nz, n, k) - grads wrt mean
+        grad_Z_wrt_nn_output2 = grad_z_wrt_nn_outputs[:, :, self.dim:]  # (nz, n, k) - grads wrt to np.log(cholesky)
 
         grad_log_wrt_z = - precision * (Z - mean)  # (nz, n, k)
         self.checkMask(grad_log_wrt_z, miss_mask)
@@ -424,6 +429,8 @@ class MissingDataProductOfTruncNormsPosterior(Distribution):
 
         grad_log_wrt_nn_output1 = np.transpose(grad_log_wrt_nn_output1, [2, 0, 1])  # (k, nz, n)
         grad_log_wrt_nn_output2 = np.transpose(grad_log_wrt_nn_output2, [2, 0, 1])  # (k, nz, n)
+        grad_log_wrt_nn_output1 *= truncation_mask
+        grad_log_wrt_nn_output2 *= truncation_mask
         grad_log_wrt_nn_outputs = np.concatenate((grad_log_wrt_nn_output1, grad_log_wrt_nn_output2), axis=0)  # (len(nn_outputs), nz, n)
 
         grad = grad_log_through_z + grad_log_wrt_nn_outputs  # (len(nn_outputs), nz, n)
@@ -441,7 +448,7 @@ class MissingDataProductOfTruncNormsPosterior(Distribution):
             grad of each z_i w.r.t neural net output
         """
         miss_mask = self.get_miss_mask(Z)  # (nz, n, k)
-        grad_shape = Z.shape[:2] + (outputs.shape[1], )  # (nz, n, len(nn_outputs))
+        grad_shape = Z.shape[:2] + (nn_outputs.shape[1], )  # (nz, n, len(nn_outputs))
         mean, chol = self.get_mean_and_chol(U=None, miss_mask=miss_mask, nn_outputs=nn_outputs)  # (n, k)  - cholesky of diagonal precision matrix
 
         one_minus_E = (1 - E) * miss_mask  # (nz, n, k)
@@ -468,9 +475,10 @@ class MissingDataProductOfTruncNormsPosterior(Distribution):
 
     def sample(self, nz, U, miss_mask=None, nn_outputs=None):
         if miss_mask is None:
-            miss_mask = np.zeros_like(U)
-        E = self.sample_E(nz, miss_mask)  # (nz, n, 2)
-        Z = self.get_Z_samples_from_E(nz, E, U, miss_mask, nn_outputs=nn_outputs)  # (nz, n, 2)
+            Z = np.zeros((nz, ) + U.shape)
+        else:
+            E = self.sample_E(nz, miss_mask)  # (nz, n, 2)
+            Z = self.get_Z_samples_from_E(nz, E, U, miss_mask, nn_outputs=nn_outputs)  # (nz, n, 2)
         return Z
 
     def sample_E(self, nz, miss_mask):
@@ -504,7 +512,8 @@ class MissingDataProductOfTruncNormsPosterior(Distribution):
         """
         if nn_outputs is None:
             nn_outputs = self.nn.fprop(U)[-1]
-        mean, chol = nn_outputs[:, :self.dim], np.exp(nn_outputs[:, self.dim:])  # diagonal cholesky of precision
+        mean = deepcopy(nn_outputs[:, :self.dim])
+        chol = deepcopy(np.exp(nn_outputs[:, self.dim:]))  # diagonal cholesky of precision
         return mean * miss_mask, chol * miss_mask
 
     def get_miss_mask(self, Z):
@@ -512,7 +521,7 @@ class MissingDataProductOfTruncNormsPosterior(Distribution):
         :param Z: array (nz, n, k)
         :return: array (n, k)
         """
-        miss_mask = np.zeros_like(Z[0])
+        miss_mask = np.zeros(Z.shape[1:])
         miss_mask[np.nonzero(Z[0])] = 1
         return miss_mask
 
@@ -530,8 +539,8 @@ class MissingDataProductOfTruncNormsPosterior(Distribution):
             new_mask *= mask
         else:
             new_mask = mask
-        assert np.nonzero(array) == np.nonzero(new_mask), 'Non-zero elements of array do ' \
-                                                          'not match those of the missing data mask'
+        assert np.all((array != 0) == (new_mask != 0)), 'No n-zero elements of array do ' \
+                                                        'not match those of the missing data mask'
 
 
 class MissingDataProductOfTruncNormNoise(Distribution):
@@ -548,16 +557,18 @@ class MissingDataProductOfTruncNormNoise(Distribution):
         super().__init__(alpha, rng=rng)
 
     def __call__(self, U, log=False, nn_outputs=None):
-        # todo: get this class working with missing data!!!
-        mean, chol = self.get_mean_and_chol()  # (n, k)
+        observed_mask = self.get_observed_mask(U)  # (n, k) - 0's represent missing data
+        mean, chol = self.get_mean_and_chol(observed_mask)  # (n, k)
         precision = chol**2
-        truncation_mask = np.all(U > 0, axis=-1)  # (nz, n)
+        truncation_mask = np.all(U >= 0, axis=-1)  # (nz, n)
 
         power = -(1/2) * precision * (U - mean)**2  # (nz, n, k)
-        log_norm_const_1 = (-1/2) * np.log(2 * np.pi) + np.log(chol)  # (n, k) - norm const for usual Gaussian
-        log_norm_const_2 = np.log(chol) - np.log(1 - norm.cdf(-mean * chol))  # (n, k) - norm const due to truncation
+        log_chol = np.log(chol, out=np.zeros_like(chol), where=chol != 0)
+        log_norm_const_1 = (-1/2) * np.log(2 * np.pi) + log_chol  # (n, k) - norm const for usual Gaussian
+        log_norm_const_2 = log_chol - np.log(1 - norm.cdf(-mean * chol))  # (n, k) - norm const due to truncation
         log_probs = power + log_norm_const_1 + log_norm_const_2  # (nz, n, k)
 
+        log_probs *= observed_mask
         val = np.sum(log_probs, axis=-1)  # (nz, n)
         if log:
             val = truncation_mask * val + (1 - truncation_mask) * -15  # should be -infty, but -15 avoids numerical issues
@@ -568,13 +579,13 @@ class MissingDataProductOfTruncNormNoise(Distribution):
 
     def sample(self, n):
         E = self.sample_E(n)  # (n, k)
-        Z = self.get_Z_samples_from_E(E)  # (n, k)
+        Z = self.get_samples_from_E(E)  # (n, k)
         return Z
 
     def sample_E(self, n):
         return self.rng.uniform(0, 1, size=(n, self.mean_len))
 
-    def get_Z_samples_from_E(self, E):
+    def get_samples_from_E(self, E):
         """Converts samples E from some simple base distribution to samples from posterior
 
         This function is needed to apply the reparametrization trick. E is from a uniform distribution
@@ -584,20 +595,35 @@ class MissingDataProductOfTruncNormNoise(Distribution):
             random variable to be transformed into U (via reparam trick)
         :param U: array (n, k)
         """
-        mean, chol = self.get_mean_and_chol()  # (n, k)  - cholesky of diagonal precision matrix
+        observed_mask = self.get_observed_mask(E)  # all data sampled from noise is observed
+        mean, chol = self.get_mean_and_chol(observed_mask)  # (n, k)  - cholesky of diagonal precision matrix
         a = (norm.cdf(-mean * chol) * (1 - E)) + E
         U = norm.ppf(a)  # (n, k)
         U *= (1 / chol)
         U += mean
         return U  # (n, k)
 
-    def get_mean_and_chol(self):
+    def get_mean_and_chol(self, observed_mask):
         """
         :param U: array (n, k)
         :return mean, cov: arrays (n, k)
         """
-        mean, chol = self.alpha[:self.mean_len], np.exp(self.alpha[self.mean_len:])  # diagonal cholesky of precision
-        return mean, chol
+        mean = deepcopy(self.alpha[:self.mean_len])
+        chol = deepcopy(np.exp(self.alpha[self.mean_len:]))  # diagonal cholesky of precision
+        return mean * observed_mask, chol * observed_mask
+
+    def get_observed_mask(self, U):
+        """ Get 2d array of missing data mask
+        :param U: array (n, k)
+        :return: array (n, k)
+        """
+        observed_mask = np.zeros_like(U)
+        observed_mask[np.nonzero(U)] = 1
+        return observed_mask
+
+    def checkMask(self, array, mask):
+        assert np.all((array != 0) == (mask != 0)), 'Non-zero elements of array do ' \
+                                                          'not match those of the missing data mask'
 
 
 # noinspection PyPep8Naming,PyMissingConstructor
