@@ -525,6 +525,7 @@ class MonteCarloVnceLoss:
 
         # use a numerically stable implementation of the cross-entropy sigmoid
         h_x = self.h(self.X, self.ZX)
+        #todo: actually avoid overflow! (i.e use np.where or equivalent)
         a = (h_x > 0) * np.log(1 + nu * np.exp(-h_x))
         b = (h_x < 0) * (-h_x + np.log(nu + np.exp(h_x)))
         first_term = -np.mean(a + b)
@@ -544,6 +545,7 @@ class MonteCarloVnceLoss:
             second_term = -nu * np.mean(np.log(1 + c))
         else:
             h_y = self.h2(self.Y)
+            #todo: actually avoid overflow! (i.e use np.where or equivalent)
             c = (h_y < 0) * np.log(1 + (1/nu) * np.exp(h_y))
             d = (h_y > 0) * (h_y + np.log((1/nu) + np.exp(-h_y)))
             second_term = -np.mean(c + d)
@@ -586,6 +588,7 @@ class MonteCarloVnceLoss:
 
     def first_term_of_grad_wrt_theta(self):
         h_x = self.h(self.X, self.ZX)
+        #todo: actually avoid overflow! (i.e use np.where or equivalent)
         a0 = (h_x < 0) * (1 / (1 + ((1 / self.nu) * np.exp(h_x))))
         a1 = (h_x > 0) * (np.exp(-h_x) / ((1 / self.nu) + np.exp(-h_x)))
 

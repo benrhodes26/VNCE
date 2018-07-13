@@ -16,8 +16,9 @@ from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from copy import deepcopy
 from itertools import combinations
 from numpy import random as rnd
+from scipy.optimize import root, minimize, fsolve
+from scipy.special import erfcx
 from scipy.stats import norm, multivariate_normal
-from scipy.optimize import root
 from time import gmtime, strftime
 
 from distribution import MissingDataProductOfTruncNormsPosterior, MissingDataProductOfTruncNormNoise
@@ -28,7 +29,7 @@ from layers import AffineLayer, ReluLayer, TanhLayer
 from models import MultipleLayerModel
 from nce_optimiser import NCEOptimiser
 from utils import *
-from vnce_optimiser import VemOptimiser, SgdEmStep, MonteCarloVnceLoss
+from vnce_optimiser import VemOptimiser, SgdEmStep, ScipyMinimiseEmStep, MonteCarloVnceLoss
 
 START_TIME = strftime('%Y%m%d-%H%M', gmtime())
 
@@ -37,29 +38,29 @@ parser = ArgumentParser(description='Experimental comparison of training an RBM 
 # Read/write arguments
 parser.add_argument('--data_dir', type=str, default='/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/data/',
                     help='Path to directory where data is loaded and saved')
-parser.add_argument('--save_dir', type=str, default='/home/ben/ben-rhodes-masters-project/experimental_results/trunc_norm',
-                    help='Path to directory where model will be saved')
-# parser.add_argument('--save_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm',
+# parser.add_argument('--save_dir', type=str, default='/home/ben/ben-rhodes-masters-project/experimental_results/trunc_norm',
 #                     help='Path to directory where model will be saved')
+parser.add_argument('--save_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm',
+                    help='Path to directory where model will be saved')
 parser.add_argument('--exp_name', type=str, default='test', help='name of set of experiments this one belongs to')
 parser.add_argument('--name', type=str, default=START_TIME, help='name of this exact experiment')
 
 # Data arguments
 parser.add_argument('--which_dataset', default='synthetic', help='options: usps and synthetic')
-parser.add_argument('--n', type=int, default=10000, help='Number of datapoints')
+parser.add_argument('--n', type=int, default=100000, help='Number of datapoints')
 parser.add_argument('--nz', type=int, default=1, help='Number of latent samples per datapoint')
 parser.add_argument('--nu', type=float, default=1.0, help='ratio of noise to data samples in NCE')
 
 # Model arguments
 parser.add_argument('--theta0_path', type=str, default=None, help='path to pre-trained weights')
-parser.add_argument('--d', type=int, default=1, help='dimension of visibles for synthetic dataset')
+parser.add_argument('--d', type=int, default=5, help='dimension of visibles for synthetic dataset')
 parser.add_argument('--frac_missing', type=float, default=0, help='fraction of data missing at random')
 
 # Latent NCE optimisation arguments
 parser.add_argument('--loss', type=str, default='MonteCarloVnceLoss', help='loss function class to use. See vnce_optimisers.py for options')
 parser.add_argument('--noise', type=str, default='marginal', help='type of noise distribution for latent NCE. Currently, this can be either marginals or chow-liu')
-parser.add_argument('--opt_method', type=str, default='SGD', help='optimisation method. L-BFGS-B and CG both seem to work')
-parser.add_argument('--maxiter', type=int, default=10, help='number of iterations performed by L-BFGS-B optimiser inside each M step of EM')
+parser.add_argument('--opt_method', type=str, default='L-BFGS-B', help='optimisation method. L-BFGS-B and CG both seem to work')
+parser.add_argument('--maxiter', type=int, default=5, help='number of iterations performed by L-BFGS-B optimiser inside each M step of EM')
 parser.add_argument('--stop_threshold', type=float, default=0, help='Tolerance used as stopping criterion in EM loop')
 parser.add_argument('--max_num_epochs', type=int, default=50, help='Maximum number of loops through the dataset during training')
 parser.add_argument('--model_learn_rate', type=float, default=1, help='if opt_method=SGD, this is the learning rate used to train the model')
@@ -71,9 +72,9 @@ parser.add_argument('--no-track_loss', dest='track_loss', action='store_false')
 parser.set_defaults(track_loss=True)
 
 # nce optimisation arguments
-parser.add_argument('--nce_opt_method', type=str, default='SGD', help='nce optimisation method. L-BFGS-B and CG both seem to work')
-parser.add_argument('--maxiter_nce', type=int, default=500, help='number of iterations inside scipy.minimize')
-parser.add_argument('--nce_num_epochs', type=int, default=50, help='if nce_opt_method=SGD, this is the number of passes through data set')
+parser.add_argument('--nce_opt_method', type=str, default='L-BFGS-B', help='nce optimisation method. L-BFGS-B and CG both seem to work')
+parser.add_argument('--maxiter_nce', type=int, default=50, help='number of iterations inside scipy.minimize')
+parser.add_argument('--nce_num_epochs', type=int, default=20, help='if nce_opt_method=SGD, this is the number of passes through data set')
 parser.add_argument('--nce_learn_rate', type=float, default=1, help='if nce_opt_method=SGD, this is the learning rate used')
 parser.add_argument('--nce_batch_size', type=int, default=100, help='if nce_opt_method=SGD, this is the size of a minibatch')
 
@@ -96,12 +97,10 @@ def generate_data(args):
     rng = args.rng
 
     # initialise ground-truth parameters for data generating distribution
-    # true_mean = np.array([3, 3], dtype=float)
-    # true_chol = np.identity(2).astype(float) * 3.  # choleksy of precision
-    true_mean = np.array([3], dtype=float)
-    true_chol = np.identity(1).astype(float) * 3.  # choleksy of precision
+    true_mean = rnd.uniform(-0.5, 0.5, args.d)
+    true_chol = np.diag(rnd.uniform(0.3, 3, args.d))  # choleksy of precision
     # true_chol = np.tril(np.ones((args.d, args.d))) * 0.5
-    # true_chol = np.array([[1, 0], [-1, 1]])
+    print('true parameters: \n mean: {} \n chol: {}'.format(true_mean, true_chol))
 
     data_dist = MissingDataUnnormalisedTruncNorm(scaling_param=np.array([0.]), mean=true_mean, chol=true_chol, rng=rng)
     args.theta_true = deepcopy(data_dist.theta)
@@ -115,6 +114,7 @@ def generate_data(args):
 
     args.X_train_sample_mean = (args.X_train * (1 - args.train_missing_data_mask)).mean(axis=0)
     args.X_train_sample_diag_var = (args.X_train * (1 - args.train_missing_data_mask)).var(axis=0)  # ignore covariances
+    print('sample mean: {} \n sample var: {}'.format(args.X_train_sample_mean, args.X_train_sample_diag_var))
 
 
 def compose_layers(args):
@@ -129,51 +129,53 @@ def estimate_trunc_norm_params(sample_mean, sample_var):
 
     def trunc_norm_param_residuals(params):
         mean = params[:d]
-        std = params[d:]
+        chol = params[d:]
 
-        a = norm.pdf(-mean / std)
-        b = 1 - norm.cdf(-mean / std)
-        trunc_mean = mean + (a / b) * std
-        trunc_var = std**2 * (1 - (mean / std) * (a / b) - (a / b)**2)
+        alpha = -mean * chol
+        erf_term = 1 / erfcx(alpha / 2**0.5)
+        std = 1 / chol
+        var = std**2
+        const = (2 / np.pi)**0.5
 
-        mean_res = sample_mean - trunc_mean  # (n, d)
-        var_res = sample_var - trunc_var  # (n, d)
+        trunc_mean = mean + const * erf_term * std
+        trunc_var = var * (1 + const * alpha * erf_term - (const * erf_term)**2)
+
+        mean_res = sample_mean - trunc_mean  # (d, )
+        var_res = sample_var - trunc_var  # (d, )
         return np.concatenate((mean_res, var_res))
+        #return np.dot(mean_res, mean_res) + np.dot(var_res, var_res)
 
     guess = np.ones(2 * d)
-    res = root(trunc_norm_param_residuals, guess, method='broyden1')
+    sol = fsolve(trunc_norm_param_residuals, guess)
 
-    sol = res.x
+    # sol = res.x
     trunc_mean = sol[:d]
-    trunc_std = sol[d:]
-    return trunc_mean, trunc_std
+    trunc_chol = sol[d:]
+    return trunc_mean, trunc_chol
 
 
 def make_vnce_loss_function(args):
     """ """
-    # todo: add non-linear optimisation flag, and check that it works for a range of initialisations
-    # todo: NCE and VNCE should be identical, why doesn't this seem to be the case?
     rng = args.rng
 
-    # initialise the model p(x, z)
-    # todo: may need to initialise this scaling parameter more judiciously when d >> 0
-    args.scale0 = np.array([0.])
-    # args.mean0 = np.zeros(args.d).astype(float)
-    # args.chol0 = np.identity(args.d).astype(float)  # cholesky of precision
-    args.mean0 = np.ones(args.d).astype(float) * 0
-    args.chol0 = np.identity(args.d).astype(float) * 0.5  # cholesky of precision
-    model = MissingDataUnnormalisedTruncNorm(scaling_param=args.scale0, mean=args.mean0, chol=args.chol0, rng=rng)
-    args.theta0 = deepcopy(model.theta)
-
     # estimate (from the synthetic data) the parameters of a factorial truncated normal for the noise distribution
-    noise_mean, noise_std = estimate_trunc_norm_params(args.X_train_sample_mean, args.X_train_sample_diag_var)
-    noise_chol = 1 / noise_std  # cholesky of diagonal precision
+    noise_mean, noise_chol = estimate_trunc_norm_params(args.X_train_sample_mean, args.X_train_sample_diag_var)
     print('estimated noise parameters: \n mean: {} \n chol: {}'.format(noise_mean, noise_chol))
 
     # make noise distribution and noise samples for vnce
     # todo: apply missing data mask to noise samples???
     args.noise = MissingDataProductOfTruncNormNoise(mean=noise_mean, chol=noise_chol, rng=rng)
     args.Y = args.noise.sample(int(args.n * args.nu))
+
+    # initialise the model p(x, z)
+    # todo: may need to initialise this scaling parameter more judiciously when d >> 0
+    args.scale0 = np.array([0.])
+    # args.mean0 = np.zeros(args.d).astype(float)
+    # args.chol0 = np.identity(args.d).astype(float)  # cholesky of precision
+    args.mean0 = deepcopy(noise_mean)
+    args.chol0 = deepcopy(np.diag(noise_chol))  # cholesky of precision
+    model = MissingDataUnnormalisedTruncNorm(scaling_param=args.scale0, mean=args.mean0, chol=args.chol0, rng=rng)
+    args.theta0 = deepcopy(model.theta)
 
     # create variational distribution, which uses a multi-layer neural network
     # todo: consider using a neural net, not just an affine layer
@@ -273,10 +275,10 @@ def plot_and_save_results(save_dir, args, vnce_loss, optimiser, nce_optimiser):
 
 
 def get_mse(args, theta, method_name):
-    mse = mean_square_error(args.theta_true[1:], theta[1:])
+    mse = mean_square_error(args.theta_true[1:], theta)
     print('{} Mean Squared Error: {}'.format(method_name, mse))
     print('true theta: {}'.format(args.theta_true[1:]))
-    print('{} theta: {}'.format(method_name, theta[1:]))
+    print('{} theta: {}'.format(method_name, theta))
     return mse
 
 
@@ -301,9 +303,11 @@ def main(args, save_dir):
                       batch_size=args.nce_batch_size,
                       num_epochs=args.nce_num_epochs)
 
-    args.init_mse = get_mse(args, args.theta0, 'Initial theta')
-    args.vnce_mse = get_mse(args, vnce_loss.model.theta, 'VNCE')
-    args.nce_mse = get_mse(args, nce_model.theta, 'NCE')
+    args.init_mse = get_mse(args, args.theta0[1:], 'Initial')
+    args.vnce_mse = get_mse(args, vnce_loss.model.theta[1:], 'VNCE')
+    args.nce_mse = get_mse(args, nce_model.theta[1:], 'NCE')
+    print('final vnce scaling parameter: {}'.format(vnce_loss.model.theta[0]))
+    print('final nce scaling parameter: {}'.format(nce_model.theta[0]))
 
     plot_and_save_results(save_dir, args, vnce_loss, vnce_optimiser, nce_optimiser)
 

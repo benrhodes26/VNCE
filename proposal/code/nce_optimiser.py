@@ -60,11 +60,13 @@ class NCEOptimiser:
         nu = self.nu
 
         h_x = self.h(X)
+        #todo: actually avoid overflow! (i.e use np.where or equivalent)
         a = (h_x >= 0) * np.log(1 + nu * np.exp(-h_x))
         b = (h_x < 0) * (-h_x + np.log(nu + np.exp(h_x)))
         first_term = -np.mean(a + b)
 
         h_y = self.h(Y)
+        #todo: actually avoid overflow! (i.e use np.where or equivalent)
         c = (h_y <= 0) * np.log(1 + (1/nu) * np.exp(h_y))
         d = (h_y > 0) * (h_y + np.log((1/nu) + np.exp(-h_y)))
         second_term = -np.mean(c + d)
@@ -87,6 +89,7 @@ class NCEOptimiser:
 
         h_x = self.h(X)
         gradX = self.model.grad_log_wrt_params(X)  # (len(theta), n)
+        #todo: actually avoid overflow! (i.e use np.where or equivalent)
         a0 = (h_x <= 0) * (1 / (1 + ((1 / nu) * np.exp(h_x))))
         a1 = (h_x > 0) * (np.exp(-h_x) / ((1 / nu) + np.exp(-h_x)))
         a = a0 + a1
@@ -94,6 +97,7 @@ class NCEOptimiser:
 
         gradY = self.model.grad_log_wrt_params(Y)  # (len(theta), nu*n)
         h_y = self.h(Y)
+        #todo: actually avoid overflow! (i.e use np.where or equivalent)
         b0 = (h_y > 0) * (1 / (1 + nu * np.exp(-h_y)))
         b1 = (h_y <= 0) * (np.exp(h_y) / (np.exp(h_y) + nu))
         b = b0 + b1

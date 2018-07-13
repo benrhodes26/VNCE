@@ -1256,7 +1256,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
 
         sample = np.zeros((n, k))
         total_n_accepted = 0
-        expected_num_proposals_per_accept = (25 / (2 * np.pi))**(k/2)
+        expected_num_proposals_per_accept = (100 / (2 * np.pi))**(k/2)
         proposal_size = int(4 * n * expected_num_proposals_per_accept)
         if proposal_size > 10**8:
             print('WARNING: GENERATING THE MAXIMUM NUMBER (10**8) OF SAMPLES FROM THE PROPOSAL DISTRIBUTION INSIDE A WHILE LOOP,'
