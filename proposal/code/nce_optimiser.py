@@ -45,8 +45,7 @@ class NCEOptimiser:
         self.times = []  # seconds spent to reach each iteration during optimisation
 
     def h(self, U):
-        return np.log(self.model(U)) - np.log(self.noise(U))
-        # return self.model(U, log=True) - np.log(self.noise(U))
+        return self.model(U, log=True) - self.noise(U, log=True)
 
     def compute_J(self, X, Y=None, separate_terms=False):
         """Return value of objective at current parameters

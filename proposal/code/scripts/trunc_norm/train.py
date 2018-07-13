@@ -61,8 +61,8 @@ parser.add_argument('--noise', type=str, default='marginal', help='type of noise
 parser.add_argument('--opt_method', type=str, default='SGD', help='optimisation method. L-BFGS-B and CG both seem to work')
 parser.add_argument('--maxiter', type=int, default=10, help='number of iterations performed by L-BFGS-B optimiser inside each M step of EM')
 parser.add_argument('--stop_threshold', type=float, default=0, help='Tolerance used as stopping criterion in EM loop')
-parser.add_argument('--max_num_epochs', type=int, default=10, help='Maximum number of loops through the dataset during training')
-parser.add_argument('--model_learn_rate', type=float, default=0.01, help='if opt_method=SGD, this is the learning rate used to train the model')
+parser.add_argument('--max_num_epochs', type=int, default=50, help='Maximum number of loops through the dataset during training')
+parser.add_argument('--model_learn_rate', type=float, default=1, help='if opt_method=SGD, this is the learning rate used to train the model')
 parser.add_argument('--var_learn_rate', type=float, default=0.01, help='if opt_method=SGD, this is the learning rate used to train the variational dist')
 parser.add_argument('--batch_size', type=int, default=100, help='if opt_method=SGD, this is the size of a minibatch')
 parser.add_argument('--num_batch_per_em_step', type=int, default=1, help='if opt_method=SGD, this is the number of batches per EM step')
@@ -73,8 +73,8 @@ parser.set_defaults(track_loss=True)
 # nce optimisation arguments
 parser.add_argument('--nce_opt_method', type=str, default='SGD', help='nce optimisation method. L-BFGS-B and CG both seem to work')
 parser.add_argument('--maxiter_nce', type=int, default=500, help='number of iterations inside scipy.minimize')
-parser.add_argument('--nce_num_epochs', type=int, default=10, help='if nce_opt_method=SGD, this is the number of passes through data set')
-parser.add_argument('--nce_learn_rate', type=float, default=0.01, help='if nce_opt_method=SGD, this is the learning rate used')
+parser.add_argument('--nce_num_epochs', type=int, default=50, help='if nce_opt_method=SGD, this is the number of passes through data set')
+parser.add_argument('--nce_learn_rate', type=float, default=1, help='if nce_opt_method=SGD, this is the learning rate used')
 parser.add_argument('--nce_batch_size', type=int, default=100, help='if nce_opt_method=SGD, this is the size of a minibatch')
 
 # Other arguments
@@ -104,7 +104,7 @@ def generate_data(args):
     # true_chol = np.array([[1, 0], [-1, 1]])
 
     data_dist = MissingDataUnnormalisedTruncNorm(scaling_param=np.array([0.]), mean=true_mean, chol=true_chol, rng=rng)
-    args.theta_true = data_dist.theta
+    args.theta_true = deepcopy(data_dist.theta)
 
     # generate synthetic data and masks (which are used for simulating missing data)
     args.X_train = data_dist.sample(args.n)
@@ -151,15 +151,19 @@ def estimate_trunc_norm_params(sample_mean, sample_var):
 
 def make_vnce_loss_function(args):
     """ """
+    # todo: add non-linear optimisation flag, and check that it works for a range of initialisations
+    # todo: NCE and VNCE should be identical, why doesn't this seem to be the case?
     rng = args.rng
 
     # initialise the model p(x, z)
     # todo: may need to initialise this scaling parameter more judiciously when d >> 0
     args.scale0 = np.array([0.])
-    args.mean0 = np.zeros(args.d).astype(float)
-    args.chol0 = np.identity(args.d).astype(float)  # cholesky of precision
+    # args.mean0 = np.zeros(args.d).astype(float)
+    # args.chol0 = np.identity(args.d).astype(float)  # cholesky of precision
+    args.mean0 = np.ones(args.d).astype(float) * 0
+    args.chol0 = np.identity(args.d).astype(float) * 0.5  # cholesky of precision
     model = MissingDataUnnormalisedTruncNorm(scaling_param=args.scale0, mean=args.mean0, chol=args.chol0, rng=rng)
-    args.theta0 = np.concatenate((args.scale0, args.mean0, args.chol0.reshape(-1)))
+    args.theta0 = deepcopy(model.theta)
 
     # estimate (from the synthetic data) the parameters of a factorial truncated normal for the noise distribution
     noise_mean, noise_std = estimate_trunc_norm_params(args.X_train_sample_mean, args.X_train_sample_diag_var)
@@ -268,11 +272,11 @@ def plot_and_save_results(save_dir, args, vnce_loss, optimiser, nce_optimiser):
              nce_losses=nce_optimiser.Js)
 
 
-def get_mse(args, model, method_name):
-    mse = mean_square_error(args.theta_true[1:], model.theta[1:])
+def get_mse(args, theta, method_name):
+    mse = mean_square_error(args.theta_true[1:], theta[1:])
     print('{} Mean Squared Error: {}'.format(method_name, mse))
     print('true theta: {}'.format(args.theta_true[1:]))
-    print('{} theta: {}'.format(method_name, model.theta[1:]))
+    print('{} theta: {}'.format(method_name, theta[1:]))
     return mse
 
 
@@ -297,8 +301,9 @@ def main(args, save_dir):
                       batch_size=args.nce_batch_size,
                       num_epochs=args.nce_num_epochs)
 
-    args.vnce_mse = get_mse(args, vnce_loss.model, 'VNCE')
-    args.nce_mse = get_mse(args, nce_model, 'NCE')
+    args.init_mse = get_mse(args, args.theta0, 'Initial theta')
+    args.vnce_mse = get_mse(args, vnce_loss.model.theta, 'VNCE')
+    args.nce_mse = get_mse(args, nce_model.theta, 'NCE')
 
     plot_and_save_results(save_dir, args, vnce_loss, vnce_optimiser, nce_optimiser)
 
