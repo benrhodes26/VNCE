@@ -7,6 +7,7 @@ from collections import OrderedDict
 from copy import deepcopy
 from matplotlib import pyplot as plt
 from numpy import random as rnd
+from plot import *
 from scipy.optimize import minimize
 from utils import validate_shape, take_closest
 

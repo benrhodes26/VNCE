@@ -13,6 +13,7 @@ import pickle
 from distribution import RBMLatentPosterior, MultivariateBernoulliNoise, ChowLiuTree
 from fully_observed_models import VisibleRestrictedBoltzmannMachine
 from latent_variable_model import RestrictedBoltzmannMachine
+from plot import *
 from utils import *
 
 from copy import deepcopy

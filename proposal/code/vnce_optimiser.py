@@ -17,11 +17,14 @@ if code_dir_2 not in sys.path:
 
 import numpy as np
 import time
+
 from collections import OrderedDict
 from copy import deepcopy
 from matplotlib import pyplot as plt
+from numpy import random as rnd
+from plot import *
 from scipy.optimize import minimize, check_grad
-from utils import validate_shape, average_log_likelihood, take_closest, remove_duplicate_legends
+from utils import validate_shape, average_log_likelihood, take_closest
 
 DEFAULT_SEED = 1083463236
 
@@ -400,7 +403,7 @@ class MonteCarloVnceLoss:
         """
         self.model = model
         self.noise = noise
-        self.noise_samples = noise_samples
+        self.noise_samples = deepcopy(noise_samples)
         self.variational_noise = variational_noise
         self.nu = noise_to_data_ratio
         self.nz = num_latent_per_data
@@ -416,21 +419,19 @@ class MonteCarloVnceLoss:
         self.train_miss_mask = train_missing_data_mask
         self.val_miss_mask = val_missing_data_mask
         if self.train_miss_mask is not None:
-            self.train_data = train_data * (1 - self.train_miss_mask)
-            self.val_data = val_data * (1 - self.val_miss_mask)
+            self.train_data = deepcopy(train_data * (1 - self.train_miss_mask))
+            self.val_data = deepcopy(val_data * (1 - self.val_miss_mask))
         else:
-            self.train_data = train_data
-            self.val_data = val_data
+            self.train_data = deepcopy(train_data)
+            self.val_data = deepcopy(val_data)
 
         self.use_minibatches = use_minibatches
         self.X = None
         self.Y = None
-        self.X_mask = None  # missing data mask
         if not self.use_minibatches:
-            self.X = self.train_data
-            self.Y = self.noise_samples
-            if self.train_miss_mask is not None:
-                self.X_mask = self.train_miss_mask
+            self.X = deepcopy(self.train_data)
+            self.Y = deepcopy(self.noise_samples)
+
         self.batch_size = batch_size
         if batch_size:
             self.batches_per_epoch = int(len(self.train_data) / self.batch_size)
@@ -505,7 +506,7 @@ class MonteCarloVnceLoss:
             self.next_minibatch()
         self.resample_latents_if_necessary()
 
-        activations = self.variational_noise.nn.fprop(self.X)
+        activations = self.variational_noise.nn.fprop(deepcopy(self.X))
         nn_outputs = activations[-1]
         if self.use_reparam_trick:
             grad_wrt_nn_outputs = self.reparam_trick_grad_wrt_nn_output(nn_outputs)
@@ -525,7 +526,7 @@ class MonteCarloVnceLoss:
 
         # use a numerically stable implementation of the cross-entropy sigmoid
         h_x = self.h(self.X, self.ZX)
-        #todo: actually avoid overflow! (i.e use np.where or equivalent)
+        # todo: actually avoid overflow! (i.e use np.where or equivalent)
         a = (h_x > 0) * np.log(1 + nu * np.exp(-h_x))
         b = (h_x < 0) * (-h_x + np.log(nu + np.exp(h_x)))
         first_term = -np.mean(a + b)
@@ -545,7 +546,7 @@ class MonteCarloVnceLoss:
             second_term = -nu * np.mean(np.log(1 + c))
         else:
             h_y = self.h2(self.Y)
-            #todo: actually avoid overflow! (i.e use np.where or equivalent)
+            # todo: actually avoid overflow! (i.e use np.where or equivalent)
             c = (h_y < 0) * np.log(1 + (1/nu) * np.exp(h_y))
             d = (h_y > 0) * (h_y + np.log((1/nu) + np.exp(-h_y)))
             second_term = -np.mean(c + d)
@@ -588,7 +589,7 @@ class MonteCarloVnceLoss:
 
     def first_term_of_grad_wrt_theta(self):
         h_x = self.h(self.X, self.ZX)
-        #todo: actually avoid overflow! (i.e use np.where or equivalent)
+        # todo: actually avoid overflow! (i.e use np.where or equivalent)
         a0 = (h_x < 0) * (1 / (1 + ((1 / self.nu) * np.exp(h_x))))
         a1 = (h_x > 0) * (np.exp(-h_x) / ((1 / self.nu) + np.exp(-h_x)))
 
@@ -627,7 +628,7 @@ class MonteCarloVnceLoss:
         :return: array (n, nn_output_dim)
         """
         X, Z = self.X, self.ZX
-        grad_z_wrt_nn_outputs = self.variational_noise.grad_of_Z_wrt_nn_outputs(nn_outputs=nn_outputs, Z=Z, E=self.E_ZX)
+        grad_z_wrt_nn_outputs = self.variational_noise.grad_of_Z_wrt_nn_outputs(nn_outputs=nn_outputs, E=self.E_ZX)
         grad_log_model = self.model.grad_log_wrt_nn_outputs(U=X, Z=Z, grad_z_wrt_nn_outputs=grad_z_wrt_nn_outputs)  # (out_dim, nz, n)
         grad_log_var_dist = self.variational_noise.grad_log_wrt_nn_outputs(nn_outputs=nn_outputs,
                                                                            grad_z_wrt_nn_outputs=grad_z_wrt_nn_outputs, Z=Z)  # (out_dim, nz, n)
@@ -681,10 +682,8 @@ class MonteCarloVnceLoss:
         noise_batch_start = int(batch_start * self.nu)
         noise_batch_slice = slice(noise_batch_start, noise_batch_start + int(self.batch_size * self.nu))
 
-        self.X = self.train_data[batch_slice]
-        self.Y = self.noise_samples[noise_batch_slice]
-        if self.train_miss_mask is not None:
-            self.X_mask = self.train_miss_mask[batch_slice]
+        self.X = deepcopy(self.train_data[batch_slice])
+        self.Y = deepcopy(self.noise_samples[noise_batch_slice])
         self.resample_from_variational_noise = True
 
         self.current_batch_id += 1
@@ -694,29 +693,55 @@ class MonteCarloVnceLoss:
 
     def new_epoch(self):
         """Shuffle data X and noise Y and print current loss"""
-        self.rng.shuffle(self.train_data)
-        self.rng.shuffle(self.noise_samples)
+        data_perm = rnd.permutation(len(self.train_data))
+        noise_perm = rnd.permutation(len(self.noise_samples))
+
+        self.train_data = deepcopy(self.train_data[data_perm])
+        self.noise_samples = deepcopy(self.noise_samples[noise_perm])
+        if self.train_miss_mask:
+            self.train_miss_mask = deepcopy(self.train_miss_mask[data_perm])
 
         print('epoch {}: J1 = {}'.format(self.current_epoch, self.current_loss))
         self.current_epoch += 1
 
     def resample_latents_if_necessary(self):
         if (self.ZX is None) or (self.ZY is None) or self.resample_from_variational_noise:
-            if self.use_reparam_trick:
-                self.E_ZX = self.variational_noise.sample_E(self.nz, self.X_mask)  # samples from the 'base' distribution when using reparameterisation trick
-                self.ZX = self.variational_noise.get_Z_samples_from_E(self.nz, self.E_ZX, self.X, self.X_mask)
+            if self.train_miss_mask:
+                X_mask = self.get_missing_data_mask()
             else:
-                self.ZX = self.variational_noise.sample(self.nz, self.X, self.X_mask)
+                X_mask = None
+            if self.use_reparam_trick:
+                self.E_ZX = self.variational_noise.sample_E(self.nz, X_mask)  # samples from the 'base' distribution when using reparameterisation trick
+                self.ZX = self.variational_noise.get_Z_samples_from_E(self.nz, self.E_ZX, self.X, X_mask)
+            else:
+                self.ZX = self.variational_noise.sample(self.nz, self.X, X_mask)
             self.ZY = self.variational_noise.sample(self.nz, self.Y)
             self.resample_from_variational_noise = False
 
     def compute_val_loss(self):
-        self.X = self.val_data
-        self.Y = self.noise_samples[:len(self.val_data)]
+        # save current data
+        cur_X = deepcopy(self.X)
+        cur_Y = deepcopy(self.Y)
+
+        # set data equal to validation data
+        self.X = deepcopy(self.val_data)
+        num_val_noise = int(self.nu * len(self.val_data))
+        self.Y = deepcopy(self.noise_samples[:num_val_noise])
         self.resample_from_variational_noise = True
-        if self.val_miss_mask is not None:
-            self.X_mask = self.val_miss_mask
-        return self.__call__()
+
+        val_loss = self.__call__()
+
+        # substitute back in the original data
+        self.X = cur_X
+        self.Y = cur_Y
+        self.resample_from_variational_noise = True
+
+        return val_loss
+
+    def get_missing_data_mask(self):
+        miss_mask = np.zeros_like(self.X)
+        miss_mask[np.where(self.X == 0)] = 1
+        return miss_mask
 
     def get_theta(self):
         return deepcopy(self.model.theta)

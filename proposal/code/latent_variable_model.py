@@ -8,11 +8,13 @@ from itertools import product
 from numpy.linalg import inv
 from numpy import random as rnd
 from matplotlib import pyplot as plt
+from plot import *
 from scipy.stats import norm
 from sklearn.neighbors import KernelDensity as kd
 from utils import validate_shape, sigmoid
 # noinspection PyPep8Naming
 DEFAULT_SEED = 1083463236
+
 
 # noinspection PyPep8Naming
 class LatentVarModel(metaclass=ABCMeta):

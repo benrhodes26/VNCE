@@ -6,6 +6,7 @@ the inputs through the transformation(s) defined by the model to produce
 outputs (and intermediate states) and for calculating gradients of scalar
 functions of the outputs with respect to the model parameters.
 """
+import numpy as np
 
 from layers import LayerWithParameters, StochasticLayer
 
@@ -97,7 +98,7 @@ class MultipleLayerModel(object):
                     param_counter += 1
         self._params = None
 
-    def fprop(self, inputs, stochastic=True):
+    def fprop(self, inputs, stochastic=True, standardise=False):
         """Forward propagates a batch of inputs through the model.
         Args:
             inputs: Batch of inputs to the model.
@@ -108,6 +109,8 @@ class MultipleLayerModel(object):
             plus the inputs (to the first layer) as the first element. The
             last element of the list corresponds to the model outputs.
         """
+        if standardise:
+            inputs = np.divide(inputs - inputs.mean(0), inputs.max(0), out=np.zeros_like(inputs), where=inputs.max(0) != 0)
         activations = [inputs]
         for i, layer in enumerate(self.layers):
             if isinstance(layer, StochasticLayer):

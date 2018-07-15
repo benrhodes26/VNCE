@@ -14,6 +14,7 @@ from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from copy import deepcopy
 from numpy import random as rnd
 from latent_variable_model import RestrictedBoltzmannMachine
+from plot import *
 from utils import *
 
 parser = ArgumentParser(description='Experimental comparison of training an RBM using latent nce and contrastive divergence',

@@ -7,6 +7,7 @@ from copy import deepcopy
 from itertools import product
 from numpy import random as rnd
 from matplotlib import pyplot as plt
+from plot import *
 from scipy.stats import norm, multivariate_normal
 from sklearn.neighbors import KernelDensity as kd
 from utils import sigmoid, validate_shape

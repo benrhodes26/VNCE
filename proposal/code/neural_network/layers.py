@@ -197,8 +197,8 @@ class AffineLayer(LayerWithParameters):
             `[grads_wrt_weights, grads_wrt_biases]`.
         """
 
-        grads_wrt_weights = np.dot(grads_wrt_outputs.T, inputs)
-        grads_wrt_biases = np.sum(grads_wrt_outputs, axis=0)
+        grads_wrt_weights = (1 / len(inputs)) * np.dot(grads_wrt_outputs.T, inputs)
+        grads_wrt_biases = np.mean(grads_wrt_outputs, axis=0)
 
         if self.weights_penalty is not None:
             grads_wrt_weights += self.weights_penalty.grad(self.weights)

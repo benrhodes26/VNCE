@@ -14,7 +14,8 @@ from distribution import RBMLatentPosterior, MultivariateBernoulliNoise, ChowLiu
 from fully_observed_models import VisibleRestrictedBoltzmannMachine
 from latent_variable_model import RestrictedBoltzmannMachine
 import matplotlib as matplotlib
-from utils import plot_log_likelihood_learning_curves, take_closest, plot_vnce_loss, save_fig
+from plot import *
+from utils import take_closest, save_fig
 
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from copy import deepcopy

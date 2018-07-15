@@ -19,6 +19,7 @@ from distribution import RBMLatentPosterior, MultivariateBernoulliNoise, ChowLiu
 from fully_observed_models import VisibleRestrictedBoltzmannMachine
 from latent_variable_model import RestrictedBoltzmannMachine
 from nce_optimiser import NCEOptimiser
+from plot import *
 from utils import *
 from vnce_optimiser import VemOptimiser, SgdEmStep, ScipyMinimiseEmStep, ExactEStep, MonteCarloVnceLoss, AdaptiveMonteCarloVnceLoss
 

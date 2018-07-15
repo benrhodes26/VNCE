@@ -16,6 +16,7 @@ from fully_observed_models import SumOfTwoUnnormalisedGaussians, SumOfTwoNormali
 from latent_variable_model import MixtureOfTwoUnnormalisedGaussians
 from mle_optimiser import MLEOptimiser
 from nce_optimiser import NCEOptimiser
+from plot import *
 from utils import *
 from vnce_optimisers import VNCEOptimiserWithAnalyticExpectations, VNCEOptimiser
 
