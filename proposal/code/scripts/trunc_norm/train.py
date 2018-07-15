@@ -50,7 +50,7 @@ parser.add_argument('--name', type=str, default='test', help='name of this exact
 parser.add_argument('--which_dataset', default='synthetic', help='options: usps and synthetic')
 parser.add_argument('--n', type=int, default=10000, help='Number of datapoints')
 parser.add_argument('--nz', type=int, default=1, help='Number of latent samples per datapoint')
-parser.add_argument('--nu', type=float, default=1.0, help='ratio of noise to data samples in NCE')
+parser.add_argument('--nu', type=int, default=1, help='ratio of noise to data samples in NCE')
 
 # Model arguments
 parser.add_argument('--theta0_path', type=str, default=None, help='path to pre-trained weights')
@@ -63,11 +63,11 @@ parser.add_argument('--noise', type=str, default='marginal', help='type of noise
 parser.add_argument('--opt_method', type=str, default='SGD', help='optimisation method. L-BFGS-B and CG both seem to work')
 parser.add_argument('--maxiter', type=int, default=5, help='number of iterations performed by L-BFGS-B optimiser inside each M step of EM')
 parser.add_argument('--stop_threshold', type=float, default=0, help='Tolerance used as stopping criterion in EM loop')
-parser.add_argument('--max_num_epochs', type=int, default=500, help='Maximum number of loops through the dataset during training')
+parser.add_argument('--max_num_epochs', type=int, default=100, help='Maximum number of loops through the dataset during training')
 parser.add_argument('--model_learn_rate', type=float, default=0.001, help='if opt_method=SGD, this is the learning rate used to train the model')
 parser.add_argument('--var_learn_rate', type=float, default=0.001, help='if opt_method=SGD, this is the learning rate used to train the variational dist')
-parser.add_argument('--batch_size', type=int, default=1000, help='if opt_method=SGD, this is the size of a minibatch')
-parser.add_argument('--num_batch_per_em_step', type=int, default=1, help='if opt_method=SGD, this is the number of batches per EM step')
+parser.add_argument('--batch_size', type=int, default=10, help='if opt_method=SGD, this is the size of a minibatch')
+parser.add_argument('--num_batch_per_em_step', type=int, default=100, help='if opt_method=SGD, this is the number of batches per EM step')
 parser.add_argument('--track_loss', dest='track_loss', action='store_true', help='track VNCE loss in E & M steps')
 parser.add_argument('--no-track_loss', dest='track_loss', action='store_false')
 parser.set_defaults(track_loss=True)
@@ -166,7 +166,6 @@ def make_vnce_loss_function(args):
     """ """
     rng = args.rng
 
-    # todo: USE SMALLER LEARNING RATE FOR Q
     # estimate (from the synthetic data) the parameters of a factorial truncated normal for the noise distribution
     noise_mean, noise_chol = estimate_trunc_norm_params(args.X_train_sample_mean, args.X_train_sample_diag_var)
     # noise_mean = np.array([3, 3], dtype=float)
@@ -174,9 +173,10 @@ def make_vnce_loss_function(args):
     print('estimated noise parameters: \n mean: {} \n chol: {}'.format(noise_mean, noise_chol))
 
     # make noise distribution and noise samples for vnce
-    # todo: apply missing data mask to noise samples???
     args.noise = MissingDataProductOfTruncNormNoise(mean=noise_mean, chol=noise_chol, rng=rng)
     args.Y = args.noise.sample(int(args.n * args.nu))
+    args.noise_miss_mask = np.repeat(args.train_missing_data_mask, args.nu, axis=0)
+    assert args.Y.shape == args.noise_miss_mask.shape, 'noise samples do not have the same shape as the missing data mask'
 
     # initialise the model p(x, z)
     # todo: may need to initialise this scaling parameter more judiciously when d >> 0
@@ -212,6 +212,7 @@ def make_vnce_loss_function(args):
                                             use_neural_variational_noise=True,
                                             train_missing_data_mask=args.train_missing_data_mask,
                                             val_missing_data_mask=args.val_missing_data_mask,
+                                            noise_miss_mask=args.noise_miss_mask,
                                             use_minibatches=use_sgd,
                                             batch_size=args.batch_size,
                                             use_reparam_trick=True,

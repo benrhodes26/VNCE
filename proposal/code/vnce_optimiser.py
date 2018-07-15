@@ -383,6 +383,7 @@ class MonteCarloVnceLoss:
                  use_neural_variational_noise=False,
                  train_missing_data_mask=None,
                  val_missing_data_mask=None,
+                 noise_miss_mask=None,
                  use_minibatches=False,
                  batch_size=None,
                  use_reparam_trick=False,
@@ -403,10 +404,10 @@ class MonteCarloVnceLoss:
         """
         self.model = model
         self.noise = noise
-        self.noise_samples = deepcopy(noise_samples)
         self.variational_noise = variational_noise
         self.nu = noise_to_data_ratio
         self.nz = num_latent_per_data
+
         self.use_neural_model = use_neural_model
         self.use_neural_variational_noise = use_neural_variational_noise
         self.use_reparam_trick = use_reparam_trick
@@ -418,12 +419,15 @@ class MonteCarloVnceLoss:
 
         self.train_miss_mask = train_missing_data_mask
         self.val_miss_mask = val_missing_data_mask
+        self.noise_misk_mask = noise_miss_mask
         if self.train_miss_mask is not None:
             self.train_data = deepcopy(train_data * (1 - self.train_miss_mask))
             self.val_data = deepcopy(val_data * (1 - self.val_miss_mask))
+            self.noise_samples = deepcopy(noise_samples * (1 - self.noise_misk_mask))
         else:
             self.train_data = deepcopy(train_data)
             self.val_data = deepcopy(val_data)
+            self.noise_samples = deepcopy(noise_samples)
 
         self.use_minibatches = use_minibatches
         self.X = None
@@ -693,29 +697,37 @@ class MonteCarloVnceLoss:
 
     def new_epoch(self):
         """Shuffle data X and noise Y and print current loss"""
-        data_perm = rnd.permutation(len(self.train_data))
-        noise_perm = rnd.permutation(len(self.noise_samples))
-
+        n, d = self.train_data.shape
+        data_perm = rnd.permutation(n)
         self.train_data = deepcopy(self.train_data[data_perm])
-        self.noise_samples = deepcopy(self.noise_samples[noise_perm])
-        if self.train_miss_mask:
-            self.train_miss_mask = deepcopy(self.train_miss_mask[data_perm])
+
+        if self.train_miss_mask is not None:
+            # noise samples are grouped in nu-sized chunks that are missing the same features
+            # we need to keep this grouping when we shuffle the data
+            new_samples = deepcopy(self.noise_samples)
+            new_samples = new_samples.reshape(n, self.nu, d)
+            self.noise_samples = new_samples[data_perm].reshape(self.noise_samples.shape)
+        else:
+            noise_perm = rnd.permutation(len(self.noise_samples))
+            self.noise_samples = deepcopy(self.noise_samples[noise_perm])
 
         print('epoch {}: J1 = {}'.format(self.current_epoch, self.current_loss))
         self.current_epoch += 1
 
     def resample_latents_if_necessary(self):
         if (self.ZX is None) or (self.ZY is None) or self.resample_from_variational_noise:
-            if self.train_miss_mask:
-                X_mask = self.get_missing_data_mask()
-            else:
-                X_mask = None
+            X_mask, Y_mask = None, None
+            if self.train_miss_mask is not None:
+                X_mask = self.get_missing_data_mask(self.X)
+                Y_mask = self.get_missing_data_mask(self.Y)
+
             if self.use_reparam_trick:
-                self.E_ZX = self.variational_noise.sample_E(self.nz, X_mask)  # samples from the 'base' distribution when using reparameterisation trick
+                # sample E from the 'base' distribution when using reparameterisation trick
+                self.E_ZX = self.variational_noise.sample_E(self.nz, X_mask)
                 self.ZX = self.variational_noise.get_Z_samples_from_E(self.nz, self.E_ZX, self.X, X_mask)
             else:
                 self.ZX = self.variational_noise.sample(self.nz, self.X, X_mask)
-            self.ZY = self.variational_noise.sample(self.nz, self.Y)
+            self.ZY = self.variational_noise.sample(self.nz, self.Y, Y_mask)
             self.resample_from_variational_noise = False
 
     def compute_val_loss(self):
@@ -738,9 +750,9 @@ class MonteCarloVnceLoss:
 
         return val_loss
 
-    def get_missing_data_mask(self):
-        miss_mask = np.zeros_like(self.X)
-        miss_mask[np.where(self.X == 0)] = 1
+    def get_missing_data_mask(self, U):
+        miss_mask = np.zeros_like(U)
+        miss_mask[np.where(U == 0)] = 1
         return miss_mask
 
     def get_theta(self):
