@@ -38,7 +38,7 @@ parser.add_argument('--name', type=str, default=START_TIME, help='name of this e
 
 # Data arguments
 parser.add_argument('--nz', type=int, default=1, help='Number of latent samples per datapoint')
-parser.add_argument('--nu', type=float, default=1.0, help='ratio of noise to data samples in NCE')
+parser.add_argument('--nu', type=int, default=1, help='ratio of noise to data samples in NCE')
 
 # Model arguments
 parser.add_argument('--sigma1', type=float, default=4.0, help='fixed standard deviation of gaussian in unnormalised MoG')

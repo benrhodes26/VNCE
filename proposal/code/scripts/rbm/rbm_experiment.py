@@ -45,7 +45,7 @@ parser.add_argument('--name', type=str, default=START_TIME, help='name of this e
 parser.add_argument('--which_dataset', default='usps_4by4patches', help='options: usps and synthetic')
 parser.add_argument('--n', type=int, default=10000, help='Number of datapoints')
 parser.add_argument('--nz', type=int, default=1, help='Number of latent samples per datapoint')
-parser.add_argument('--nu', type=float, default=1.0, help='ratio of noise to data samples in NCE')
+parser.add_argument('--nu', type=int, default=1, help='ratio of noise to data samples in NCE')
 parser.add_argument('--num_gibbs_steps', type=int, default=1000,
                     help='number of gibbs steps used to generate as synthetic dataset (if using synthetic)')
 
@@ -277,8 +277,8 @@ print('finished nce optimisation!')
 """
 vnce_thetas, vnce_alphas, vnce_losses, vnce_times = optimiser.get_flattened_result_arrays()
 m_step_ids, e_step_ids, _, _ = optimiser.get_m_and_e_step_ids()
-
-vnce_plot = plot_vnce_loss(vnce_losses, vnce_times, e_step_ids)
+vnce_val_losses = np.array(optimiser.val_losses)
+vnce_plot = plot_vnce_loss(vnce_times, vnce_losses, vnce_val_losses, e_step_ids)
 save_fig(vnce_plot, save_dir, 'vnce_loss')
 
 nce_losses_for_vnce_params = None

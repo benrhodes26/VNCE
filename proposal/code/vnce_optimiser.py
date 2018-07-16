@@ -40,23 +40,24 @@ class VemOptimiser:
     provided at initialisation as objects with particular methods: see SgdEmStep or ScipyMinimiseEmStep for examples.
     """
 
-    def __init__(self, m_step, e_step, num_em_steps_per_epoch=1):
+    def __init__(self, m_step, e_step, num_em_steps_per_save=1):
         """
         :param e_step: object
             see e.g. SgdEmStep
         :param m_step: object
             see e.g SgdEmStep
-        :param num_em_steps_per_epoch: int
+        :param num_em_steps_per_save: int
             we save a results triple (parameter, loss, time) every X iterations of the EM outer loop
         """
         self.m_step = m_step
         self.e_step = e_step
-        self.num_em_steps_per_save = num_em_steps_per_epoch
+        self.num_em_steps_per_save = num_em_steps_per_save
 
         # results during optimisation. Each is a list of lists. The inner lists pertain to a specific E or M step.
         self.thetas = []  # model parameters
         self.alphas = []  # variational parameters
-        self.losses = []
+        self.losses = []  # losses recorded at each iteration (so per batch in SGD, or per iter in scipy.minimize)
+        self.train_losses = []  # loss over entire train set
         self.val_losses = []
         self.times = []
 
@@ -84,12 +85,11 @@ class VemOptimiser:
 
             m_results = self.m_step(loss_function)
             if m_results and save_results:
-                self.update_results(*m_results, m_step=True)
+                self.update_results(*m_results, loss_function=loss_function, m_step=True)
 
             e_results = self.e_step(loss_function)
             if e_results and save_results:
-                self.update_results(*e_results, e_step=True)
-                self.val_losses.append(loss_function.compute_val_loss())
+                self.update_results(*e_results, loss_function=loss_function, e_step=True)
 
             prev_loss = current_loss
             current_loss = loss_function.get_current_loss(get_float=True)
@@ -101,37 +101,34 @@ class VemOptimiser:
         loss_function.set_alpha(alpha0)
 
         initial_loss = loss_function(next_minibatch=True)
-        self.update_results([theta0], [initial_loss], [time.time()], m_step=True)
-        self.update_results([alpha0], [initial_loss], [time.time()], e_step=True)
-        self.val_losses.append(loss_function.compute_val_loss())
+        self.update_results([theta0], [initial_loss], [time.time()], loss_function, m_step=True)
+        self.update_results([alpha0], [initial_loss], [time.time()], loss_function, e_step=True)
 
-    def update_results(self, params, losses, times, m_step=False, e_step=False):
+    def update_results(self, params, losses, times, loss_function, m_step=False, e_step=False):
         """Update optimisation results during learning"""
+        train_loss, val_loss = loss_function.compute_end_of_epoch_loss()
+        self.times.append(times)
+        self.losses.append(losses)
+        self.train_losses.append(train_loss)
+        self.val_losses.append(val_loss)
         if m_step:
             self.thetas.append(params)
-            self.losses.append(losses)
-            self.times.append(times)
         if e_step:
             self.alphas.append(params)
-            self.losses.append(losses)
-            self.times.append(times)
 
     def get_flattened_result_arrays(self, flatten_params=True):
         losses = np.array([loss for sublist in self.losses for loss in sublist])
         times = np.array([t for sublist in self.times for t in sublist])
-        val_losses = np.array(self.val_losses)
-        val_times = np.array([sublist[-1] for sublist in self.times[1::2]])
         if flatten_params:
             thetas = np.array([theta for sublist in self.thetas for theta in sublist])
             alphas = np.array([alpha for sublist in self.alphas for alpha in sublist])
         else:
-            thetas = self.thetas
-            alphas = self.alphas
+            thetas = deepcopy(self.thetas)
+            alphas = deepcopy(self.alphas)
 
         start_time = times[0]
         times -= start_time
-        val_times -= start_time
-        return thetas, alphas, losses, times, val_losses, val_times
+        return thetas, alphas, losses, times
 
     def av_log_like_for_each_iter(self, X, loss_function, thetas=None):
         """Calculate average log-likelihood at each iteration
@@ -154,7 +151,7 @@ class VemOptimiser:
     def plot_loss_curve(self, optimal_loss=None, separate_terms=False):
         """plot of objective function during optimisation"""
         fig, ax = plt.subplots(1, 1, figsize=(10, 7))
-        _, _, losses, times = self.get_flattened_result_arrays()
+        _, _, losses, times, val_losses, val_times = self.get_flattened_result_arrays()
         _, _, m_start_ids, e_start_ids = self.get_m_and_e_step_ids()
 
         # plot optimisation curve
@@ -730,25 +727,31 @@ class MonteCarloVnceLoss:
             self.ZY = self.variational_noise.sample(self.nz, self.Y, Y_mask)
             self.resample_from_variational_noise = False
 
-    def compute_val_loss(self):
+    def compute_end_of_epoch_loss(self):
+        """"Compute loss on *whole* training set and validation set at end of each epoch"""
         # save current data
         cur_X = deepcopy(self.X)
         cur_Y = deepcopy(self.Y)
 
-        # set data equal to validation data
+        # eval on validation dataset
         self.X = deepcopy(self.val_data)
         num_val_noise = int(self.nu * len(self.val_data))
         self.Y = deepcopy(self.noise_samples[:num_val_noise])
         self.resample_from_variational_noise = True
-
         val_loss = self.__call__()
+
+        # eval on *whole* training dataset
+        self.X = deepcopy(self.train_data)
+        self.Y = deepcopy(self.noise_samples)
+        self.resample_from_variational_noise = True
+        train_loss = self.__call__()
 
         # substitute back in the original data
         self.X = cur_X
         self.Y = cur_Y
         self.resample_from_variational_noise = True
 
-        return val_loss
+        return train_loss, val_loss
 
     def get_missing_data_mask(self, U):
         miss_mask = np.zeros_like(U)

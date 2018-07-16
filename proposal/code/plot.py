@@ -32,7 +32,7 @@ def plot_nce_minus_vnce_loss(nce_loss_for_vnce_params, vnce_losses, times, e_ste
     return fig
 
 
-def plot_vnce_loss(vnce_losses, times, vnce_val_losses, val_times, m_step_start_ids=None, e_step_start_ids=None):
+def plot_vnce_loss(times, vnce_losses, vnce_val_losses, m_step_start_ids=None, e_step_start_ids=None):
     fig, ax = plt.subplots(1, 1, figsize=(5.7, 2.5))
 
     if vnce_losses.ndim == 2:
@@ -40,8 +40,8 @@ def plot_vnce_loss(vnce_losses, times, vnce_val_losses, val_times, m_step_start_
         vnce_losses = np.sum(vnce_losses, axis=1)
         vnce_val_losses = np.sum(vnce_val_losses, axis=1)
 
-    ax.plot(times, vnce_losses, c='k', label='J1 train')
-    ax.plot(val_times, vnce_val_losses, c='green', label='J1 val')
+    ax.plot(times, vnce_losses, c='k', label='VNCE (train)')
+    ax.plot(times, vnce_val_losses, c='green', label='VNCE (valid)')
 
     max_y_val = vnce_losses.max()
     min_y_val = vnce_losses.min()
