@@ -11,7 +11,7 @@ from copy import deepcopy
 from matplotlib import pyplot as plt
 
 
-def mean_square_error(estimate, true_value, plot=True):
+def mean_square_error(estimate, true_value, plot=False):
     """Calculate MSE(estimate, true_value)"""
     # we want to handle three cases:
     # 1) both of {estimate, true_value} are floats/ints

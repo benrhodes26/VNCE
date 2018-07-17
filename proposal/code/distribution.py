@@ -849,3 +849,51 @@ class ChowLiuTree(Distribution):
             node_to_parents_dict[e[1]] = e[0]
 
         return node_to_children_dict, node_to_parents_dict
+
+
+# noinspection PyPep8Naming,PyMissingConstructor
+class MissingDataUniformNoise(Distribution):
+    def __init__(self, low, high, rng=None):
+        self.low = low
+        self.high = high
+        self.dim = len(low)
+        self.vol = np.product(high - low)
+        if not rng:
+            self.rng = np.random.RandomState(DEFAULT_SEED)
+        else:
+            self.rng = rng
+
+    def __call__(self, U, log=False):
+        """evaluate probability of data U
+
+        :param U: U: array (n, d)
+            n data points with dimension d
+        :return array of shape (n, )
+            probability of each input datapoint
+        """
+        V = self.get_missing_mask(U) * self.low  # fill in the missing vals with self.low (an arbitrary choice inside boundaries)
+        if log:
+            return np.log((1 / self.vol) * self.is_inside_boundaries(U+V))
+        else:
+            return (1 / self.vol) * self.is_inside_boundaries(U+V)
+
+    def sample(self, num_noise_samples):
+        """
+
+        :param num_noise_samples: int
+            number of noise samples used in NCE
+        :return: array (num_noise_samples, d)
+        """
+        return self.rng.uniform(self.low, self.high, size=(num_noise_samples, self.dim))
+
+    def is_inside_boundaries(self, X):
+        return np.all(X >= self.low, axis=1) * np.all(X <= self.high, axis=1)
+
+    def get_missing_mask(self, U):
+        """ Get 2d array where 1s denote missing data
+        :param U: array (n, k)
+        :return: array (n, k)
+        """
+        miss_mask = np.zeros_like(U)
+        miss_mask[np.where(U == 0)] = 1
+        return miss_mask

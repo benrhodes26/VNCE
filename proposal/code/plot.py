@@ -152,9 +152,9 @@ def plot_log_likelihood_learning_curves(training_curves,
         save_fig(fig, save_dir, '{}_likelihood_optimisation_curve'.format(file_name))
 
 
-def plot_2d_density(ax, f, cmap, low_x_lim, up_x_lim, low_y_lim, up_y_lime):
+def plot_2d_density(ax, f, cmap, low_x_lim, up_x_lim, low_y_lim, up_y_lim):
     nbins = 300
-    z1_mesh, z2_mesh = np.mgrid[low_x_lim:up_x_lim:nbins * 1j, low_y_lim:up_y_lime:nbins * 1j]
+    z1_mesh, z2_mesh = np.mgrid[low_x_lim:up_x_lim:nbins * 1j, low_y_lim:up_y_lim:nbins * 1j]
     mesh = np.vstack([z1_mesh.flatten(), z2_mesh.flatten()]).T
     f_mesh = f(mesh).reshape(z1_mesh.shape)
     ax.pcolormesh(z1_mesh, z2_mesh, f_mesh, cmap=cmap)

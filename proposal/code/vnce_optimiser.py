@@ -388,6 +388,7 @@ class MonteCarloVnceLoss:
                  use_rejection_reparam_trick=False,
                  separate_terms=False,
                  use_importance_sampling=True,
+                 drop_data_frac=0,
                  eps=1e-7,
                  rng=None):
         """
@@ -404,6 +405,7 @@ class MonteCarloVnceLoss:
         self.variational_noise = variational_noise
         self.nu = noise_to_data_ratio
         self.nz = num_latent_per_data
+        self.drop_data_frac = drop_data_frac
 
         self.use_neural_model = use_neural_model
         self.use_neural_variational_noise = use_neural_variational_noise
@@ -416,11 +418,11 @@ class MonteCarloVnceLoss:
 
         self.train_miss_mask = train_missing_data_mask
         self.val_miss_mask = val_missing_data_mask
-        self.noise_misk_mask = noise_miss_mask
+        self.noise_miss_mask = noise_miss_mask
         if self.train_miss_mask is not None:
             self.train_data = deepcopy(train_data * (1 - self.train_miss_mask))
             self.val_data = deepcopy(val_data * (1 - self.val_miss_mask))
-            self.noise_samples = deepcopy(noise_samples * (1 - self.noise_misk_mask))
+            self.noise_samples = deepcopy(noise_samples * (1 - self.noise_miss_mask))
         else:
             self.train_data = deepcopy(train_data)
             self.val_data = deepcopy(val_data)
@@ -641,9 +643,9 @@ class MonteCarloVnceLoss:
         term2 = np.mean(a * grad_log_var_dist, axis=1).T  # (n, output_dim)
 
         if separate_terms:
-            return term1 + term2, a, grad_log_model, grad_log_var_dist
+            return term1 - term2, a, grad_log_model, grad_log_var_dist
         else:
-            return term1 + term2
+            return term1 - term2
 
     def score_function_grad_wrt_nn_output(self, nn_outputs):
         print('The score function grad for VNCE can be derived, but we have yet to implement it')
@@ -685,6 +687,11 @@ class MonteCarloVnceLoss:
 
         self.X = deepcopy(self.train_data[batch_slice])
         self.Y = deepcopy(self.noise_samples[noise_batch_slice])
+        if self.drop_data_frac != 0:
+            X_mask = self.rng.uniform(0, 1, self.X.shape) > self.drop_data_frac
+            Y_mask = self.rng.uniform(0, 1, self.Y.shape) > self.drop_data_frac
+            self.X = deepcopy(self.X * X_mask)
+            self.Y = deepcopy(self.Y * Y_mask)
         self.resample_from_variational_noise = True
 
         self.current_batch_id += 1
@@ -714,7 +721,7 @@ class MonteCarloVnceLoss:
     def resample_latents_if_necessary(self):
         if (self.ZX is None) or (self.ZY is None) or self.resample_from_variational_noise:
             X_mask, Y_mask = None, None
-            if self.train_miss_mask is not None:
+            if (self.train_miss_mask is not None) or self.drop_data_frac != 0:
                 X_mask = self.get_missing_data_mask(self.X)
                 Y_mask = self.get_missing_data_mask(self.Y)
 

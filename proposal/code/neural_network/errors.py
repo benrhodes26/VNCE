@@ -154,7 +154,7 @@ class VnceLoss(object):
 
         term1 = np.mean(a * grad_of_log_model, axis=1).T  # (n, output_dim)
         term2 = (np.mean(a, axis=0) * grad_of_var_dist_entropy.T).T  # (n, output_dim)
-
+        # todo: compute DIFFERENCE in term1 and term2! Also, need compute grad wrt. var_dist correctly...
         return - (term1 + term2)
 
     def __repr__(self):
