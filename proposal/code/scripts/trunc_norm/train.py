@@ -1,9 +1,9 @@
 import os
 import sys
 code_dir = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/code'
-code_dir_2 = '/home/ben/ben-rhodes-masters-project/proposal/code'
+code_dir_2 = '/home/ben/masters-project/ben-rhodes-masters-project/proposal/code'
 code_dir_3 = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/code/neural_network'
-code_dir_4 = '/home/ben/ben-rhodes-masters-project/proposal/code/neural_network'
+code_dir_4 = '/home/ben/masters-project/ben-rhodes-masters-project/proposal/code/neural_network'
 code_dirs = [code_dir, code_dir_2, code_dir_3, code_dir_4]
 for code_dir in code_dirs:
     if code_dir not in sys.path:
@@ -14,11 +14,9 @@ import pickle
 
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from copy import deepcopy
-from itertools import combinations
 from numpy import random as rnd
-from scipy.optimize import root, minimize, fsolve
+from scipy.optimize import fsolve
 from scipy.special import erfcx
-from scipy.stats import norm, multivariate_normal
 from time import gmtime, strftime
 
 from distribution import MissingDataProductOfTruncNormsPosterior, MissingDataProductOfTruncNormNoise, MissingDataUniformNoise
@@ -37,25 +35,24 @@ START_TIME = strftime('%Y%m%d-%H%M', gmtime())
 parser = ArgumentParser(description='Experimental comparison of training an RBM using latent nce and contrastive divergence',
                         formatter_class=ArgumentDefaultsHelpFormatter)
 # Read/write arguments
-parser.add_argument('--data_dir', type=str, default='/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/data/',
-                    help='Path to directory where data is loaded and saved')
-# parser.add_argument('--save_dir', type=str, default='/home/ben/ben-rhodes-masters-project/experimental_results/trunc_norm',
-#                     help='Path to directory where model will be saved')
-parser.add_argument('--save_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm',
+
+parser.add_argument('--save_dir', type=str, default='/home/ben/masters-project/ben-rhodes-masters-project/experimental_results/trunc_norm',
                     help='Path to directory where model will be saved')
-parser.add_argument('--exp_name', type=str, default='test', help='name of set of experiments this one belongs to')
-parser.add_argument('--name', type=str, default='d=2-frac=0.1', help='name of this exact experiment')
+# parser.add_argument('--save_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm',
+#                     help='Path to directory where model will be saved')
+parser.add_argument('--exp_name', type=str, default='5d', help='name of set of experiments this one belongs to')
+parser.add_argument('--name', type=str, default='frac=0.5', help='name of this exact experiment')
 
 # Data arguments
 parser.add_argument('--which_dataset', default='synthetic', help='options: usps and synthetic')
 parser.add_argument('--n', type=int, default=10000, help='Number of datapoints')
 parser.add_argument('--nz', type=int, default=1, help='Number of latent samples per datapoint')
 parser.add_argument('--nu', type=int, default=1, help='ratio of noise to data samples in NCE')
-parser.add_argument('--frac_missing', type=float, default=0, help='fraction of data missing at random')
+parser.add_argument('--frac_missing', type=float, default=0.5, help='fraction of data missing at random')
 
 # Model arguments
 parser.add_argument('--theta0_path', type=str, default=None, help='path to pre-trained weights')
-parser.add_argument('--d', type=int, default=2, help='dimension of visibles for synthetic dataset')
+parser.add_argument('--d', type=int, default=5, help='dimension of visibles for synthetic dataset')
 parser.add_argument('--num_layers', type=int, default=2, help='dimension of visibles for synthetic dataset')
 parser.add_argument('--hidden_dim', type=int, default=100, help='dimension of visibles for synthetic dataset')
 parser.add_argument('--activation_layer', type=object, default=TanhLayer(), help='dimension of visibles for synthetic dataset')
@@ -152,7 +149,13 @@ def generate_data(args):
     # args.true_mean = np.ones(args.d)
     # args.true_chol = np.tril(np.ones((args.d, args.d))) * 0.3
     args.true_mean = np.ones(args.d)
-    # todo: get precision!
+    a = np.diag(np.ones(args.d))
+    b = np.diag(np.ones(args.d - 1), 1) * 0.4
+    c = np.diag(np.ones(args.d - 1), -1) * 0.4
+    precision = a + b + c
+    precision[0, -1] = 0.4
+    precision[-1, 0] = 0.4
+    args.true_chol = np.linalg.cholesky(precision)
     print('true parameters: \n mean: {} \n chol: {}'.format(args.true_mean, args.true_chol))
 
     args.data_dist = MissingDataUnnormalisedTruncNorm(scaling_param=np.array([0.]), mean=args.true_mean, chol=args.true_chol, rng=rng)
@@ -305,22 +308,34 @@ def train(args):
                                    batch_size=args.nce_batch_size,
                                    num_epochs=args.nce_missing_num_epochs)
 
+    args.nce_missing_model_2 = UnnormalisedTruncNorm(args.scale0, args.mean0, args.chol0, rng=args.rng)
+    args.nce_missing_optimiser_2 = NCEOptimiser(model=args.nce_missing_model_2, noise=args.noise, noise_samples=args.Y, nu=args.nu)
+    filled_in_mean_data = args.X_train * (1 - args.train_missing_data_mask) + args.Y * args.train_missing_data_mask
+    args.nce_missing_optimiser_2.fit(X=filled_in_mean_data,
+                                     theta0=args.theta0,
+                                     opt_method=args.nce_opt_method,
+                                     maxiter=args.maxiter_nce,
+                                     learning_rate=args.nce_learn_rate,
+                                     batch_size=args.nce_batch_size,
+                                     num_epochs=args.nce_missing_num_epochs)
+
 
 def print_results(args):
     args.init_mse = get_mse(args, args.theta0[1:], 'Initial')
     args.vnce_mse = get_mse(args, args.vnce_loss.model.theta[1:], 'Missing Data VNCE')
     args.nce_mse = get_mse(args, args.nce_model.theta[1:], 'NCE')
-    args.nce_missing_mse = get_mse(args, args.nce_missing_model.theta[1:], 'Missing Data NCE')
-    print('final vnce scaling parameter: {}'.format(args.vnce_loss.model.theta[0]))
-    print('final nce scaling parameter: {}'.format(args.nce_model.theta[0]))
-    print('final missing data nce scaling parameter: {}'.format(args.nce_missing_model.theta[0]))
+    args.nce_missing_mse = get_mse(args, args.nce_missing_model.theta[1:], 'filled-in zeros NCE')
+    args.nce_missing_mse_2 = get_mse(args, args.nce_missing_model_2.theta[1:], 'filled-in means NCE')
+
+    print('vnce final scaling parameter: {}'.format(args.vnce_loss.model.theta[0]))
+    print('nce final scaling parameter: {}'.format(args.nce_model.theta[0]))
+    print('nce filled-in zeros final scaling parameter: {}'.format(args.nce_missing_model.theta[0]))
+    print('nce filled-in means final scaling parameter: {}'.format(args.nce_missing_model_2.theta[0]))
 
 
 def get_mse(args, theta, method_name):
     mse = mean_square_error(args.theta_true[1:], theta)
     print('{} Mean Squared Error: {}'.format(method_name, mse))
-    # print('true theta: {}'.format(args.theta_true[1:]))
-    # print('{} theta: {}'.format(method_name, theta))
     return mse
 
 
@@ -334,10 +349,11 @@ def plot_and_save_results(save_dir, args):
     vnce_plot = plot_vnce_loss(vnce_times, vnce_train_losses, vnce_val_losses)
     save_fig(vnce_plot, save_dir, 'vnce_loss')
 
-    nce_plot, axs = plt.subplots(1, 2, figsize=(5.5, 5))
+    nce_plot, axs = plt.subplots(1, 3, figsize=(5.5, 5))
     axs = axs.ravel()
     axs[0].plot(args.nce_optimiser.times, args.nce_optimiser.Js, c='b', label='NCE (train)')
-    axs[1].plot(args.nce_missing_optimiser.times, args.nce_missing_optimiser.Js, c='r', label='NCE missing data (train)')
+    axs[1].plot(args.nce_missing_optimiser.times, args.nce_missing_optimiser.Js, c='r', label='NCE filled-in zeros (train)')
+    axs[2].plot(args.nce_missing_optimiser_2.times, args.nce_missing_optimiser_2.Js, c='r', label='NCE filled-in means (train)')
     nce_plot.legend()
     save_fig(nce_plot, save_dir, 'nce_loss')
 
@@ -348,6 +364,8 @@ def plot_and_save_results(save_dir, args):
     pickle.dump(args, open(os.path.join(save_dir, "config.p"), "wb"))
     pickle.dump(args.data_dist, open(os.path.join(save_dir, "data_dist.p"), "wb"))
     pickle.dump(args.vnce_loss.model, open(os.path.join(save_dir, "vnce_model.p"), "wb"))
+    pickle.dump(args.nce_missing_model, open(os.path.join(save_dir, "nce_filled_in_zeros_model.p"), "wb"))
+    pickle.dump(args.nce_missing_model_2, open(os.path.join(save_dir, "nce_filled_in_mean_model.p"), "wb"))
     pickle.dump(args.nce_model, open(os.path.join(save_dir, "nce_model.p"), "wb"))
     pickle.dump(args.vnce_loss.noise, open(os.path.join(save_dir, "noise.p"), "wb"))
     pickle.dump(args.vnce_loss.variational_noise, open(os.path.join(save_dir, "var_dist.p"), "wb"))
@@ -359,7 +377,8 @@ def plot_and_save_results(save_dir, args):
              theta_true=args.theta_true,
              vnce_mse=args.vnce_mse,
              nce_mse=args.nce_mse,
-             nce_missing_mse=args.nce_missing_mse)
+             nce_missing_mse=args.nce_missing_mse,
+             nce_missing_mse_2=args.nce_missing_mse_2)
     np.savez(os.path.join(save_dir, "data"),
              X_train=args.vnce_loss.train_data,
              X_train_mask=args.vnce_loss.train_miss_mask,
@@ -378,10 +397,14 @@ def plot_and_save_results(save_dir, args):
              nce_thetas=args.nce_optimiser.thetas,
              nce_times=args.nce_optimiser.times,
              nce_losses=args.nce_optimiser.Js)
-    np.savez(os.path.join(save_dir, "nce_missing_data_results"),
+    np.savez(os.path.join(save_dir, "nce_filled_in_zeros_results"),
              nce_thetas=args.nce_missing_optimiser.thetas,
              nce_times=args.nce_missing_optimiser.times,
              nce_losses=args.nce_missing_optimiser.Js)
+    np.savez(os.path.join(save_dir, "nce_filled_in_means_results"),
+             nce_thetas=args.nce_missing_optimiser_2.thetas,
+             nce_times=args.nce_missing_optimiser_2.times,
+             nce_losses=args.nce_missing_optimiser_2.Js)
 
 
 def main(args, save_dir):
