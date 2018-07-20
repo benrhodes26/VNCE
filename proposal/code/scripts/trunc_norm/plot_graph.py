@@ -9,21 +9,20 @@ for code_dir in code_dirs:
     if code_dir not in sys.path:
         sys.path.append(code_dir)
 
+import matplotlib as matplotlib
 import numpy as np
 import pickle
-
-from distribution import RBMLatentPosterior, MultivariateBernoulliNoise, ChowLiuTree
-from fully_observed_models import VisibleRestrictedBoltzmannMachine
-from latent_variable_model import RestrictedBoltzmannMachine
-import matplotlib as matplotlib
-from plot import *
-from utils import take_closest
-
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from copy import deepcopy
 from matplotlib import pyplot as plt
 from matplotlib import rc
 from numpy import random as rnd
+
+from distribution import RBMLatentPosterior, MultivariateBernoulliNoise, ChowLiuTree
+from fully_observed_models import VisibleRestrictedBoltzmannMachine
+from latent_variable_model import RestrictedBoltzmannMachine
+from plot import *
+from utils import take_closest
 
 rc('lines', linewidth=1)
 rc('font', size=10)
@@ -35,8 +34,8 @@ rc('ytick', labelsize=10)
 parser = ArgumentParser(description='plot relationship between fraction of training data missing and final mean-squared error for'
                                     'a truncated normal model trained with VNCE', formatter_class=ArgumentDefaultsHelpFormatter)
 parser.add_argument('--save_dir', type=str, default='~/masters-project/ben-rhodes-masters-project/proposal/experiments/trunc_norm/')
-parser.add_argument('--exp_name', type=str, default='2d-lowertrichol0.3/', help='name of set of experiments this one belongs to')
 parser.add_argument('--load_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm/')
+parser.add_argument('--exp_name', type=str, default='5d/', help='name of set of experiments this one belongs to')
 
 args = parser.parse_args()
 load_dir = os.path.join(args.load_dir, args.exp_name)

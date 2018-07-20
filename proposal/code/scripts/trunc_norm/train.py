@@ -36,10 +36,10 @@ parser = ArgumentParser(description='Experimental comparison of training an RBM 
                         formatter_class=ArgumentDefaultsHelpFormatter)
 # Read/write arguments
 
-parser.add_argument('--save_dir', type=str, default='/home/ben/masters-project/ben-rhodes-masters-project/experimental_results/trunc_norm',
-                    help='Path to directory where model will be saved')
-# parser.add_argument('--save_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm',
+# parser.add_argument('--save_dir', type=str, default='/home/ben/masters-project/ben-rhodes-masters-project/experimental_results/trunc_norm',
 #                     help='Path to directory where model will be saved')
+parser.add_argument('--save_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm',
+                    help='Path to directory where model will be saved')
 parser.add_argument('--exp_name', type=str, default='5d', help='name of set of experiments this one belongs to')
 parser.add_argument('--name', type=str, default='frac=0.5', help='name of this exact experiment')
 

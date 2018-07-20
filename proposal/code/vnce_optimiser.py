@@ -376,6 +376,7 @@ class MonteCarloVnceLoss:
                  variational_noise,
                  noise_to_data_ratio,
                  num_latent_per_data,
+                 regulariser=None,
                  use_neural_model=False,
                  use_neural_variational_noise=False,
                  train_missing_data_mask=None,
@@ -405,6 +406,7 @@ class MonteCarloVnceLoss:
         self.variational_noise = variational_noise
         self.nu = noise_to_data_ratio
         self.nz = num_latent_per_data
+        self.model_regulariser = regulariser
         self.drop_data_frac = drop_data_frac
 
         self.use_neural_model = use_neural_model
@@ -464,7 +466,12 @@ class MonteCarloVnceLoss:
         first_term = self.first_term_of_loss()
         second_term = self.second_term_of_loss()
 
-        val = np.array([first_term, second_term])
+        if self.model_regulariser:
+            reg_term = self.model_regulariser(self.get_theta())
+            val = np.array([first_term, second_term, reg_term])
+        else:
+            val = np.array([first_term, second_term])
+
         val = val if self.separate_terms else np.sum(val)
         self.current_loss = val
 
@@ -481,7 +488,10 @@ class MonteCarloVnceLoss:
 
         first_term = self.first_term_of_grad_wrt_theta()
         second_term = self.second_term_grad_wrt_theta()
-        grad = first_term + second_term
+        if self.model_regulariser:
+            reg_term = self.model_regulariser.grad()
+
+        grad = first_term + second_term + reg_term
 
         # If theta is 1-dimensional, grad will be a float.
         if isinstance(grad, float):
