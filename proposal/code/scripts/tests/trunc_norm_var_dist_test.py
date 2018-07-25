@@ -1,9 +1,9 @@
 import os
 import sys
 code_dir = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/code'
-code_dir_2 = '/home/ben/ben-rhodes-masters-project/proposal/code'
+code_dir_2 = '/home/ben/masters-project/ben-rhodes-masters-project/proposal/code'
 code_dir_3 = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/code/neural_network'
-code_dir_4 = '/home/ben/ben-rhodes-masters-project/proposal/code/neural_network'
+code_dir_4 = '/home/ben/masters-project/ben-rhodes-masters-project/proposal/code/neural_network'
 code_dirs = [code_dir, code_dir_2, code_dir_3, code_dir_4]
 for code_dir in code_dirs:
     if code_dir not in sys.path:
@@ -27,10 +27,11 @@ from vnce_optimiser import VemOptimiser, SgdEmStep, MonteCarloVnceLoss
 n = 10
 d = 2
 
-
-true_mean = np.array([0., 0.])
-true_chol = np.identity(d)  # choleksy of precision
-data_dist = MissingDataUnnormalisedTruncNorm(scaling_param=np.array([0.]), mean=true_mean, chol=true_chol)
+true_mean = np.array([1., 1.])
+# true_chol = np.identity(d) * 0.1  # choleksy of precision
+# data_dist = MissingDataUnnormalisedTruncNorm(scaling_param=np.array([0.]), mean=true_mean, chol=true_chol)
+true_prec = np.identity(d) * 0.1  # choleksy of precision
+data_dist = MissingDataUnnormalisedTruncNorm(scaling_param=np.array([0.]), mean=true_mean, precision=true_prec)
 
 # generate synthetic data
 X_train = data_dist.sample(n)  # (n, d)
@@ -38,10 +39,12 @@ Z = np.zeros((1, ) + X_train.shape)
 
 # init the model p(x, z)
 scale0 = np.array([0.])
-mean0 = np.zeros(d)
+mean0 = np.ones(d) * 2
 # chol0 = np.identity(d)  # cholesky of precision
-chol0 = np.array([[1, 0], [-1, 1]])
-model = MissingDataUnnormalisedTruncNorm(scaling_param=scale0, mean=mean0, chol=chol0)
+# chol0 = np.array([[1, 0], [-1, 1]])
+# model = MissingDataUnnormalisedTruncNorm(scaling_param=scale0, mean=mean0, chol=chol0)
+prec0 = np.array([[5, -1], [-1, 5]])
+model = MissingDataUnnormalisedTruncNorm(scaling_param=scale0, mean=mean0, precision=prec0)
 
 # init the variational distribution
 var_dist = MissingDataProductOfTruncNormsPosterior(nn=None, data_dim=d)

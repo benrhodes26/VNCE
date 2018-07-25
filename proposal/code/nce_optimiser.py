@@ -24,7 +24,7 @@ class NCEOptimiser:
     to the parameters of the unnormalised model and a method for performing the
     optimisation: self.fit().
     """
-    def __init__(self, model, noise, noise_samples, nu=1, eps=1e-15):
+    def __init__(self, model, noise, noise_samples, regulariser=None, reg_param_indices=None, nu=1, eps=1e-15):
         """ Initialise unnormalised model and noise distribution
 
         :param model: FullyObservedModel
@@ -39,6 +39,11 @@ class NCEOptimiser:
         self.model = model
         self.noise = noise
         self.Y = noise_samples
+        self.regulariser = regulariser
+        self.reg_param_indices = reg_param_indices
+        self.reg_param_indices = reg_param_indices
+        if self.reg_param_indices is None:
+            self.reg_param_indices = np.arange(len(model.theta))
         self.nu = nu
         self.eps = eps
         self.thetas = []  # for storing values of parameters during optimisation
@@ -61,21 +66,29 @@ class NCEOptimiser:
         nu = self.nu
 
         h_x = self.h(X)
-        #todo: actually avoid overflow! (i.e use np.where or equivalent)
-        a = (h_x >= 0) * np.log(1 + nu * np.exp(-h_x))
-        b = (h_x < 0) * (-h_x + np.log(nu + np.exp(h_x)))
+        exp1 = np.exp(h_x, out=np.zeros_like(h_x), where=h_x <= 0)
+        exp2 = np.exp(-h_x, out=np.zeros_like(h_x), where=h_x > 0)
+        a = (h_x >= 0) * np.log(1 + nu * exp2)
+        b = (h_x < 0) * (-h_x + np.log(nu + exp1))
         first_term = -np.mean(a + b)
 
         h_y = self.h(Y)
-        #todo: actually avoid overflow! (i.e use np.where or equivalent)
-        c = (h_y <= 0) * np.log(1 + (1/nu) * np.exp(h_y))
-        d = (h_y > 0) * (h_y + np.log((1/nu) + np.exp(-h_y)))
+        exp1 = np.exp(h_y, out=np.zeros_like(h_y), where=h_y <= 0)
+        exp2 = np.exp(-h_y, out=np.zeros_like(h_y), where=h_y > 0)
+        c = (h_y <= 0) * np.log(1 + (1/nu) * exp1)
+        d = (h_y > 0) * (h_y + np.log((1/nu) + exp2))
         second_term = -np.mean(c + d)
 
-        if separate_terms:
-            return np.array([first_term, second_term])
+        if self.regulariser:
+            reg_params = self.get_theta(self.reg_param_indices)
+            reg_term = self.regulariser(reg_params)
+            val = np.array([first_term, second_term, reg_term])
+        else:
+            val = np.array([first_term, second_term])
 
-        return first_term + second_term
+        # val = val if self.separate_terms else np.sum(val)
+
+        return val
 
     def compute_J_grad(self, X, Y=None):
         """Computes the NCE objective function, J.
@@ -89,22 +102,29 @@ class NCEOptimiser:
         nu = self.nu
 
         h_x = self.h(X)
-        gradX = self.model.grad_log_wrt_params(X)  # (len(theta), n)
-        #todo: actually avoid overflow! (i.e use np.where or equivalent)
-        a0 = (h_x <= 0) * (1 / (1 + ((1 / nu) * np.exp(h_x))))
-        a1 = (h_x > 0) * (np.exp(-h_x) / ((1 / nu) + np.exp(-h_x)))
+        exp1 = np.exp(h_x, out=np.zeros_like(h_x), where=h_x <= 0)
+        exp2 = np.exp(-h_x, out=np.zeros_like(h_x), where=h_x > 0)
+        a0 = (h_x <= 0) * (1 / (1 + ((1 / nu) * exp1)))
+        a1 = (h_x > 0) * (exp2 / ((1 / nu) + exp2))
         a = a0 + a1
+
+        gradX = self.model.grad_log_wrt_params(X)  # (len(theta), n)
         term_1 = np.mean(gradX*a, axis=1)  # (len(theta), )
 
         gradY = self.model.grad_log_wrt_params(Y)  # (len(theta), nu*n)
         h_y = self.h(Y)
-        #todo: actually avoid overflow! (i.e use np.where or equivalent)
-        b0 = (h_y > 0) * (1 / (1 + nu * np.exp(-h_y)))
-        b1 = (h_y <= 0) * (np.exp(h_y) / (np.exp(h_y) + nu))
+        exp1 = np.exp(h_y, out=np.zeros_like(h_y), where=h_y <= 0)
+        exp2 = np.exp(-h_y, out=np.zeros_like(h_y), where=h_y > 0)
+        b0 = (h_y > 0) * (1 / (1 + nu * exp2))
+        b1 = (h_y <= 0) * (exp1 / (exp1 + nu))
         b = b0 + b1
         term_2 = -nu * np.mean(gradY*b, axis=1)  # (len(theta), )
 
         grad = term_1 + term_2
+
+        if self.regulariser:
+            reg_params = self.get_theta(self.reg_param_indices)
+            grad[self.reg_param_indices] += self.regulariser.grad(reg_params)
 
         # If theta is 1-dimensional, grad will be a float.
         if isinstance(grad, float):
@@ -313,6 +333,14 @@ class NCEOptimiser:
         J = self.compute_J(X=X, separate_terms=separate_terms)
         self.model.theta = current_theta
         return J
+
+    def get_theta(self, ind=None):
+        """Return parameters of model (optionally, just get subset by passing through indices)"""
+        if ind is not None:
+            theta = deepcopy(self.model.theta[ind])
+        else:
+            theta = deepcopy(self.model.theta)
+        return theta
 
     def __repr__(self):
         return "NCEOptimiser"

@@ -28,7 +28,7 @@ from numpy import random as rnd
 rc('lines', linewidth=1)
 rc('font', size=10)
 rc('legend', fontsize=8)
-rc('text', usetex=True)
+#   rc('text', usetex=True)
 rc('xtick', labelsize=10)
 rc('ytick', labelsize=10)
 
@@ -36,8 +36,8 @@ parser = ArgumentParser(description='plot relationship between fraction of train
                                     'a truncated normal model trained with VNCE', formatter_class=ArgumentDefaultsHelpFormatter)
 parser.add_argument('--save_dir', type=str, default='~/masters-project/ben-rhodes-masters-project/proposal/experiments/trunc-norm/')
 parser.add_argument('--exp_name', type=str, default='5d/', help='name of set of experiments this one belongs to')
-parser.add_argument('--load_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm/')
-# parser.add_argument('--load_dir', type=str, default='~/masters-project/ben-rhodes-masters-project/experimental-results/trunc-norm/')
+# parser.add_argument('--load_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm/')
+parser.add_argument('--load_dir', type=str, default='~/masters-project/ben-rhodes-masters-project/experimental-results/trunc-norm/')
 
 args = parser.parse_args()
 load_dir = os.path.join(args.load_dir, args.exp_name)

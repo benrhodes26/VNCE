@@ -377,6 +377,7 @@ class MonteCarloVnceLoss:
                  noise_to_data_ratio,
                  num_latent_per_data,
                  regulariser=None,
+                 reg_param_indices=None,
                  use_neural_model=False,
                  use_neural_variational_noise=False,
                  train_missing_data_mask=None,
@@ -407,13 +408,16 @@ class MonteCarloVnceLoss:
         self.nu = noise_to_data_ratio
         self.nz = num_latent_per_data
         self.model_regulariser = regulariser
-        self.drop_data_frac = drop_data_frac
+        self.reg_param_indices = reg_param_indices
+        if self.reg_param_indices is None:
+            self.reg_param_indices = np.arange(len(model.theta))
 
         self.use_neural_model = use_neural_model
         self.use_neural_variational_noise = use_neural_variational_noise
         self.use_reparam_trick = use_reparam_trick
         self.use_score_function = use_score_function
         self.use_rejection_reparam_trick = use_rejection_reparam_trick
+        self.drop_data_frac = drop_data_frac
         self.separate_terms = separate_terms
         self.use_importance_sampling = use_importance_sampling
         self.eps = eps
@@ -467,7 +471,8 @@ class MonteCarloVnceLoss:
         second_term = self.second_term_of_loss()
 
         if self.model_regulariser:
-            reg_term = self.model_regulariser(self.get_theta())
+            reg_params = self.get_theta(self.reg_param_indices)
+            reg_term = self.model_regulariser(reg_params)
             val = np.array([first_term, second_term, reg_term])
         else:
             val = np.array([first_term, second_term])
@@ -488,10 +493,10 @@ class MonteCarloVnceLoss:
 
         first_term = self.first_term_of_grad_wrt_theta()
         second_term = self.second_term_grad_wrt_theta()
+        grad = first_term + second_term
         if self.model_regulariser:
-            reg_term = self.model_regulariser.grad()
-
-        grad = first_term + second_term + reg_term
+            reg_params = self.get_theta(self.reg_param_indices)
+            grad[self.reg_param_indices] += self.model_regulariser.grad(reg_params)
 
         # If theta is 1-dimensional, grad will be a float.
         if isinstance(grad, float):
@@ -539,9 +544,10 @@ class MonteCarloVnceLoss:
 
         # use a numerically stable implementation of the cross-entropy sigmoid
         h_x = self.h(self.X, self.ZX)
-        # todo: actually avoid overflow! (i.e use np.where or equivalent)
-        a = (h_x > 0) * np.log(1 + nu * np.exp(-h_x))
-        b = (h_x < 0) * (-h_x + np.log(nu + np.exp(h_x)))
+        exp1 = np.exp(h_x, out=np.zeros_like(h_x), where=h_x <= 0)
+        exp2 = np.exp(-h_x, out=np.zeros_like(h_x), where=h_x > 0)
+        a = (h_x > 0) * np.log(1 + nu * exp2)
+        b = (h_x <= 0) * (-h_x + np.log(nu + exp1))
         first_term = -np.mean(a + b)
 
         validate_shape(a.shape, (self.nz, len(self.X)))
@@ -559,9 +565,10 @@ class MonteCarloVnceLoss:
             second_term = -nu * np.mean(np.log(1 + c))
         else:
             h_y = self.h2(self.Y)
-            # todo: actually avoid overflow! (i.e use np.where or equivalent)
-            c = (h_y < 0) * np.log(1 + (1/nu) * np.exp(h_y))
-            d = (h_y > 0) * (h_y + np.log((1/nu) + np.exp(-h_y)))
+            exp1 = np.exp(h_y, out=np.zeros_like(h_y), where=h_y <= 0)
+            exp2 = np.exp(-h_y, out=np.zeros_like(h_y), where=h_y > 0)
+            c = (h_y <= 0) * np.log(1 + (1/nu) * exp1)
+            d = (h_y > 0) * (h_y + np.log((1/nu) + exp2))
             second_term = -np.mean(c + d)
 
         validate_shape(c.shape, (len(self.Y), ))
@@ -602,10 +609,10 @@ class MonteCarloVnceLoss:
 
     def first_term_of_grad_wrt_theta(self):
         h_x = self.h(self.X, self.ZX)
-        # todo: actually avoid overflow! (i.e use np.where or equivalent)
-        a0 = (h_x < 0) * (1 / (1 + ((1 / self.nu) * np.exp(h_x))))
-        a1 = (h_x > 0) * (np.exp(-h_x) / ((1 / self.nu) + np.exp(-h_x)))
-
+        exp1 = np.exp(h_x, out=np.zeros_like(h_x), where=h_x <= 0)
+        exp2 = np.exp(-h_x, out=np.zeros_like(h_x), where=h_x > 0)
+        a0 = (h_x <= 0) * (1 / (1 + ((1 / self.nu) * exp1)))
+        a1 = (h_x > 0) * (exp2 / ((1 / self.nu) + exp2))
         a = a0 + a1  # (nz, n)
 
         gradX = self.model.grad_log_wrt_params(self.X, self.ZX)  # (len(theta), nz, n)
@@ -775,8 +782,13 @@ class MonteCarloVnceLoss:
         miss_mask[np.where(U == 0)] = 1
         return miss_mask
 
-    def get_theta(self):
-        return deepcopy(self.model.theta)
+    def get_theta(self, ind=None):
+        """Return parameters of model (optionally, just get subset by passing through indices)"""
+        if ind is not None:
+            theta = deepcopy(self.model.theta[ind])
+        else:
+            theta = deepcopy(self.model.theta)
+        return theta
 
     def get_alpha(self):
         if self.use_neural_variational_noise:
