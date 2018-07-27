@@ -38,7 +38,7 @@ parser = ArgumentParser(description='plot relationship between fraction of train
 parser.add_argument('--save_dir', type=str, default='~/masters-project/ben-rhodes-masters-project/proposal/experiments/trunc-norm/')
 # parser.add_argument('--load_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm/')
 parser.add_argument('--load_dir', type=str, default='~/masters-project/ben-rhodes-masters-project/experimental-results/trunc-norm/')
-parser.add_argument('--exp_name', type=str, default='5d/reg0.01/', help='name of set of experiments this one belongs to')
+parser.add_argument('--exp_name', type=str, default='5d/reg0.1/', help='name of set of experiments this one belongs to')
 
 args = parser.parse_args()
 load_dir = os.path.join(args.load_dir, args.exp_name)
@@ -103,7 +103,7 @@ for i, file in enumerate(os.listdir(load_dir)):
         ax.axis('off')
     save_fig(fig, save_dir, 'fraction_missing:{}'.format(frac))
 
-    # print('vnce\n', vnce_theta[config.reg_param_indices])
+    print('vnce\n', vnce_theta[config.reg_param_indices])
     # print('nce (zeros)\n', nce_zeros_theta[config.reg_param_indices])
     # print('nce (noise)\n', nce_noise_theta[config.reg_param_indices])
 
