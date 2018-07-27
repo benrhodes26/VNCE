@@ -781,7 +781,7 @@ class RestrictedBoltzmannMachine(LatentVarModel):
         p_z0_given_u0 = self.p_latents_given_visibles(U0)  # (n, m)
         Z0 = self.rng.uniform(0, 1, p_z0_given_u0.shape) < p_z0_given_u0  # (n, m)
 
-        Z = Z0
+        Z = deepcopy(Z0)
         for i in range(num_iter):
             p_u_given_z = self.p_visibles_given_latents(Z)  # (n, d)
             U = self.rng.uniform(0, 1, p_u_given_z.shape) < p_u_given_z  # (n, d)
@@ -1122,7 +1122,98 @@ class StarsAndMoonsModel(LatentVarModel):
 
 class MissingDataUnnormalisedTruncNorm(LatentVarModel):
 
-    def __init__(self, scaling_param, mean, chol, rng=None):
+    # def __init__(self, scaling_param, mean, chol, rng=None):
+    #     """
+    #     :param scaling_param: array (1, )
+    #     :param mean: array (d, )
+    #     :param chol: array (d, d)
+    #         Lower triangular cholesky decomposition
+    #     :param rng:
+    #     :return:
+    #     """
+    #     self.mean_len = len(mean)
+    #
+    #     # cholesky of precision with log of diagonal elements (to enforce positivity)
+    #     chol = deepcopy(chol)
+    #     idiag = np.diag_indices_from(chol)
+    #     chol[idiag] = np.log(chol[idiag])
+    #     lower_chol = chol[np.tril_indices(self.mean_len)]
+    #     self.chol_len = len(lower_chol)
+    #
+    #     theta = np.concatenate((scaling_param, mean.reshape(-1), lower_chol.reshape(-1)))
+    #     super().__init__(theta, rng=rng)
+
+
+    # def __call__(self, U, Z, log=False):
+    #     """Evaluate unnormalised model
+    #
+    #     :param U: array (n, k)
+    #         observed data (elements set to 0 are missing)
+    #     :param Z: array (nz, n, k)
+    #         filled-in missing data (elements set to 0 are not missing)
+    #     :param log: boolean
+    #         if True, return value of logphi, where phi is the unnormalised model
+    #     """
+    #     V = U + Z  # (nz, n, k) - fill in the missing data
+    #     scaling_param = deepcopy(self.theta[0])
+    #     mean, chol, chol_diag = self.get_mean_and_chol()
+    #     truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)
+    #
+    #     V_centred = V - mean
+    #     P = np.dot(chol, chol.T)  # (k, k) - precision matrix
+    #     VP = np.dot(V_centred, P)  # (nz, n, k)
+    #     power = -0.5 * np.sum(VP * V_centred, axis=-1)  # (nz, n)
+    #     log_norm_const = (-self.mean_len / 2) * np.log(2 * np.pi) + np.sum(np.log(chol_diag))
+    #
+    #     val = -scaling_param + log_norm_const + power
+    #     if log:
+    #         val = truncation_mask * val + (1 - truncation_mask) * -15  # should be -infty, but -15 avoids numerical issues
+    #     else:
+    #         val = truncation_mask * np.exp(val)
+    #
+    #     return val  # (nz, n)
+    #
+    # def grad_log_wrt_params(self, U, Z):
+    #     """ Nabla_theta(log(phi(x,z; theta))) where phi is the unnormalised model
+    #
+    #     :param U: array (n, d)
+    #          either data or noise for NCE
+    #     :param Z: (nz, n, m) or (n, m)
+    #         m-dimensional latent variable samples. nz per datapoint in U.
+    #     :return grad: array (len(theta), nz, n)
+    #     """
+    #     V = U + Z  # (nz, n, d) - fill in the missing data
+    #     truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)
+    #
+    #     mean, chol, chol_diag = self.get_mean_and_chol()
+    #     ones_with_chol_diag = np.ones_like(chol)  # (d , d)
+    #     ones_with_chol_diag[np.diag_indices_from(ones_with_chol_diag)] = chol_diag
+    #
+    #     grad_wrt_to_scaling_param = np.ones((1, ) + Z.shape[:2]) * -1  # (1, nz, n)
+    #
+    #     V_centred = V - mean
+    #     P = np.dot(chol, chol.T)  # (d, d) - precision matrix
+    #     grad_wrt_to_mean = np.dot(V_centred, P.T)  # (nz, n, d)
+    #     grad_wrt_to_mean = np.transpose(grad_wrt_to_mean, [2, 0, 1])  # (d, nz, n)
+    #
+    #     V1 = np.repeat(V_centred, self.mean_len, axis=-1)  # (nz, n, d*d)
+    #     V2 = np.tile(V_centred, self.mean_len)  # (nz, n, d*d)
+    #     v3_shape = Z.shape[:2] + (self.mean_len, self.mean_len)
+    #     V3 = (V1 * V2).reshape(v3_shape)  # (nz, n, d, d)
+    #     V4 = np.dot(V3, chol)  # (nz, n, d, d)
+    #     V4 *= ones_with_chol_diag  # (nz, n, d, d)
+    #     V5 = (np.identity(self.mean_len) - V4)  # (nz, n, d, d)
+    #
+    #     ilower = np.tril_indices(self.mean_len)
+    #     grad_wrt_chol = V5[:, :, ilower[0], ilower[1]].reshape(Z.shape[:2] + (-1, ))  # (nz, n, d(d+1)/2)
+    #     grad_wrt_chol = np.transpose(grad_wrt_chol, [2, 0, 1])  # (d(d+1)/2, nz, n)
+    #
+    #     grad = np.concatenate((grad_wrt_to_scaling_param, grad_wrt_to_mean, grad_wrt_chol), axis=0)  # (len(theta), nz, n)
+    #     grad *= truncation_mask  # truncate
+    #
+    #     return grad
+
+    def __init__(self, scaling_param, mean, precision, rng=None):
         """
         :param scaling_param: array (1, )
         :param mean: array (d, )
@@ -1131,16 +1222,17 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         :param rng:
         :return:
         """
+
         self.mean_len = len(mean)
 
         # cholesky of precision with log of diagonal elements (to enforce positivity)
-        chol = deepcopy(chol)
-        idiag = np.diag_indices_from(chol)
-        chol[idiag] = np.log(chol[idiag])
-        lower_chol = chol[np.tril_indices(self.mean_len)]
-        self.chol_len = len(lower_chol)
+        prec = deepcopy(precision)
+        idiag = np.diag_indices_from(prec)
+        prec[idiag] = np.log(prec[idiag])
+        lower_prec = prec[np.tril_indices(self.mean_len)]
+        self.chol_len = len(lower_prec)
 
-        theta = np.concatenate((scaling_param, mean.reshape(-1), lower_chol.reshape(-1)))
+        theta = np.concatenate((scaling_param, mean.reshape(-1), lower_prec.reshape(-1)))
         super().__init__(theta, rng=rng)
 
     def __call__(self, U, Z, log=False):
@@ -1155,16 +1247,16 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         """
         V = U + Z  # (nz, n, k) - fill in the missing data
         scaling_param = deepcopy(self.theta[0])
-        mean, chol, chol_diag = self.get_mean_and_chol()
+        mean, precision, _, _ = self.get_mean_and_lprecision()
         truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)
 
         V_centred = V - mean
-        P = np.dot(chol, chol.T)  # (k, k) - precision matrix
-        VP = np.dot(V_centred, P)  # (nz, n, k)
+        VP = np.dot(V_centred, precision)  # (nz, n, k)
         power = -0.5 * np.sum(VP * V_centred, axis=-1)  # (nz, n)
-        log_norm_const = (-self.mean_len / 2) * np.log(2 * np.pi) + np.sum(np.log(chol_diag))
+        # log_norm_const = (-self.mean_len / 2) * np.log(2 * np.pi) + np.sum(np.log(chol_diag))
 
-        val = -scaling_param + log_norm_const + power
+        # val = -scaling_param + log_norm_const + power
+        val = -scaling_param + power
         if log:
             val = truncation_mask * val + (1 - truncation_mask) * -15  # should be -infty, but -15 avoids numerical issues
         else:
@@ -1184,30 +1276,31 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         V = U + Z  # (nz, n, d) - fill in the missing data
         truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)
 
-        mean, chol, chol_diag = self.get_mean_and_chol()
-        ones_with_chol_diag = np.ones_like(chol)  # (d , d)
-        ones_with_chol_diag[np.diag_indices_from(ones_with_chol_diag)] = chol_diag
+        mean, precision, lprecision, precision_diag = self.get_mean_and_lprecision()
+        ones_with_prec_diag = np.ones_like(precision)  # (d , d)
+        ones_with_prec_diag[np.diag_indices_from(ones_with_prec_diag)] = precision_diag
 
         grad_wrt_to_scaling_param = np.ones((1, ) + Z.shape[:2]) * -1  # (1, nz, n)
 
-        V_centred = V - mean
-        P = np.dot(chol, chol.T)  # (d, d) - precision matrix
-        grad_wrt_to_mean = np.dot(V_centred, P.T)  # (nz, n, d)
+        V_centred = V - mean  # (nz, n, d)
+        grad_wrt_to_mean = np.dot(V_centred, precision.T)  # (nz, n, d)
         grad_wrt_to_mean = np.transpose(grad_wrt_to_mean, [2, 0, 1])  # (d, nz, n)
 
         V1 = np.repeat(V_centred, self.mean_len, axis=-1)  # (nz, n, d*d)
         V2 = np.tile(V_centred, self.mean_len)  # (nz, n, d*d)
         v3_shape = Z.shape[:2] + (self.mean_len, self.mean_len)
-        V3 = (V1 * V2).reshape(v3_shape)  # (nz, n, d, d)
-        V4 = np.dot(V3, chol)  # (nz, n, d, d)
-        V4 *= ones_with_chol_diag  # (nz, n, d, d)
-        V5 = (np.identity(self.mean_len) - V4)  # (nz, n, d, d)
+        V3 = - (V1 * V2).reshape(v3_shape)  # (nz, n, d, d)
+
+        V4 = 0.5 * V_centred**2  # (nz, n, d)
+        idiag = np.diag_indices(self.mean_len)
+        V3[:, :, idiag[0], idiag[1]] += V4  # (nz, n, d, d)
+        V3 *= ones_with_prec_diag  # because we optimise log of diagonals
 
         ilower = np.tril_indices(self.mean_len)
-        grad_wrt_chol = V5[:, :, ilower[0], ilower[1]].reshape(Z.shape[:2] + (-1, ))  # (nz, n, d(d+1)/2)
-        grad_wrt_chol = np.transpose(grad_wrt_chol, [2, 0, 1])  # (d(d+1)/2, nz, n)
+        grad_wrt_lprecision = V3[:, :, ilower[0], ilower[1]].reshape(Z.shape[:2] + (-1, ))  # (nz, n, d(d+1)/2)
+        grad_wrt_lprecision = np.transpose(grad_wrt_lprecision, [2, 0, 1])  # (d(d+1)/2, nz, n)
 
-        grad = np.concatenate((grad_wrt_to_scaling_param, grad_wrt_to_mean, grad_wrt_chol), axis=0)  # (len(theta), nz, n)
+        grad = np.concatenate((grad_wrt_to_scaling_param, grad_wrt_to_mean, grad_wrt_lprecision), axis=0)  # (len(theta), nz, n)
         grad *= truncation_mask  # truncate
 
         return grad
@@ -1225,7 +1318,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         :param grad_z_wrt_nn_outputs: array (len(nn_outputs), nz, n, k)
         :return grad: array (len(nn_outputs), nz, n)
         """
-        mean, chol, chol_diag = self.get_mean_and_chol()
+        mean, precision, _, _ = self.get_mean_and_lprecision()
         V = U + Z  # (nz, n, k) - fill in the missing data
         miss_mask = np.zeros_like(Z)
         miss_mask[np.nonzero(Z)] = 1
@@ -1234,9 +1327,8 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         grad_Z_wrt_nn_output1 = grad_z_wrt_nn_outputs[:, :, :self.mean_len]  # (nz, n, k) - grads wrt mean
         grad_Z_wrt_nn_output2 = grad_z_wrt_nn_outputs[:, :, self.mean_len:]  # (nz, n, k) - grads wrt to np.log(cholesky)
 
-        P = np.dot(chol, chol.T)  # (k, k) - precision matrix
         V_centred = V - mean
-        grad_log_model_wrt_z = - np.dot(V_centred, P.T)  # (nz, n, k)
+        grad_log_model_wrt_z = - np.dot(V_centred, precision.T)  # (nz, n, k)
         grad_log_model_wrt_z *= miss_mask
 
         grad_log_model_wrt_nn_output1 = np.transpose(grad_Z_wrt_nn_output1 * grad_log_model_wrt_z, [2, 0, 1])  # (k, nz, n)
@@ -1250,8 +1342,13 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         """ Sample from a truncated multivariate normal with rejection sampling with uniform proposal (note: this won't scale)
         :param n: sample size
         """
-        mean, chol, chol_diag = self.get_mean_and_chol()
-        stds = (1 / chol_diag)
+        # mean, chol, chol_diag = self.get_mean_and_chol()
+        # stds = (1 / chol_diag)
+        mean, precision, lprecision, precision_diag = self.get_mean_and_lprecision()
+        cov = np.linalg.inv(precision)
+        print('covariance: {}'.format(cov))
+        print('variances: {}'.format(np.diag(cov)))
+        stds = np.diag(cov)**0.5
         low_proposal = np.maximum(mean - (5 * stds), 0)
         high_proposal = mean + (5 * stds)
         k = len(mean)
@@ -1271,8 +1368,8 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
             proposal = self.rng.uniform(low_proposal, high_proposal, (proposal_size, k))  # (proposal_size, k)
             V = proposal - mean
 
-            P = np.dot(chol, chol.T)  # (k, k) - precision matrix
-            VP = np.dot(V, P)  # (proposal_size, k)
+            # P = np.dot(chol, chol.T)  # (k, k) - precision matrix
+            VP = np.dot(V, precision)  # (proposal_size, k)
             acceptance_prob = np.exp(-0.5 * np.sum(VP * V, axis=-1))  # (proposal_size, )
             accept = self.rng.uniform(0, 1, proposal_size) < acceptance_prob
             accepted = proposal[accept]
@@ -1289,17 +1386,34 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
 
         return sample
 
-    def get_mean_and_chol(self):
-        """get mean and lower triangular cholesky of the precision matrix"""
-        mean, chol = deepcopy(self.theta[1:1+self.mean_len]), deepcopy(self.theta[1+self.mean_len:])
+    # def get_mean_and_chol(self):
+    #     """get mean and lower triangular cholesky of the precision matrix"""
+    #     mean, chol = deepcopy(self.theta[1:1+self.mean_len]), deepcopy(self.theta[1+self.mean_len:])
+    #
+    #     # lower-triangular cholesky decomposition of the precision
+    #     chol_mat = np.zeros((self.mean_len, self.mean_len))
+    #     ilower = np.tril_indices(self.mean_len)
+    #     chol_mat[ilower] = chol
+    #
+    #     # exp the diagonal, to enforce positivity
+    #     idiag = np.diag_indices_from(chol_mat)
+    #     chol_mat[idiag] = np.exp(chol_mat[idiag])
+    #
+    #     return mean, chol_mat, chol_mat[idiag]
+
+    def get_mean_and_lprecision(self):
+        """get mean and lower triangular elements of the precision matrix (note: we get log of diagonal elements)"""
+        mean, lprec = deepcopy(self.theta[1:1+self.mean_len]), deepcopy(self.theta[1+self.mean_len:])
 
         # lower-triangular cholesky decomposition of the precision
-        chol_mat = np.zeros((self.mean_len, self.mean_len))
+        lprecision = np.zeros((self.mean_len, self.mean_len))
         ilower = np.tril_indices(self.mean_len)
-        chol_mat[ilower] = chol
+        lprecision[ilower] = lprec
 
         # exp the diagonal, to enforce positivity
-        idiag = np.diag_indices_from(chol_mat)
-        chol_mat[idiag] = np.exp(chol_mat[idiag])
+        idiag = np.diag_indices_from(lprecision)
+        lprecision[idiag] = np.exp(lprecision[idiag])
 
-        return mean, chol_mat, chol_mat[idiag]
+        precision = lprecision + lprecision.T - np.diag(np.diag(lprecision))
+
+        return mean, precision, lprecision, precision[idiag]

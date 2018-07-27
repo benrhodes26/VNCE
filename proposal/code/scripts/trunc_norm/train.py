@@ -27,6 +27,7 @@ from layers import AffineLayer, ReluLayer, TanhLayer
 from models import MultipleLayerModel
 from nce_optimiser import NCEOptimiser
 from plot import *
+from regularisers import L1Regulariser
 from utils import *
 from vnce_optimiser import VemOptimiser, SgdEmStep, ScipyMinimiseEmStep, MonteCarloVnceLoss
 
@@ -36,23 +37,23 @@ parser = ArgumentParser(description='Experimental comparison of training an RBM 
                         formatter_class=ArgumentDefaultsHelpFormatter)
 # Read/write arguments
 
-# parser.add_argument('--save_dir', type=str, default='/home/ben/masters-project/ben-rhodes-masters-project/experimental_results/trunc_norm',
-#                     help='Path to directory where model will be saved')
-parser.add_argument('--save_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm',
+parser.add_argument('--save_dir', type=str, default='/home/ben/masters-project/ben-rhodes-masters-project/experimental-results/trunc-norm',
                     help='Path to directory where model will be saved')
-parser.add_argument('--exp_name', type=str, default='5d', help='name of set of experiments this one belongs to')
-parser.add_argument('--name', type=str, default='frac=0.5', help='name of this exact experiment')
+# parser.add_argument('--save_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm',
+#                     help='Path to directory where model will be saved')
+parser.add_argument('--exp_name', type=str, default='test', help='name of set of experiments this one belongs to')
+parser.add_argument('--name', type=str, default='test', help='name of this exact experiment')
 
 # Data arguments
 parser.add_argument('--which_dataset', default='synthetic', help='options: usps and synthetic')
 parser.add_argument('--n', type=int, default=10000, help='Number of datapoints')
 parser.add_argument('--nz', type=int, default=1, help='Number of latent samples per datapoint')
 parser.add_argument('--nu', type=int, default=1, help='ratio of noise to data samples in NCE')
-parser.add_argument('--frac_missing', type=float, default=0.5, help='fraction of data missing at random')
+parser.add_argument('--frac_missing', type=float, default=0, help='fraction of data missing at random')
 
 # Model arguments
 parser.add_argument('--theta0_path', type=str, default=None, help='path to pre-trained weights')
-parser.add_argument('--d', type=int, default=5, help='dimension of visibles for synthetic dataset')
+parser.add_argument('--d', type=int, default=2, help='dimension of visibles for synthetic dataset')
 parser.add_argument('--num_layers', type=int, default=2, help='dimension of visibles for synthetic dataset')
 parser.add_argument('--hidden_dim', type=int, default=100, help='dimension of visibles for synthetic dataset')
 parser.add_argument('--activation_layer', type=object, default=TanhLayer(), help='dimension of visibles for synthetic dataset')
@@ -74,11 +75,12 @@ parser.set_defaults(track_loss=True)
 parser.add_argument('--nce_opt_method', type=str, default='SGD', help='nce optimisation method. L-BFGS-B and CG both seem to work')
 parser.add_argument('--maxiter_nce', type=int, default=50, help='number of iterations inside scipy.minimize')
 parser.add_argument('--nce_num_epochs', type=int, default=50, help='if nce_opt_method=SGD, this is the number of passes through data set')
-parser.add_argument('--nce_missing_num_epochs', type=int, default=50, help='if nce_opt_method=SGD, this is the number of passes through data set')
+parser.add_argument('--nce_missing_num_epochs', type=int, default=100, help='if nce_opt_method=SGD, this is the number of passes through data set')
 parser.add_argument('--nce_learn_rate', type=float, default=0.1, help='if nce_opt_method=SGD, this is the learning rate used')
 parser.add_argument('--nce_batch_size', type=int, default=100, help='if nce_opt_method=SGD, this is the size of a minibatch')
 
 # Other arguments
+parser.add_argument('--reg_param', type=float, default=0, help='L1 regularisation parameter')
 parser.add_argument('--separate_terms', dest='separate_terms', action='store_true', help='separate the two terms that make up J1/J objective functions')
 parser.add_argument('--no-separate_terms', dest='separate_terms', action='store_false')
 parser.set_defaults(separate_terms=True)
@@ -152,13 +154,12 @@ def generate_data(args):
     a = np.diag(np.ones(args.d))
     b = np.diag(np.ones(args.d - 1), 1) * 0.4
     c = np.diag(np.ones(args.d - 1), -1) * 0.4
-    precision = a + b + c
-    precision[0, -1] = 0.4
-    precision[-1, 0] = 0.4
-    args.true_chol = np.linalg.cholesky(precision)
-    print('true parameters: \n mean: {} \n chol: {}'.format(args.true_mean, args.true_chol))
+    args.true_prec = a + b + c
+    args.true_prec[0, -1] = 0.4
+    args.true_prec[-1, 0] = 0.4
+    print('true parameters: \n mean: {} \n precision: {}'.format(args.true_mean, args.true_prec))
 
-    args.data_dist = MissingDataUnnormalisedTruncNorm(scaling_param=np.array([0.]), mean=args.true_mean, chol=args.true_chol, rng=rng)
+    args.data_dist = MissingDataUnnormalisedTruncNorm(scaling_param=np.array([0.]), mean=args.true_mean, precision=args.true_prec, rng=rng)
     args.theta_true = deepcopy(args.data_dist.theta)
 
     # make synthetic data
@@ -189,7 +190,6 @@ def make_vnce_loss_function(args):
 
     # make noise distribution and noise samples for vnce
     args.noise = MissingDataProductOfTruncNormNoise(mean=noise_mean, chol=noise_chol, rng=rng)
-    # args.noise = MissingDataUniformNoise(np.zeros(args.d), np.ones(args.d) * 100)
     args.Y = args.noise.sample(int(args.n * args.nu))
     args.noise_miss_mask = np.repeat(args.train_missing_data_mask, args.nu, axis=0)
     assert args.Y.shape == args.noise_miss_mask.shape, 'noise samples do not have the same shape as the missing data mask'
@@ -198,12 +198,13 @@ def make_vnce_loss_function(args):
     # todo: may need to initialise this scaling parameter more judiciously when d >> 0
     args.scale0 = np.array([0.])
     args.mean0 = np.zeros(args.d).astype(float)
-    args.chol0 = np.identity(args.d).astype(float)  # cholesky of precision
+    # args.chol0 = np.identity(args.d).astype(float)  # cholesky of precision
+    args.prec0 = np.identity(args.d).astype(float)  # cholesky of precision
     # args.mean0 = deepcopy(noise_mean)
     # args.chol0 = deepcopy(np.diag(noise_chol))  # cholesky of precision
     # args.mean0 = args.true_mean
     # args.chol0 = args.true_chol
-    model = MissingDataUnnormalisedTruncNorm(scaling_param=args.scale0, mean=args.mean0, chol=args.chol0, rng=rng)
+    model = MissingDataUnnormalisedTruncNorm(scaling_param=args.scale0, mean=args.mean0, precision=args.prec0, rng=rng)
     args.theta0 = deepcopy(model.theta)
 
     # create variational distribution, which uses a multi-layer neural network
@@ -216,6 +217,16 @@ def make_vnce_loss_function(args):
     nn = MultipleLayerModel(layers)
     var_dist = MissingDataProductOfTruncNormsPosterior(nn=nn, data_dim=args.d, rng=rng)
 
+    # initiliase L1 regulariser
+    args.l1_reg = L1Regulariser(args.reg_param)
+
+    # we only regularise the off-diagonal elements of the precision. It is slightly tricky to calculate the indices of these
+    # elements within theta (the model's parameters). This is because the precision matrix is symmetric, and hence theta
+    # only contains the lower triangular elements, which are flattened and concatened with the rest of the model's parameters.
+    lprecision_diag_inds = [sum(np.arange(args.d + 1)[:i]) - 1 for i in range(1, args.d + 2)][1:]
+    off_diag_inds = [i for i in range(max(lprecision_diag_inds)) if i not in lprecision_diag_inds]
+    args.reg_param_indices = 1 + args.d + np.array(off_diag_inds)
+
     # create loss function
     use_sgd = (args.opt_method == 'SGD')
     vnce_loss_function = MonteCarloVnceLoss(model=model,
@@ -226,6 +237,8 @@ def make_vnce_loss_function(args):
                                             variational_noise=var_dist,
                                             noise_to_data_ratio=args.nu,
                                             num_latent_per_data=args.nz,
+                                            regulariser=args.l1_reg,
+                                            reg_param_indices=args.reg_param_indices,
                                             use_neural_model=False,
                                             use_neural_variational_noise=True,
                                             train_missing_data_mask=args.train_missing_data_mask,
@@ -236,22 +249,6 @@ def make_vnce_loss_function(args):
                                             use_reparam_trick=True,
                                             separate_terms=args.separate_terms,
                                             rng=rng)
-    # vnce_loss_function = MonteCarloVnceLoss(model=model,
-    #                                         train_data=args.X_train,
-    #                                         val_data=args.X_val,
-    #                                         noise=args.noise,
-    #                                         noise_samples=args.Y,
-    #                                         variational_noise=var_dist,
-    #                                         noise_to_data_ratio=args.nu,
-    #                                         num_latent_per_data=args.nz,
-    #                                         use_neural_model=False,
-    #                                         use_neural_variational_noise=True,
-    #                                         use_minibatches=use_sgd,
-    #                                         batch_size=args.batch_size,
-    #                                         use_reparam_trick=True,
-    #                                         separate_terms=args.separate_terms,
-    #                                         drop_data_frac=args.frac_missing,
-    #                                         rng=rng)
     return vnce_loss_function
 
 
@@ -288,18 +285,13 @@ def train(args):
                             stop_threshold=args.stop_threshold,
                             max_num_em_steps=args.max_num_em_steps)
 
-    args.nce_model = UnnormalisedTruncNorm(args.scale0, args.mean0, args.chol0, rng=args.rng)
-    args.nce_optimiser = NCEOptimiser(model=args.nce_model, noise=args.noise, noise_samples=args.Y, nu=args.nu)
-    args.nce_optimiser.fit(X=args.X_train,
-                           theta0=args.theta0,
-                           opt_method=args.nce_opt_method,
-                           maxiter=args.maxiter_nce,
-                           learning_rate=args.nce_learn_rate,
-                           batch_size=args.nce_batch_size,
-                           num_epochs=args.nce_num_epochs)
-
-    args.nce_missing_model = UnnormalisedTruncNorm(args.scale0, args.mean0, args.chol0, rng=args.rng)
-    args.nce_missing_optimiser = NCEOptimiser(model=args.nce_missing_model, noise=args.noise, noise_samples=args.Y, nu=args.nu)
+    args.nce_missing_model = UnnormalisedTruncNorm(args.scale0, args.mean0, precision=args.prec0, rng=args.rng)
+    args.nce_missing_optimiser = NCEOptimiser(model=args.nce_missing_model,
+                                              noise=args.noise,
+                                              noise_samples=args.Y,
+                                              regulariser=args.l1_reg,
+                                              reg_param_indices=args.reg_param_indices,
+                                              nu=args.nu)
     args.nce_missing_optimiser.fit(X=args.X_train * (1 - args.train_missing_data_mask),
                                    theta0=args.theta0,
                                    opt_method=args.nce_opt_method,
@@ -308,8 +300,13 @@ def train(args):
                                    batch_size=args.nce_batch_size,
                                    num_epochs=args.nce_missing_num_epochs)
 
-    args.nce_missing_model_2 = UnnormalisedTruncNorm(args.scale0, args.mean0, args.chol0, rng=args.rng)
-    args.nce_missing_optimiser_2 = NCEOptimiser(model=args.nce_missing_model_2, noise=args.noise, noise_samples=args.Y, nu=args.nu)
+    args.nce_missing_model_2 = UnnormalisedTruncNorm(args.scale0, args.mean0, precision=args.prec0, rng=args.rng)
+    args.nce_missing_optimiser_2 = NCEOptimiser(model=args.nce_missing_model_2,
+                                                noise=args.noise,
+                                                noise_samples=args.Y,
+                                                regulariser=args.l1_reg,
+                                                reg_param_indices=args.reg_param_indices,
+                                                nu=args.nu)
     filled_in_mean_data = args.X_train * (1 - args.train_missing_data_mask) + args.Y * args.train_missing_data_mask
     args.nce_missing_optimiser_2.fit(X=filled_in_mean_data,
                                      theta0=args.theta0,
@@ -323,12 +320,10 @@ def train(args):
 def print_results(args):
     args.init_mse = get_mse(args, args.theta0[1:], 'Initial')
     args.vnce_mse = get_mse(args, args.vnce_loss.model.theta[1:], 'Missing Data VNCE')
-    args.nce_mse = get_mse(args, args.nce_model.theta[1:], 'NCE')
     args.nce_missing_mse = get_mse(args, args.nce_missing_model.theta[1:], 'filled-in zeros NCE')
     args.nce_missing_mse_2 = get_mse(args, args.nce_missing_model_2.theta[1:], 'filled-in means NCE')
 
     print('vnce final scaling parameter: {}'.format(args.vnce_loss.model.theta[0]))
-    print('nce final scaling parameter: {}'.format(args.nce_model.theta[0]))
     print('nce filled-in zeros final scaling parameter: {}'.format(args.nce_missing_model.theta[0]))
     print('nce filled-in means final scaling parameter: {}'.format(args.nce_missing_model_2.theta[0]))
 
@@ -349,13 +344,12 @@ def plot_and_save_results(save_dir, args):
     vnce_plot = plot_vnce_loss(vnce_times, vnce_train_losses, vnce_val_losses)
     save_fig(vnce_plot, save_dir, 'vnce_loss')
 
-    nce_plot, axs = plt.subplots(1, 3, figsize=(5.5, 5))
+    nce_plot, axs = plt.subplots(1, 2, figsize=(5.5, 5))
     axs = axs.ravel()
-    axs[0].plot(args.nce_optimiser.times, args.nce_optimiser.Js, c='b', label='NCE (train)')
-    axs[1].plot(args.nce_missing_optimiser.times, args.nce_missing_optimiser.Js, c='r', label='NCE filled-in zeros (train)')
-    axs[2].plot(args.nce_missing_optimiser_2.times, args.nce_missing_optimiser_2.Js, c='r', label='NCE filled-in means (train)')
+    axs[0].plot(args.nce_missing_optimiser.times, args.nce_missing_optimiser.Js, c='r', label='NCE filled-in zeros (train)')
+    axs[1].plot(args.nce_missing_optimiser_2.times, args.nce_missing_optimiser_2.Js, c='r', label='NCE filled-in means (train)')
     nce_plot.legend()
-    save_fig(nce_plot, save_dir, 'nce_loss')
+    save_fig(nce_plot, save_dir, 'nce_losses')
 
     with open(os.path.join(save_dir, "config.txt"), 'w') as f:
         for key, value in vars(args).items():
@@ -366,7 +360,6 @@ def plot_and_save_results(save_dir, args):
     pickle.dump(args.vnce_loss.model, open(os.path.join(save_dir, "vnce_model.p"), "wb"))
     pickle.dump(args.nce_missing_model, open(os.path.join(save_dir, "nce_filled_in_zeros_model.p"), "wb"))
     pickle.dump(args.nce_missing_model_2, open(os.path.join(save_dir, "nce_filled_in_mean_model.p"), "wb"))
-    pickle.dump(args.nce_model, open(os.path.join(save_dir, "nce_model.p"), "wb"))
     pickle.dump(args.vnce_loss.noise, open(os.path.join(save_dir, "noise.p"), "wb"))
     pickle.dump(args.vnce_loss.variational_noise, open(os.path.join(save_dir, "var_dist.p"), "wb"))
     pickle.dump(args.vnce_optimiser.thetas, open(os.path.join(save_dir, "vnce_thetas.p"), "wb"))
@@ -376,7 +369,6 @@ def plot_and_save_results(save_dir, args):
              theta0=args.theta0,
              theta_true=args.theta_true,
              vnce_mse=args.vnce_mse,
-             nce_mse=args.nce_mse,
              nce_missing_mse=args.nce_missing_mse,
              nce_missing_mse_2=args.nce_missing_mse_2)
     np.savez(os.path.join(save_dir, "data"),
@@ -386,6 +378,7 @@ def plot_and_save_results(save_dir, args):
              X_val_mask=args.vnce_loss.val_miss_mask,
              Y=args.vnce_loss.Y)
     np.savez(os.path.join(save_dir, "vnce_results"),
+             vnce_thetas=vnce_thetas,
              vnce_times=vnce_times,
              vnce_losses=vnce_losses,
              vnce_val_losses=vnce_val_losses,
@@ -393,18 +386,14 @@ def plot_and_save_results(save_dir, args):
              e_step_ids=e_step_ids,
              m_step_start_ids=m_step_start_ids,
              e_step_start_ids=e_step_start_ids)
-    np.savez(os.path.join(save_dir, "nce_results"),
-             nce_thetas=args.nce_optimiser.thetas,
-             nce_times=args.nce_optimiser.times,
-             nce_losses=args.nce_optimiser.Js)
     np.savez(os.path.join(save_dir, "nce_filled_in_zeros_results"),
-             nce_thetas=args.nce_missing_optimiser.thetas,
-             nce_times=args.nce_missing_optimiser.times,
-             nce_losses=args.nce_missing_optimiser.Js)
+             nce_zeros_thetas=args.nce_missing_optimiser.thetas,
+             nce_zeros_times=args.nce_missing_optimiser.times,
+             nce_zeros_losses=args.nce_missing_optimiser.Js)
     np.savez(os.path.join(save_dir, "nce_filled_in_means_results"),
-             nce_thetas=args.nce_missing_optimiser_2.thetas,
-             nce_times=args.nce_missing_optimiser_2.times,
-             nce_losses=args.nce_missing_optimiser_2.Js)
+             nce_noise_thetas=args.nce_missing_optimiser_2.thetas,
+             nce_noise_times=args.nce_missing_optimiser_2.times,
+             nce_noise_losses=args.nce_missing_optimiser_2.Js)
 
 
 def main(args, save_dir):

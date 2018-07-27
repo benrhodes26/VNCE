@@ -871,11 +871,14 @@ class MissingDataUniformNoise(Distribution):
         :return array of shape (n, )
             probability of each input datapoint
         """
-        V = self.get_missing_mask(U) * self.low  # fill in the missing vals with self.low (an arbitrary choice inside boundaries)
-        if log:
-            return np.log((1 / self.vol) * self.is_inside_boundaries(U+V))
-        else:
-            return (1 / self.vol) * self.is_inside_boundaries(U+V)
+        mask = self.get_missing_mask(U)
+        V = mask * self.low  # fill in the missing vals with self.low (an arbitrary choice inside boundaries)
+        in_boundaries = self.is_inside_boundaries(U+V)
+        log_vols = np.sum((1 - mask) * np.log((self.high - self.low)), axis=-1)
+        val = log_vols * in_boundaries - (15 * (1 - in_boundaries))
+        if not log:
+            val = np.exp(val)
+        return val
 
     def sample(self, num_noise_samples):
         """
@@ -897,3 +900,75 @@ class MissingDataUniformNoise(Distribution):
         miss_mask = np.zeros_like(U)
         miss_mask[np.where(U == 0)] = 1
         return miss_mask
+
+
+# noinspection PyPep8Naming,PyMissingConstructor
+class LearnedVariationalNoise(Distribution):
+    def __init__(self, var_dist, rng=None):
+        self.var_dist = var_dist
+        if not rng:
+            self.rng = np.random.RandomState(DEFAULT_SEED)
+        else:
+            self.rng = rng
+
+    def __call__(self, U, log=False):
+        """evaluate probability of data U
+
+        :param U: U: array (n, d)
+            n data points with dimension d
+        :return array of shape (n, )
+            probability of each input datapoint
+        """
+        d = U.shape[1]
+        vals = np.zeros((1, ) + U.shape)  # (n, d)
+        for i in range(d):
+            V = deepcopy(U)
+            V[:, i] = 0
+            Z = np.zeros_like(vals)
+            Z[0, :, i] = U[:, i]
+            vals[0, :, i] = self.var_dist(Z, V, log=True)
+
+        val = np.sum(vals, axis=-1)
+        if not log:
+            val = np.exp(val)
+        return val
+
+    # def __call__(self, U, log=False):
+    #     """evaluate probability of data U
+    #
+    #     :param U: U: array (n, d)
+    #         n data points with dimension d
+    #     :return array of shape (n, )
+    #         probability of each input datapoint
+    #     """
+    #     d = U.shape[1]
+    #     vals = np.zeros((1,) + U.shape)  # (n, d)
+    #     V = deepcopy(U)
+    #     Z = np.zeros_like(vals)
+    #
+    #     for i in range(d):
+    #         V[:, i] = 0
+    #         Z[0, :, i] = U[:, i]
+    #         vals[0, :, i] = self.var_dist(Z, V, log=True)
+    #
+    #     val = np.sum(vals)
+    #     if not log:
+    #         val = np.exp(val)
+    #     return val
+
+    def sample(self, U, num_gibbs_steps):
+        """
+
+        :return: array (num_noise_samples, d)
+        """
+        V = deepcopy(U)
+        miss_mask = np.zeros_like(U)
+        for _ in range(num_gibbs_steps):
+            for i in range(U.shape[1]):
+                miss_mask *= 0
+                miss_mask[:, i] = 1
+                W = V * (1 - miss_mask)
+                Z = self.var_dist.sample(nz=1, U=W, miss_mask=miss_mask)
+                V = Z[0, :, :] + W
+
+        return V
