@@ -11,6 +11,7 @@ for code_dir in code_dirs:
 
 import numpy as np
 import pickle
+import seaborn as sns
 
 from distribution import RBMLatentPosterior, MultivariateBernoulliNoise, ChowLiuTree
 from fully_observed_models import VisibleRestrictedBoltzmannMachine
@@ -34,10 +35,10 @@ rc('ytick', labelsize=10)
 
 parser = ArgumentParser(description='plot relationship between fraction of training data missing and final mean-squared error for'
                                     'a truncated normal model trained with VNCE', formatter_class=ArgumentDefaultsHelpFormatter)
-parser.add_argument('--save_dir', type=str, default='~/masters-project/ben-rhodes-masters-project/proposal/experiments/trunc-norm/')
-parser.add_argument('--exp_name', type=str, default='5d/', help='name of set of experiments this one belongs to')
-# parser.add_argument('--load_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm/')
-parser.add_argument('--load_dir', type=str, default='~/masters-project/ben-rhodes-masters-project/experimental-results/trunc-norm/')
+parser.add_argument('--save_dir', type=str, default='~/masters-project-non-code/experiments/trunc-norm/')
+parser.add_argument('--exp_name', type=str, default='5d/reg0.01', help='name of set of experiments this one belongs to')
+parser.add_argument('--load_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm/')
+# parser.add_argument('--load_dir', type=str, default='~/masters-project/ben-rhodes-masters-project/experimental-results/trunc-norm/')
 
 args = parser.parse_args()
 load_dir = os.path.join(args.load_dir, args.exp_name)
@@ -48,7 +49,7 @@ if not os.path.exists(save_dir):
     os.makedirs(save_dir)
 
 frac_to_mse_dict = {}
-nce_mse = None
+frac_to_rel_mse_dict = {}
 # loop through files and get mses of vnce and nce with 0s
 for i, file in enumerate(os.listdir(load_dir)):
     exp = os.path.join(load_dir, file)
@@ -57,23 +58,37 @@ for i, file in enumerate(os.listdir(load_dir)):
 
     loaded = np.load(os.path.join(exp, 'theta0_and_theta_true.npz'))
     vnce_mse = loaded['vnce_mse']
-    nce_missing_mse = loaded['nce_missing_mse']  # missing data filled-in with zeros
-    nce_missing_mse_2 = loaded['nce_missing_mse_2']  # missing data filled-in with zeros
+    nce_missing_mse = loaded['nce_missing_mse']  # missing data filled-in with means
+    nce_missing_mse_2 = loaded['nce_missing_mse_2']  # missing data filled-in with noise
     frac_to_mse_dict[str(frac)] = [vnce_mse, nce_missing_mse, nce_missing_mse_2]
-    if file == 'frac0':
-        nce_mse = loaded['nce_mse']
+    frac_to_rel_mse_dict[str(frac)] = [1, nce_missing_mse / vnce_mse, nce_missing_mse_2 / vnce_mse]
 
 fracs = sorted([float(key) for key in frac_to_mse_dict.keys()])
 vnce_mses = [frac_to_mse_dict[str(frac)][0] for frac in fracs]
 nce_missing_mses = [frac_to_mse_dict[str(frac)][1] for frac in fracs]
 nce_missing_mses_2 = [frac_to_mse_dict[str(frac)][2] for frac in fracs]
 
+rel_vnce_mses = [frac_to_rel_mse_dict[str(frac)][0] for frac in fracs]
+rel_nce_missing_mses = [frac_to_rel_mse_dict[str(frac)][1] for frac in fracs]
+rel_nce_missing_mses_2 = [frac_to_rel_mse_dict[str(frac)][2] for frac in fracs]
+
+sns.set_style("darkgrid")
 fig, ax = plt.subplots(1, 1, figsize=(5, 4))
 ax.plot(np.array(fracs), np.array(vnce_mses), label='VNCE')
-ax.plot(np.array(fracs), np.array(nce_missing_mses), label='NCE (zeros fill in)')
+ax.plot(np.array(fracs), np.array(nce_missing_mses), label='NCE (means fill in)')
 ax.plot(np.array(fracs), np.array(nce_missing_mses_2), label='NCE (noise fill in)')
-ax.plot((0, 1), (0.99782, 0.99782), label='Initial params')
+ax.plot((0, 1), (loaded['init_mse'], loaded['init_mse']), label='Initial params')
 ax.set_xlabel('fraction of data missing')
 ax.set_ylabel('MSE')
 ax.legend(loc='best')
 save_fig(fig, save_dir, 'fraction_missing_vs_mse')
+
+# ax = axs[1]
+# ax.plot(np.array(fracs), np.array(rel_vnce_mses), label='VNCE')
+# ax.plot(np.array(fracs), np.array(rel_nce_missing_mses), label='NCE (means fill in)')
+# ax.plot(np.array(fracs), np.array(rel_nce_missing_mses_2), label='NCE (noise fill in)')
+# ax.plot((0, 1), (loaded['init_mse'], loaded['init_mse']), label='Initial params')
+# ax.set_xlabel('fraction of data missing')
+# ax.set_ylabel('relative MSE')
+# ax.legend(loc='best')
+
