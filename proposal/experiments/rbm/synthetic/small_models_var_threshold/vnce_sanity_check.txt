@@ -1,6 +1,0 @@
-file: no_var. Percentage of iters for which J1 increases: 92.5%
-          Percentage of iters for which J increases: 64.75%
-          Percentage of iters for which J1 is less than J: 11.24%
-file: var=blah. Percentage of iters for which J1 increases: 100%
-          Percentage of iters for which J increases: 56.52%
-          Percentage of iters for which J1 is less than J: 87.5%

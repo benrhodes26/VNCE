@@ -1,9 +1,0 @@
-file: 10-nu=5. Percentage of iters for which J1 increases: 91.73%
-          Percentage of iters for which J increases: 61.83%
-          Percentage of iters for which J1 is less than J: 4.133%
-file: 10-nu=5. Percentage of iters for which J1 increases: 91.73%
-          Percentage of iters for which J increases: 61.83%
-          Percentage of iters for which J1 is less than J: 4.133%
-file: 10-nu=5. Percentage of iters for which J1 increases: 91.73%
-          Percentage of iters for which J increases: 61.83%
-          Percentage of iters for which J1 is less than J: 4.133%

@@ -1,9 +1,0 @@
-file: maxiter-10. Percentage of iters for which J1 increases: 91.77%
-          Percentage of iters for which J increases: 63.93%
-          Percentage of iters for which J1 is less than J: 5.332%
-file: sgd-lr=0.1. Percentage of iters for which J1 increases: 50.06%
-          Percentage of iters for which J increases: 50.86%
-          Percentage of iters for which J1 is less than J: 40.03%
-file: sgd-lr=0.3. Percentage of iters for which J1 increases: 50.04%
-          Percentage of iters for which J increases: 50.1%
-          Percentage of iters for which J1 is less than J: 30.44%

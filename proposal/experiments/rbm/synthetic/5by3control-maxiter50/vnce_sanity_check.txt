@@ -1,9 +1,0 @@
-file: maxiter-50-control. Percentage of iters for which J1 increases: 93.04%
-          Percentage of iters for which J increases: 70%
-          Percentage of iters for which J1 is less than J: 30.74%
-file: maxiter-50. Percentage of iters for which J1 increases: 98.37%
-          Percentage of iters for which J increases: 55%
-          Percentage of iters for which J1 is less than J: 10.95%
-file: 50-noIS. Percentage of iters for which J1 increases: 97.42%
-          Percentage of iters for which J increases: 57.92%
-          Percentage of iters for which J1 is less than J: 21.41%
