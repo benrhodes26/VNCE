@@ -40,8 +40,8 @@ parser = ArgumentParser(description='plot relationship between fraction of train
                                     'a truncated normal model trained with VNCE', formatter_class=ArgumentDefaultsHelpFormatter)
 parser.add_argument('--save_dir', type=str, default='~/masters-project-non-code/experiments/trunc-norm/')
 parser.add_argument('--load_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm/')
-# parser.add_argument('--load_dir', type=str, default='~/masters-project/ben-rhodes-masters-project/experimental-results/trunc-norm/')
-parser.add_argument('--exp_name', type=str, default='5d/reg0.01/', help='name of set of experiments this one belongs to')
+# parser.add_argument('--load_dir', type=str, default='~/masters-project-non-code/experimental-results/trunc-norm/')
+parser.add_argument('--exp_name', type=str, default='10d/cross-val/best', help='name of set of experiments this one belongs to')
 
 args = parser.parse_args()
 load_dir = os.path.join(args.load_dir, args.exp_name)
@@ -52,6 +52,7 @@ if not os.path.exists(save_dir):
     os.makedirs(save_dir)
 
 plt.switch_backend('cairo')
+
 
 def get_lower_diag_matrix(d, theta):
     precision = np.zeros((d, d))
@@ -103,7 +104,7 @@ def plot_roc_curve(ax, true_theta, est_theta, d, method):
 for i, file in enumerate(os.listdir(load_dir)):
     load = os.path.join(load_dir, file)
     config = pickle.load(open(os.path.join(load, 'config.p'), 'rb'))
-    reg_param = config.reg_param
+    # reg_param = config.reg_param
     frac = config.frac_missing
     d = config.d
 
@@ -112,7 +113,7 @@ for i, file in enumerate(os.listdir(load_dir)):
     globals().update(np.load(os.path.join(load, 'nce_filled_in_means_results.npz')))
     globals().update(np.load(os.path.join(load, 'nce_filled_in_noise_results.npz')))
 
-    print('reg param: {} \n frac missing: {}'.format(reg_param, frac))
+    # print('reg param: {} \n frac missing: {}'.format(reg_param, frac))
     print('vnce mse: {}'.format(vnce_mse))
     print('nce (zeros) mse: {}'.format(nce_missing_mse))
     print('nce (noise) mse: {}'.format(nce_missing_mse_2))

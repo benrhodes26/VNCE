@@ -36,9 +36,9 @@ rc('ytick', labelsize=10)
 parser = ArgumentParser(description='plot relationship between fraction of training data missing and final mean-squared error for'
                                     'a truncated normal model trained with VNCE', formatter_class=ArgumentDefaultsHelpFormatter)
 parser.add_argument('--save_dir', type=str, default='~/masters-project-non-code/experiments/trunc-norm/')
-parser.add_argument('--exp_name', type=str, default='5d/reg0.01', help='name of set of experiments this one belongs to')
+parser.add_argument('--exp_name', type=str, default='10d/cross-val/best', help='name of set of experiments this one belongs to')
 parser.add_argument('--load_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm/')
-# parser.add_argument('--load_dir', type=str, default='~/masters-project/ben-rhodes-masters-project/experimental-results/trunc-norm/')
+# parser.add_argument('--load_dir', type=str, default='~/masters-project-non-code/experimental-results/trunc-norm/')
 
 args = parser.parse_args()
 load_dir = os.path.join(args.load_dir, args.exp_name)
@@ -54,12 +54,15 @@ frac_to_rel_mse_dict = {}
 for i, file in enumerate(os.listdir(load_dir)):
     exp = os.path.join(load_dir, file)
     config = pickle.load(open(os.path.join(exp, 'config.p'), 'rb'))
-    frac = config.frac_missing
+    frac = float(config.frac_missing)
 
     loaded = np.load(os.path.join(exp, 'theta0_and_theta_true.npz'))
-    vnce_mse = loaded['vnce_mse']
-    nce_missing_mse = loaded['nce_missing_mse']  # missing data filled-in with means
-    nce_missing_mse_2 = loaded['nce_missing_mse_2']  # missing data filled-in with noise
+    loaded1 = np.load(os.path.join(exp, 'vnce_results.npz'))
+    loaded2 = np.load(os.path.join(exp, 'nce_filled_in_means_results.npz'))
+    loaded3 = np.load(os.path.join(exp, 'nce_filled_in_noise_results.npz'))
+    vnce_mse = loaded1['vnce_mse']
+    nce_missing_mse = loaded2['nce_missing_mse']  # missing data filled-in with means
+    nce_missing_mse_2 = loaded3['nce_missing_mse_2']  # missing data filled-in with noise
     frac_to_mse_dict[str(frac)] = [vnce_mse, nce_missing_mse, nce_missing_mse_2]
     frac_to_rel_mse_dict[str(frac)] = [1, nce_missing_mse / vnce_mse, nce_missing_mse_2 / vnce_mse]
 

@@ -86,7 +86,7 @@ class NCEOptimiser:
         else:
             val = np.array([first_term, second_term])
 
-        # val = val if self.separate_terms else np.sum(val)
+        val = val if separate_terms else np.sum(val)
 
         return val
 
@@ -138,7 +138,8 @@ class NCEOptimiser:
             X,
             theta0=np.array([0.5]),
             opt_method='L-BFGS-B',
-            disp=True, ftol=1e-9,
+            disp=True,
+            ftol=1e-9,
             maxiter=100,
             learning_rate=0.3,
             batch_size=100,

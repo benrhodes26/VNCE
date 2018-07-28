@@ -429,7 +429,6 @@ class MonteCarloVnceLoss:
             self.train_data = deepcopy(train_data * (1 - self.train_miss_mask))
             self.val_data = deepcopy(val_data * (1 - self.val_miss_mask))
             self.noise_samples = deepcopy(noise_samples * (1 - self.noise_miss_mask))
-            self.val_noise_samples = deepcopy(val_noise_samples * (1 - self.val_noise_miss_mask))
         else:
             self.train_data = deepcopy(train_data)
             self.val_data = deepcopy(val_data)
