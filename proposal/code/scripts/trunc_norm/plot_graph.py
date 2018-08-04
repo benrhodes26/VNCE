@@ -41,7 +41,7 @@ parser = ArgumentParser(description='plot relationship between fraction of train
 parser.add_argument('--save_dir', type=str, default='~/masters-project-non-code/experiments/trunc-norm/')
 parser.add_argument('--load_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm/')
 # parser.add_argument('--load_dir', type=str, default='~/masters-project-non-code/experimental-results/trunc-norm/')
-parser.add_argument('--exp_name', type=str, default='10d/cross-val/best', help='name of set of experiments this one belongs to')
+parser.add_argument('--exp_name', type=str, default='4d/cross-val/best', help='name of set of experiments this one belongs to')
 
 args = parser.parse_args()
 load_dir = os.path.join(args.load_dir, args.exp_name)
@@ -61,6 +61,13 @@ def get_lower_diag_matrix(d, theta):
     precision[np.diag_indices(d)] = 0
     return precision
 
+def convert_weights(weights):
+    min = weights.min()
+    max = weights.max()
+    weights = (weights - min / (max - min))**5
+    weights *= (max - min)
+    weights += min
+    return weights
 
 # noinspection PyPep8Naming
 def plot_graph(ax, theta, d):
@@ -68,15 +75,20 @@ def plot_graph(ax, theta, d):
 
     # to calculate edges, get indices of the d largest vals in the lower triangle of the precision matrix
     p_flat = precision[np.tril_indices(d, -1)]
-    p_flat.sort()
-    dth_largest = p_flat[-d]
-    precision[np.triu_indices(d)] = p_flat[0]  # hack to help us calculate edges easiliy
-    edges = np.where(precision >= dth_largest)
+    # p_flat.sort()
+    # dth_largest = p_flat[-d]
+    # precision[np.triu_indices(d)] = p_flat[0]  # hack to help us calculate edges easiliy
+    # edges = np.where(precision >= dth_largest)
+
+    # p_flat = np.abs(p_flat / np.max(p_flat))
+    p_flat = convert_weights(np.abs(p_flat))
+    edges = np.tril_indices(d, -1)
 
     G = gt.Graph(directed=False)
-    for v1, v2 in zip(edges[0], edges[1]):
-        G.add_edge(v1, v2)
-    graph_draw(G, vertex_text=G.vertex_index, mplfig=ax)
+    G.add_edge_list([(v1, v2) for v1, v2 in zip(edges[0], edges[1])])
+
+    # G.add_edge(v1, v2)
+    graph_draw(G, vertex_text=G.vertex_index, pen_width=p_flat, mplfig=ax)
 
 
 def plot_roc_curve(ax, true_theta, est_theta, d, method):
@@ -97,15 +109,29 @@ def plot_roc_curve(ax, true_theta, est_theta, d, method):
     scores = scores / np.sum(scores)
     fpr, tpr, thresholds = roc_curve(true_labels, scores, drop_intermediate=False)
     roc_auc = auc(fpr, tpr)
-    ax.plot(fpr, tpr, label='{} (AUC={})'.format(method, roc_auc))
+    ax.plot(fpr, tpr, label='{} (AUC={:.2f})'.format(method, roc_auc))
+
+    return roc_auc
 
 
 # loop through files, and plot graphs
-for i, file in enumerate(os.listdir(load_dir)):
+vnce_aucs = {}
+nce_means_aucs = {}
+nce_noise_aucs = {}
+
+sns.set_style("darkgrid")
+graph_fig, graph_axs = plt.subplots(10, 3, figsize=(5.7, 19))
+roc_fig, roc_axs = plt.subplots(5, 2, figsize=(5.7, 14.25))
+roc_axs = roc_axs.ravel()
+
+sorted_fracs = sorted([float(f[4:]) for f in os.listdir(load_dir)])
+sorted_dirs = ['frac' + str(frac) for frac in sorted_fracs]
+
+for i, file in enumerate(sorted_dirs):
     load = os.path.join(load_dir, file)
     config = pickle.load(open(os.path.join(load, 'config.p'), 'rb'))
     # reg_param = config.reg_param
-    frac = config.frac_missing
+    frac = float(config.frac_missing)
     d = config.d
 
     globals().update(np.load(os.path.join(load, 'theta0_and_theta_true.npz')))
@@ -122,9 +148,7 @@ for i, file in enumerate(os.listdir(load_dir)):
     nce_means_theta = nce_means_thetas[-1]
     nce_noise_theta = nce_noise_thetas[-1]
 
-    sns.set_style("darkgrid")
-    fig, axs = plt.subplots(1, 3, figsize=(5.5, 2))
-    axs = axs.ravel()
+    axs = graph_axs[i]
     plot_graph(axs[0], vnce_theta, d)
     plot_graph(axs[1], nce_means_theta, d)
     plot_graph(axs[2], nce_noise_theta, d)
@@ -132,19 +156,44 @@ for i, file in enumerate(os.listdir(load_dir)):
     for j, ax in enumerate(axs):
         ax.set_title(titles[j])
         ax.axis('off')
-    save_fig(fig, save_dir, 'fraction_missing:{}'.format(frac))
 
-    fig, ax = plt.subplots(1, 1, figsize=(5.5, 4))
-    plot_roc_curve(ax, theta_true, vnce_theta, d, 'VNCE')
-    plot_roc_curve(ax, theta_true, nce_means_theta, d, 'NCE (means)')
-    plot_roc_curve(ax, theta_true, nce_noise_theta, d, 'NCE (noise)')
+    ax = roc_axs[i]
+    vnce_aucs[str(frac)] = plot_roc_curve(ax, theta_true, vnce_theta, d, 'VNCE')
+    nce_means_aucs[str(frac)] = plot_roc_curve(ax, theta_true, nce_means_theta, d, 'NCE (means)')
+    nce_noise_aucs[str(frac)] = plot_roc_curve(ax, theta_true, nce_noise_theta, d, 'NCE (noise)')
     ax.set_xlabel('False Positive Rate')
     ax.set_ylabel('True Positive Rate')
-    ax.set_title('Receiver operating characteristic curve')
+    ax.set_title('ROC curve: {} missing'.format(frac))
     ax.legend(loc='best')
-    save_fig(fig, save_dir, 'roc_curve_frac_miss:{}'.format(frac))
 
     # print('true_theta:', format(theta_true[config.reg_param_indices]))
-    print('vnce\n', vnce_theta[config.reg_param_indices])
-    print('nce (means)\n', nce_means_theta[config.reg_param_indices])
-    print('nce (noise)\n', nce_noise_theta[config.reg_param_indices])
+    print("--------------{}------------------".format(frac))
+    #print('vnce\n', vnce_theta[config.reg_param_indices])
+    print('vnce\n', vnce_theta[d + 1:])
+    #print(vnce_theta[:d + 1])
+    #print('nce (means)\n', nce_means_theta[config.reg_param_indices])
+    print('nce (means)\n', nce_means_theta[d + 1:])
+    # print(nce_means_theta[:d + 1])
+    # print('nce (noise)\n', nce_noise_theta[config.reg_param_indices])
+    print('nce (noise)\n', nce_noise_theta[d + 1:])
+#     print(nce_noise_theta[:d + 1])
+
+save_fig(graph_fig, save_dir, 'undirected_graphs')
+roc_fig.tight_layout()
+save_fig(roc_fig, save_dir, 'roc_curves')
+
+# Plot AUC for each fraction missing
+fracs = np.arange(10) / 10
+vnce_sorted_aucs = np.array([vnce_aucs[str(frac)] for frac in fracs])
+nce_means_sorted_aucs = np.array([nce_means_aucs[str(frac)] for frac in fracs])
+nce_noise_sorted_aucs = np.array([nce_noise_aucs[str(frac)] for frac in fracs])
+
+aucs_fig, ax = plt.subplots(1, 1, figsize=(5.7, 5.7))
+ax.plot(fracs, vnce_sorted_aucs, label='VNCE')
+ax.plot(fracs, nce_means_sorted_aucs, label='NCE (means)')
+ax.plot(fracs, nce_noise_sorted_aucs, label='NCE (noise)')
+
+ax.set_xlabel('fraction missing')
+ax.set_ylabel('AUC')
+ax.legend(loc='best')
+save_fig(aucs_fig, save_dir, 'auc_curves')

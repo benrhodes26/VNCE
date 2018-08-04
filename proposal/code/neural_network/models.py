@@ -118,6 +118,7 @@ class MultipleLayerModel(object):
                     activations[i], stochastic=stochastic))
             else:
                 activations.append(self.layers[i].fprop(activations[i]))
+
         return activations
 
     def grads_wrt_params(self, activations, grads_wrt_outputs):
