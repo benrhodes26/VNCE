@@ -230,7 +230,7 @@ class LatentMixtureOfTwoUnnormalisedGaussians(LatentVarModel):
         self.sigma1 = sigma1
         super().__init__(theta, rng=rng)
 
-    def __call__(self, U, Z):
+    def __call__(self, U, Z, log=False):
         """ Evaluate model for each data point U[i, :]
 
         :param U: array (n, 1)
@@ -244,7 +244,12 @@ class LatentMixtureOfTwoUnnormalisedGaussians(LatentVarModel):
         first_term = (Z == 0)*self.marginal_z_0(U)  # (nz, n)
         second_term = (Z == 1)*self.marginal_z_1(U)  # (nz, n)
 
-        return first_term + second_term
+        if log:
+            val = np.log(first_term + second_term)
+        else:
+            val = first_term + second_term
+
+        return val
 
     def marginal_z_0(self, U):
         """ Return value of model for z=0
@@ -383,7 +388,7 @@ class LatentMixtureOfTwoUnnormalisedGaussians2(LatentVarModel):
         self.sigma1 = sigma1
         super().__init__(theta, rng=rng)
 
-    def __call__(self, U, Z):
+    def __call__(self, U, Z, log=False):
         """ Evaluate model for each data point U[i, :]
 
         :param U: array (n, 1)
@@ -397,7 +402,12 @@ class LatentMixtureOfTwoUnnormalisedGaussians2(LatentVarModel):
         first_term = (Z == 0)*self.marginal_z_0(U)  # (nz, n)
         second_term = (Z == 1)*self.marginal_z_1(U)  # (nz, n)
 
-        return first_term + second_term
+        if log:
+            val = np.log(first_term + second_term)
+        else:
+            val = first_term + second_term
+
+        return val
 
     def marginal_z_0(self, U):
         """ Return value of model for z=0
@@ -1235,7 +1245,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         theta = np.concatenate((scaling_param, mean.reshape(-1), lower_prec.reshape(-1)))
         super().__init__(theta, rng=rng)
 
-    def __call__(self, U, Z, log=False):
+    def __call__(self, U, Z, miss_mask, log=False):
         """Evaluate unnormalised model
 
         :param U: array (n, k)
@@ -1245,7 +1255,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         :param log: boolean
             if True, return value of logphi, where phi is the unnormalised model
         """
-        V = U + Z  # (nz, n, k) - fill in the missing data
+        V = (1 - miss_mask) * U + (miss_mask * Z)  # (nz, n, k) - fill in the missing data
         scaling_param = deepcopy(self.theta[0])
         mean, precision, _, _ = self.get_mean_and_lprecision()
         truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)
@@ -1264,7 +1274,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
 
         return val  # (nz, n)
 
-    def grad_log_wrt_params(self, U, Z):
+    def grad_log_wrt_params(self, U, Z, miss_mask):
         """ Nabla_theta(log(phi(x,z; theta))) where phi is the unnormalised model
 
         :param U: array (n, d)
@@ -1273,7 +1283,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
             m-dimensional latent variable samples. nz per datapoint in U.
         :return grad: array (len(theta), nz, n)
         """
-        V = U + Z  # (nz, n, d) - fill in the missing data
+        V = (1 - miss_mask) * U + (miss_mask * Z)  # (nz, n, k) - fill in the missing data
         truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)
 
         mean, precision, lprecision, precision_diag = self.get_mean_and_lprecision()
@@ -1305,7 +1315,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
 
         return grad
 
-    def grad_log_wrt_nn_outputs(self, U, Z, grad_z_wrt_nn_outputs):
+    def grad_log_wrt_nn_outputs(self, U, Z, grad_z_wrt_nn_outputs, miss_mask):
         """ Evaluate gradient of log model w.r.t the output of the variational inference network
 
         Note that the model depends on the variational parameters because we are using
@@ -1319,7 +1329,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         :return grad: array (len(nn_outputs), nz, n)
         """
         mean, precision, _, _ = self.get_mean_and_lprecision()
-        V = U + Z  # (nz, n, k) - fill in the missing data
+        V = (1 - miss_mask) * U + (miss_mask * Z)  # (nz, n, k) - fill in the missing data
         miss_mask = np.zeros_like(Z)
         miss_mask[np.nonzero(Z)] = 1
         truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)

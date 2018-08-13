@@ -151,7 +151,7 @@ class VemOptimiser:
     def plot_loss_curve(self, optimal_loss=None, separate_terms=False):
         """plot of objective function during optimisation"""
         fig, ax = plt.subplots(1, 1, figsize=(10, 7))
-        _, _, losses, times, val_losses, val_times = self.get_flattened_result_arrays()
+        _, _, losses, times = self.get_flattened_result_arrays()
         _, _, m_start_ids, e_start_ids = self.get_m_and_e_step_ids()
 
         # plot optimisation curve
@@ -383,6 +383,8 @@ class MonteCarloVnceLoss:
                  train_missing_data_mask=None,
                  val_missing_data_mask=None,
                  noise_miss_mask=None,
+                 X_means=None,
+                 Y_means=None,
                  use_minibatches=False,
                  batch_size=None,
                  use_reparam_trick=False,
@@ -425,10 +427,14 @@ class MonteCarloVnceLoss:
         self.train_miss_mask = train_missing_data_mask
         self.val_miss_mask = val_missing_data_mask
         self.noise_miss_mask = noise_miss_mask
+        self.X_means = X_means
+        self.Y_means = Y_means
         if self.train_miss_mask is not None:
-            self.train_data = deepcopy(train_data * (1 - self.train_miss_mask))
+            print('global data mask: {}\n'.format(self.train_miss_mask))
+            self.train_data = deepcopy(train_data * (1 - self.train_miss_mask) + self.X_means * self.train_miss_mask)
             self.val_data = deepcopy(val_data * (1 - self.val_miss_mask))
-            self.noise_samples = deepcopy(noise_samples * (1 - self.noise_miss_mask))
+            # self.noise_samples = deepcopy(noise_samples * (1 - self.noise_miss_mask) + self.Y_means * self.noise_miss_mask)
+            self.noise_samples = deepcopy(noise_samples)
         else:
             self.train_data = deepcopy(train_data)
             self.val_data = deepcopy(val_data)
@@ -440,6 +446,8 @@ class MonteCarloVnceLoss:
         if not self.use_minibatches:
             self.X = deepcopy(self.train_data)
             self.Y = deepcopy(self.noise_samples)
+        self.cur_X_mask = None
+        self.cur_Y_mask = None
 
         self.batch_size = batch_size
         if batch_size:
@@ -452,6 +460,7 @@ class MonteCarloVnceLoss:
         self.ZY = None
         self.resample_from_variational_noise = True
         self.current_loss = None
+        self.val_mode = False
         if rng:
             self.rng = rng
         else:
@@ -543,7 +552,7 @@ class MonteCarloVnceLoss:
         nu = self.nu
 
         # use a numerically stable implementation of the cross-entropy sigmoid
-        h_x = self.h(self.X, self.ZX)
+        h_x = self.h(self.X, self.ZX, self.cur_X_mask)
         exp1 = np.exp(h_x, out=np.zeros_like(h_x), where=h_x <= 0)
         exp2 = np.exp(-h_x, out=np.zeros_like(h_x), where=h_x > 0)
         a = (h_x > 0) * np.log(1 + nu * exp2)
@@ -559,7 +568,7 @@ class MonteCarloVnceLoss:
         if self.use_importance_sampling:
             # We could use the same cross-entropy sigmoid trick as we do in the first term of loss, BEFORE using importance sampling.
             # Currently not doing this - not sure if it is better.
-            h_y = self.h(self.Y, self.ZY)
+            h_y = self.h(self.Y, self.ZY, self.cur_Y_mask)
             expectation = np.mean(np.exp(h_y), axis=0)
             c = (1 / nu) * expectation  # (n*nu, )
             second_term = -nu * np.mean(np.log(1 + c))
@@ -574,7 +583,7 @@ class MonteCarloVnceLoss:
         validate_shape(c.shape, (len(self.Y), ))
         return second_term
 
-    def h(self, U, Z):
+    def h(self, U, Z, mask=None):
         """Compute the ratio: model / (noise*q).
 
         :param U: array of shape (?, d)
@@ -587,9 +596,9 @@ class MonteCarloVnceLoss:
         if len(Z.shape) == 2:
             Z = Z.reshape((1, ) + Z.shape)
 
-        log_model = self.model(U, Z, log=True)
+        log_model = self.model(U, Z, mask, log=True)
         log_q = self.variational_noise(Z, U, log=True)
-        log_noise = self.noise(U, log=True)
+        log_noise = self.noise(U, Z, log=True)
         val = log_model - log_q - log_noise
         validate_shape(val.shape, (Z.shape[0], Z.shape[1]))
 
@@ -608,24 +617,24 @@ class MonteCarloVnceLoss:
         return val
 
     def first_term_of_grad_wrt_theta(self):
-        h_x = self.h(self.X, self.ZX)
+        h_x = self.h(self.X, self.ZX, self.cur_X_mask)
         exp1 = np.exp(h_x, out=np.zeros_like(h_x), where=h_x <= 0)
         exp2 = np.exp(-h_x, out=np.zeros_like(h_x), where=h_x > 0)
         a0 = (h_x <= 0) * (1 / (1 + ((1 / self.nu) * exp1)))
         a1 = (h_x > 0) * (exp2 / ((1 / self.nu) + exp2))
         a = a0 + a1  # (nz, n)
 
-        gradX = self.model.grad_log_wrt_params(self.X, self.ZX)  # (len(theta), nz, n)
+        gradX = self.model.grad_log_wrt_params(self.X, self.ZX, self.cur_X_mask)  # (len(theta), nz, n)
         first_term = np.mean(gradX * a, axis=(1, 2))  # (len(theta), )
 
         return first_term
 
     def second_term_grad_wrt_theta(self):
         if self.use_importance_sampling:
-            gradY = self.model.grad_log_wrt_params(self.Y, self.ZY)  # (len(theta), nz, n)
-            r = np.exp(self.h(self.Y, self.ZY))  # (nz, n)
+            gradY = self.model.grad_log_wrt_params(self.Y, self.ZY, self.cur_Y_mask)  # (len(theta), nz, n)
+            r = np.exp(self.h(self.Y, self.ZY, self.cur_Y_mask))  # (nz, n)
             E_ZY = np.mean(gradY * r, axis=1)  # (len(theta), n)
-            one_over_psi = 1/self._psi(self.Y, self.ZY)  # (n, )
+            one_over_psi = 1/self._psi(self.Y, self.ZY, self.cur_Y_mask)  # (n, )
             second_term = - np.mean(E_ZY * one_over_psi, axis=1)  # (len(theta), )
         else:
             gradY = self.model.grad_log_visible_marginal_wrt_params(self.Y)  # (len(theta), nz, n)
@@ -635,9 +644,9 @@ class MonteCarloVnceLoss:
 
         return second_term
 
-    def _psi(self, U, Z):
+    def _psi(self, U, Z, mask=None):
         """Return array (n, )"""
-        return 1 + ((1/self.nu) * np.mean(np.exp(self.h(U, Z)), axis=0))
+        return 1 + ((1/self.nu) * np.mean(np.exp(self.h(U, Z, mask)), axis=0))
 
     def reparam_trick_grad_wrt_nn_output(self, nn_outputs, separate_terms=False):
         """ grad of VNCE loss w.r.t to variational parameters (belonging to a neural network)
@@ -649,12 +658,12 @@ class MonteCarloVnceLoss:
         """
         X, Z = self.X, self.ZX
         grad_z_wrt_nn_outputs = self.variational_noise.grad_of_Z_wrt_nn_outputs(nn_outputs=nn_outputs, E=self.E_ZX)
-        grad_log_model = self.model.grad_log_wrt_nn_outputs(U=X, Z=Z, grad_z_wrt_nn_outputs=grad_z_wrt_nn_outputs)  # (out_dim, nz, n)
+        grad_log_model = self.model.grad_log_wrt_nn_outputs(U=X, Z=Z, grad_z_wrt_nn_outputs=grad_z_wrt_nn_outputs, miss_mask=self.cur_X_mask)  # (out_dim, nz, n)
         grad_log_var_dist = self.variational_noise.grad_log_wrt_nn_outputs(nn_outputs=nn_outputs,
                                                                            grad_z_wrt_nn_outputs=grad_z_wrt_nn_outputs, Z=Z)  # (out_dim, nz, n)
 
-        joint_noise = (self.nu * self.noise(X) * self.variational_noise(Z, X))
-        a = joint_noise / (self.model(X, Z) + joint_noise)  # (nz, n)
+        joint_noise = (self.nu * self.noise(X, Z) * self.variational_noise(Z, X))
+        a = joint_noise / (self.model(X, Z, self.cur_X_mask) + joint_noise)  # (nz, n)
 
         term1 = np.mean(a * grad_log_model, axis=1).T  # (n, output_dim)
         term2 = np.mean(a * grad_log_var_dist, axis=1).T  # (n, output_dim)
@@ -697,24 +706,50 @@ class MonteCarloVnceLoss:
             self.set_alpha(new_param)
 
     def next_minibatch(self):
-        batch_start = self.current_batch_id * self.batch_size
-        batch_slice = slice(batch_start, batch_start + self.batch_size)
-        noise_batch_start = int(batch_start * self.nu)
-        noise_batch_slice = slice(noise_batch_start, noise_batch_start + int(self.batch_size * self.nu))
-
-        self.X = deepcopy(self.train_data[batch_slice])
-        self.Y = deepcopy(self.noise_samples[noise_batch_slice])
-        if self.drop_data_frac != 0:
-            X_mask = self.rng.uniform(0, 1, self.X.shape) > self.drop_data_frac
-            Y_mask = self.rng.uniform(0, 1, self.Y.shape) > self.drop_data_frac
-            self.X = deepcopy(self.X * X_mask)
-            self.Y = deepcopy(self.Y * Y_mask)
-        self.resample_from_variational_noise = True
-
-        self.current_batch_id += 1
         if self.current_batch_id % self.batches_per_epoch == 0:
             self.new_epoch()
             self.current_batch_id = 0
+
+        batch_start = self.current_batch_id * self.batch_size
+        self.batch_slice = slice(batch_start, batch_start + self.batch_size)
+        noise_batch_start = int(batch_start * self.nu)
+        self.noise_batch_slice = slice(noise_batch_start, noise_batch_start + int(self.batch_size * self.nu))
+
+        self.X = deepcopy(self.train_data[self.batch_slice])
+        self.Y = deepcopy(self.noise_samples[self.noise_batch_slice])
+
+        if self.train_miss_mask is not None:
+            self.set_masks_for_batch()
+
+        if self.drop_data_frac != 0:
+            # X_mask = self.rng.uniform(0, 1, self.X.shape) > self.drop_data_frac
+            # Y_mask = self.rng.uniform(0, 1, self.Y.shape) > self.drop_data_frac
+            # self.X = deepcopy(self.X * X_mask)
+            # self.Y = deepcopy(self.Y * Y_mask)
+            raise NotImplementedError
+
+        self.current_batch_id += 1
+        self.resample_from_variational_noise = True
+
+    def set_masks_for_batch(self):
+        # For each row of X & Y, if the row contains at least one zero, randomly choose one of these zeros to keep,
+        # and fill in the rest with the 'global mean' from the observed data/noise
+        global_X_mask = deepcopy(self.train_miss_mask[self.batch_slice])
+        self.cur_X_mask = np.zeros_like(self.X)
+        self.cur_Y_mask = np.zeros((self.X.shape[0], self.nu, self.X.shape[1]))
+        for i in range(len(self.cur_X_mask)):
+            row_i = global_X_mask[i]
+            # get indices of all missing dimensions except 1 (randomly chosen)
+            miss_indices = np.where(row_i == 1)[0]
+            if miss_indices.size > 0:
+                if miss_indices.size > 1:
+                    throw = np.random.randint(0, len(miss_indices))
+                    throw_index = miss_indices[throw]
+                else:
+                    throw_index = miss_indices[0]
+                self.cur_X_mask[i, throw_index] = 1
+                self.cur_Y_mask[i, :, throw_index] = 1
+        self.cur_Y_mask = self.cur_Y_mask.reshape(-1, self.X.shape[1])
 
     def new_epoch(self):
         """Shuffle data X and noise Y and print current loss"""
@@ -723,11 +758,15 @@ class MonteCarloVnceLoss:
         self.train_data = deepcopy(self.train_data[data_perm])
 
         if self.train_miss_mask is not None:
+            self.train_miss_mask = deepcopy(self.train_miss_mask[data_perm])
             # noise samples are grouped in nu-sized chunks that are missing the same features
             # we need to keep this grouping when we shuffle the data
             new_samples = deepcopy(self.noise_samples)
+            new_mask = deepcopy(self.noise_miss_mask)
             new_samples = new_samples.reshape(n, self.nu, d)
+            new_mask = new_mask.reshape(n, self.nu, d)
             self.noise_samples = new_samples[data_perm].reshape(self.noise_samples.shape)
+            self.noise_miss_mask = new_mask[data_perm].reshape(self.noise_samples.shape)
         else:
             noise_perm = rnd.permutation(len(self.noise_samples))
             self.noise_samples = deepcopy(self.noise_samples[noise_perm])
@@ -736,51 +775,82 @@ class MonteCarloVnceLoss:
         self.current_epoch += 1
 
     def resample_latents_if_necessary(self):
-        if (self.ZX is None) or (self.ZY is None) or self.resample_from_variational_noise:
-            X_mask, Y_mask = None, None
-            if (self.train_miss_mask is not None) or self.drop_data_frac != 0:
-                X_mask = self.get_missing_data_mask(self.X)
-                Y_mask = self.get_missing_data_mask(self.Y)
+        # todo: clean this method up
+        X_nn_outputs = None
+        Y_nn_outputs = None
+        if self.use_neural_variational_noise:
+            X_activations = self.variational_noise.nn.fprop(deepcopy(self.X))
+            X_nn_outputs = X_activations[-1]
+            Y_activations = self.variational_noise.nn.fprop(deepcopy(self.Y))
+            Y_nn_outputs = Y_activations[-1]
 
+        if (self.ZX is None) or (self.ZY is None) or self.resample_from_variational_noise:
             if self.use_reparam_trick:
                 # sample E from the 'base' distribution when using reparameterisation trick
-                self.E_ZX = self.variational_noise.sample_E(self.nz, X_mask)
-                self.ZX = self.variational_noise.get_Z_samples_from_E(self.nz, self.E_ZX, self.X, X_mask)
+                self.E_ZX = self.variational_noise.sample_E(self.nz, self.cur_X_mask)
+                self.ZX = self.variational_noise.get_Z_samples_from_E(self.nz, self.E_ZX, self.X, self.cur_X_mask, X_nn_outputs)
             else:
-                self.ZX = self.variational_noise.sample(self.nz, self.X, X_mask)
-            self.ZY = self.variational_noise.sample(self.nz, self.Y, Y_mask)
+                self.ZX = self.variational_noise.sample(self.nz, self.X, self.cur_X_mask, X_nn_outputs)
+            self.ZY = self.variational_noise.sample(self.nz, self.Y, self.cur_Y_mask, Y_nn_outputs)
             self.resample_from_variational_noise = False
+
+        if (self.train_miss_mask is not None) and (not self.val_mode):
+            # for the missing dimensions we just sampled, replace their value in the global dataset with the mean
+            # of their respective conditional distribution
+            # X_mean, _ = self.variational_noise.get_truncated_params(self.X, self.cur_X_mask, X_nn_outputs)
+            # Y_mean, _ = self.variational_noise.get_truncated_params(self.Y, self.cur_Y_mask, Y_nn_outputs)
+            # self.train_data[self.batch_slice] = deepcopy(X_mean + (1 - self.cur_X_mask) * self.train_data[self.batch_slice])
+            # self.noise_samples[self.noise_batch_slice] = deepcopy(Y_mean + (1 - self.cur_Y_mask) * self.noise_samples[self.noise_batch_slice])
+            self.train_data[self.batch_slice] = deepcopy(self.ZX.mean(0) + (1 - self.cur_X_mask) * self.train_data[self.batch_slice])
+            self.noise_samples[self.noise_batch_slice] = deepcopy(self.ZY.mean(0) + (1 - self.cur_Y_mask) * self.noise_samples[self.noise_batch_slice])
 
     def compute_end_of_epoch_loss(self):
         """"Compute loss on *whole* training set and validation set at end of each epoch"""
         # save current data
         cur_X = deepcopy(self.X)
         cur_Y = deepcopy(self.Y)
+        cur_X_mask = deepcopy(self.cur_X_mask)
+        cur_Y_mask = deepcopy(self.cur_Y_mask)
+        self.val_mode = True
 
         # eval on validation dataset
-        self.X = deepcopy(self.val_data)
-        num_val_noise = int(self.nu * len(self.val_data))
-        self.Y = deepcopy(self.noise_samples[:num_val_noise])
-        self.resample_from_variational_noise = True
-        val_loss = self.__call__()
+        # self.X = deepcopy(self.val_data)
+        # self.cur_X_mask = deepcopy(self.val_miss_mask)
+        # num_val_noise = int(self.nu * len(self.val_data))
+        # self.Y = deepcopy(self.noise_samples[:num_val_noise])
+        # self.cur_Y_mask = deepcopy(self.noise_miss_mask[:num_val_noise])
+        # self.resample_from_variational_noise = True
+        # val_loss = self.__call__()
+        #todo: temporary, whilst we use CDI algorithm
+        val_loss = 0
 
         # eval on *whole* training dataset
         self.X = deepcopy(self.train_data)
+        # self.cur_X_mask = deepcopy(self.train_miss_mask)
+        self.cur_X_mask = np.zeros_like(self.X)
         self.Y = deepcopy(self.noise_samples)
+        # self.cur_Y_mask = deepcopy(self.noise_miss_mask)
+        self.cur_Y_mask = np.zeros_like(self.Y)
         self.resample_from_variational_noise = True
         train_loss = self.__call__()
 
         # substitute back in the original data
         self.X = cur_X
         self.Y = cur_Y
+        self.cur_X_mask = cur_X_mask
+        self.cur_Y_mask = cur_Y_mask
+        self.val_mode = False
         self.resample_from_variational_noise = True
 
         return train_loss, val_loss
 
-    def get_missing_data_mask(self, U):
-        miss_mask = np.zeros_like(U)
-        miss_mask[np.where(U == 0)] = 1
-        return miss_mask
+    def get_missing_data_mask(self, data=True):
+        mask = None
+        if data:
+            mask = self.cur_X_mask
+        else:
+            mask = self.cur_Y_mask
+        return mask
 
     def get_theta(self, ind=None):
         """Return parameters of model (optionally, just get subset by passing through indices)"""
