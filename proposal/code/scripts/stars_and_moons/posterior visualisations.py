@@ -21,6 +21,8 @@ from scipy.optimize import minimize
 from scipy.stats import norm, multivariate_normal
 from sklearn.neighbors import KernelDensity as kd
 
+from plot import save_fig
+
 rc('lines', linewidth=1)
 rc('font', size=10)
 rc('legend', fontsize=10)
@@ -65,56 +67,60 @@ def plot_contours(ax, f, lim, num_contours, levels=None):
 
 
 def plot_prior(ax, z):
-    ax.set_title(r'$P(z): \mathcal{N}(0, \textbf{I})$', fontsize=8)
+    ax.set_title(r'$P(z): \mathcal{N}(0, \textbf{I})$', fontsize=16)
     sns.regplot(x=z[:, 0], y=z[:, 1], fit_reg=False, color='grey', ax=ax, scatter_kws={'s': 1})
     plot_contours(ax, lambda x: multivariate_normal.pdf(x, np.zeros(2), np.identity(2)), 10, 10)
 
 
 def plot_p_x(ax, x, x_landmarks):
-    ax.set_title(r'$P(x): \mathcal{N}(\textbf{w}, c \textbf{I})$', fontsize=8)
+    # ax.set_title(r'$P(x): \mathcal{N}(\textbf{w}, c \textbf{I})$', fontsize=8)
+    ax.set_title(r'$P(x)$', fontsize=16)
     sns.regplot(x=x[:, 0], y=x[:, 1], fit_reg=False, color='grey', ax=ax, scatter_kws={'s': 1})
     landmark_cols = ['red', 'green', 'blue']
     # landmark_cols = ['red', 'orange', 'green', 'blue', 'purple']
     for i, x_i in enumerate(x_landmarks):
-        ax.scatter(x_i[0], x_i[1], color=landmark_cols[i], s=10, edgecolors='k')
+        ax.scatter(x_i[0], x_i[1], color=landmark_cols[i], s=35, edgecolors='k')
 
 
 def plot_noise(ax, noise, sample_size, noise_num):
     if noise_num == 1:
-        ax.set_title(r'$P_y^1(Y): \mathcal{N}(\bar{\textbf{x}}, \bar{\Sigma})$', fontsize=8)
+        ax.set_title(r'$P_y^1(Y): \mathcal{N}(\bar{\textbf{x}}, \bar{\Sigma})$', fontsize=16)
     if noise_num == 2:
-        ax.set_title(r'$P_y^2(Y): \mathcal{N}(0, 10 \textbf{I})$', fontsize=8)
+        ax.set_title(r'$P_y^2(Y): \mathcal{N}(0, 10 \textbf{I})$', fontsize=16)
     y = noise.sample(sample_size)
     sns.regplot(x=y[:, 0], y=y[:, 1], fit_reg=False, color='grey', ax=ax, scatter_kws={'s': 1})
     plot_contours(ax, lambda x: noise(x), 10, 10)
 
 
 def plot_marginals(x, z, x_landmarks, noise, bad_noise, sample_size, title, save_dir):
-    fig, axs = plt.subplots(1, 4, figsize=(5.7, 1.7), sharex=True, sharey=True)
+    fig, axs = plt.subplots(2, 2, figsize=(6.5, 6.5), sharex=True, sharey=True)
     axs = axs.ravel()
     plot_prior(axs[0], z)
     plot_p_x(axs[1], x, x_landmarks)
     plot_noise(axs[2], noise, sample_size, 1)
     plot_noise(axs[3], bad_noise, sample_size, 2)
 
+    for ax in axs:
+        ax.set_xlim(-7, 7)
+        ax.set_ylim(-7, 7)
     fig.tight_layout()
-    fig.savefig(save_dir + 'figs/' + title + '.png', bbox_inches="tight")
-    fig.savefig(save_dir + 'figs/' + title + '.pdf', bbox_inches="tight")
-    pickle.dump(fig, open(os.path.join(save_dir, 'figs/', title + '.p'), "wb"))
+    save_fig(fig, save_dir + 'figs/', title)
 
 
 def plot_true_posterior(ax, model, z1_mesh, z2_mesh, x, p_x, cmap):
     mesh = np.vstack([z1_mesh.flatten(), z2_mesh.flatten()]).T  # (gridsize, 2)
     p_mesh = model(x, mesh) / p_x
     p_mesh = p_mesh.reshape(z1_mesh.shape)
-    ax.pcolormesh(z1_mesh, z2_mesh, p_mesh, cmap=cmap)
+    # ax.pcolormesh(z1_mesh, z2_mesh, p_mesh, cmap=cmap)
+    ax.contourf(z1_mesh, z2_mesh, p_mesh, cmap=cmap)
 
 
 def plot_approx_posterior(ax, z1_mesh, z2_mesh, x, p_x, cmap, posterior, model):
     mesh = np.vstack([z1_mesh.flatten(), z2_mesh.flatten()]).T
     p_mesh = posterior(mesh, x)
     p_mesh = p_mesh.reshape(z1_mesh.shape)
-    ax.pcolormesh(z1_mesh, z2_mesh, p_mesh, cmap=cmap)
+    # ax.pcolormesh(z1_mesh, z2_mesh, p_mesh, cmap=cmap)
+    ax.contourf(z1_mesh, z2_mesh, p_mesh, cmap=cmap)
     plot_contours(ax, lambda z: model(x, z) / p_x, 5, 1, levels=[0.05])
 
 
@@ -129,25 +135,21 @@ def plot_landmark_posteriors(x_landmarks,
     nbins = 300
     axis_lim = 5
     z1_mesh, z2_mesh = np.mgrid[-axis_lim:axis_lim:nbins*1j, -axis_lim:axis_lim:nbins*1j]
+    # cmaps = [plt.cm.YlOrRd, plt.cm.YlGn, plt.cm.GnBu]
     cmaps = [plt.cm.YlOrRd_r, plt.cm.YlGn_r, plt.cm.GnBu_r]
     # cmaps = [plt.cm.YlOrRd_r, plt.cm.Oranges_r, plt.cm.YlGn_r, plt.cm.Blues_r, plt.cm.Purples_r]
-    
+
+    sns.set_style('darkgrid')
+    sns.set_palette(sns.color_palette("pastel"))
     num_rows, num_cols = 5, 3
     fig, axs = plt.subplots(num_rows, num_cols, figsize=(5, 8))
 
     for j in range(num_cols):
-        
-        # approximate posteriors trained with different objective functions
-        fe_post = lambda z, x: free_energy_posterior(z, x)
-        vnce_post = lambda z, x: vnce_posterior(z, x)
-        bad_vnce_post = lambda z, x: bad_vnce_posterior(z, x)
-        bad_vnce_nu50_post = lambda z, x: bad_vnce_posterior_nu50(z, x)
-        
         plot_true_posterior(axs[0, j], model, z1_mesh, z2_mesh, x_landmarks[j], p_x[j], cmaps[j])
-        plot_approx_posterior(axs[1, j], z1_mesh, z2_mesh, np.array([x_landmarks[j]]), p_x[j], cmaps[j], fe_post, model)
-        plot_approx_posterior(axs[2, j], z1_mesh, z2_mesh, np.array([x_landmarks[j]]), p_x[j], cmaps[j], vnce_post, model)
-        plot_approx_posterior(axs[3, j], z1_mesh, z2_mesh, np.array([x_landmarks[j]]), p_x[j], cmaps[j], bad_vnce_post, model)
-        plot_approx_posterior(axs[4, j], z1_mesh, z2_mesh, np.array([x_landmarks[j]]), p_x[j], cmaps[j], bad_vnce_nu50_post, model)
+        plot_approx_posterior(axs[1, j], z1_mesh, z2_mesh, np.array([x_landmarks[j]]), p_x[j], cmaps[j], free_energy_posterior, model)
+        plot_approx_posterior(axs[2, j], z1_mesh, z2_mesh, np.array([x_landmarks[j]]), p_x[j], cmaps[j], vnce_posterior, model)
+        plot_approx_posterior(axs[3, j], z1_mesh, z2_mesh, np.array([x_landmarks[j]]), p_x[j], cmaps[j], bad_vnce_posterior, model)
+        plot_approx_posterior(axs[4, j], z1_mesh, z2_mesh, np.array([x_landmarks[j]]), p_x[j], cmaps[j], bad_vnce_posterior_nu50, model)
 
     # remove space between subplots and add row labels
     for ax in axs.ravel():
@@ -162,10 +164,8 @@ def plot_landmark_posteriors(x_landmarks,
         ax.annotate(row, xy=(0, 0.5), xytext=(-ax.yaxis.labelpad - pad, 0), xycoords=ax.yaxis.label,
                     textcoords='offset points', size='large', ha='right', va='center')
 
-    fig.subplots_adjust(left=0.15, wspace=0, hspace=0)
-    fig.savefig(save_dir + 'figs/' + title + '.png', bbox_inches="tight")
-    fig.savefig(save_dir + 'figs/' + title + '.pdf', bbox_inches="tight")
-    pickle.dump(fig, open(os.path.join(save_dir, 'figs/', title + '.p'), "wb"))
+    fig.subplots_adjust(left=0.15, wspace=0, hspace=0.1)
+    save_fig(fig, save_dir + 'figs/', title)
 
 
 def model_to_noise_frac(x, z, pos, model, noise, nu):
@@ -185,8 +185,8 @@ def print_landmark_prob_of_noise_class(model, noise, bad_noise, vnce_pos, bad_vn
 
 
 def main():
-    load_dir = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/experimental-results/stars-and-moons/'
-    save_dir = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/experiments/stars-and-moons/'
+    load_dir = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project-non-code/experimental-results/stars-and-moons/'
+    save_dir = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project-non-code/experiments/stars-and-moons/'
 
     model = pickle.load(open(os.path.join(load_dir, 'truncate=False_model.p'), 'rb'))
     # model_trunc = pickle.load(open(os.path.join(save_dir, 'truncate=True_model.p'), 'rb'))
@@ -208,7 +208,7 @@ def main():
     Z, X = model.sample(sample_size)
     # Z_trunc, X_trunc = model_trunc.sample(sample_size)
 
-    x_landmarks = [np.array([-6, -6]), np.array([0, 0]), np.array([6, 6])]
+    x_landmarks = [np.array([-5, -5]), np.array([0, 0]), np.array([5, 5])]
     # x_landmarks_trunc = [np.array([-2, -2]), np.array([0, 0]), np.array([2, 2])]
 
     plot_marginals(X, Z, x_landmarks, noise, bad_noise, sample_size, title='marginals-for-gaussian-model', save_dir=save_dir)

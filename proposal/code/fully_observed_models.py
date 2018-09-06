@@ -84,7 +84,7 @@ class SumOfTwoUnnormalisedGaussians(Model):
         self.sigma1 = sigma1
         super().__init__(theta, rng=rng)
 
-    def __call__(self, U):
+    def __call__(self, U, log=False):
         """ Evaluate model for each data point U[i, :]
 
         :param U: array (n, 1)
@@ -96,8 +96,10 @@ class SumOfTwoUnnormalisedGaussians(Model):
         b = np.exp(self.theta[1])  # stdev parameter
         term_1 = np.exp(-U**2 / (2 * b**2))
         term_2 = np.exp(-U**2 / (2 * self.sigma1**2))
-
-        return a*(term_1 + term_2)
+        val = a*(term_1 + term_2)
+        if log:
+            val = np.log(val)
+        return val
 
     def grad_log_wrt_params(self, U):
         """ Nabla_theta(log(phi(u; theta))) where phi is the unnormalised model
@@ -194,7 +196,7 @@ class SumOfTwoUnnormalisedGaussians2(Model):
         self.sigma1 = sigma1
         super().__init__(theta, rng=rng)
 
-    def __call__(self, U):
+    def __call__(self, U, log=False):
         """ Evaluate model for each data point U[i, :]
 
         :param U: array (n, 1)
@@ -202,7 +204,10 @@ class SumOfTwoUnnormalisedGaussians2(Model):
         :return array (n)
         """
         U = U.reshape(-1)
-        return self.marginal_z_0(U) + self.marginal_z_1(U)
+        val = self.marginal_z_0(U) + self.marginal_z_1(U)
+        if log:
+            val = np.log(val)
+        return  val
 
     def grad_log_wrt_params(self, U):
         """ Nabla_theta(log(phi(u; theta))) where phi is the unnormalised model
@@ -304,14 +309,17 @@ class SumOfTwoNormalisedGaussians(Model):
         self.sigma1 = sigma1
         super().__init__(theta, rng=rng)
 
-    def __call__(self, U):
+    def __call__(self, U, log=False):
         """ Evaluate model for each data point U[i, :]
 
         :param U: array (n, 1)
              either data or noise for NCE
         :return array (n)
         """
-        return self.term1(U) + self.term2(U)
+        val = self.term1(U) + self.term2(U)
+        if log:
+            val = np.log(val)
+        return  val
 
     def term1(self, U):
         U = U.reshape(-1)
@@ -400,14 +408,17 @@ class MixtureOfTwoGaussians(Model):
         self.sigma1 = sigma1
         super().__init__(theta, rng=rng)
 
-    def __call__(self, U):
+    def __call__(self, U, log=False):
         """ Evaluate model for each data point U[i, :]
 
         :param U: array (n, 1)
              either data or noise for NCE
         :return array (n)
         """
-        return self.term1(U) + self.term2(U)
+        val = self.term1(U) + self.term2(U)
+        if log:
+            val = np.log(val)
+        return  val
 
     def term1(self, U):
         U = U.reshape(-1)

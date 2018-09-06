@@ -53,7 +53,7 @@ def split_params(theta):
     prec_flat = theta[1+d:]
     prec = np.zeros((d, d))
     prec[np.tril_indices(d)] = prec_flat
-    prec[np.diag_indices(d)]= np.exp(prec[np.diag_indices(d)])
+    prec[np.diag_indices(d)] = np.exp(prec[np.diag_indices(d)])
     prec_diag = deepcopy(prec[np.diag_indices(d)])
     prec_non_diag = deepcopy(prec[np.tril_indices(d, -1)])
     prec += prec.T

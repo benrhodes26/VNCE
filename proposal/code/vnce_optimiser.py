@@ -151,7 +151,7 @@ class VemOptimiser:
     def plot_loss_curve(self, optimal_loss=None, separate_terms=False):
         """plot of objective function during optimisation"""
         fig, ax = plt.subplots(1, 1, figsize=(10, 7))
-        _, _, losses, times, val_losses, val_times = self.get_flattened_result_arrays()
+        _, _, losses, times = self.get_flattened_result_arrays()
         _, _, m_start_ids, e_start_ids = self.get_m_and_e_step_ids()
 
         # plot optimisation curve

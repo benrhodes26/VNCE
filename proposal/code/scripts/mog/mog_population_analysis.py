@@ -13,12 +13,12 @@ import pickle
 from distribution import PolynomialSigmoidBernoulli, GaussianNoise
 from gaussian_mixture_analytic_expectations import *
 from fully_observed_models import SumOfTwoUnnormalisedGaussians, SumOfTwoNormalisedGaussians
-from latent_variable_model import MixtureOfTwoUnnormalisedGaussians
+from latent_variable_model import LatentMixtureOfTwoUnnormalisedGaussians
 from mle_optimiser import MLEOptimiser
 from nce_optimiser import NCEOptimiser
 from plot import *
 from utils import *
-from vnce_optimisers import VNCEOptimiserWithAnalyticExpectations, VNCEOptimiser
+from vnce_optimiser import VnceLossWithAnalyticExpectations, VemOptimiser
 
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from copy import deepcopy
@@ -246,11 +246,11 @@ def plot1(ax, quant_to_run_dict, sample_sizes, colour, label):
     for quantile, runs in quant_to_run_dict.items():
         final_mses_no_scaling_param = get_final_mses_no_scaling_param(runs)
         if quantile == '0.5':
-            ax.plot(np.log10(sample_sizes), np.log10(final_mses_no_scaling_param), c=colour, linewidth=1.5, label=label, marker='o')
+            ax.plot(np.log10(sample_sizes), np.log10(final_mses_no_scaling_param), c=colour, linewidth=1, label=label, marker='o')
         else:
-            ax.plot(np.log10(sample_sizes), np.log10(final_mses_no_scaling_param), c=colour, alpha=0.5, marker='o', linestyle='--')
-    ax.set_xlabel('log 10 sample size')
-    ax.set_ylabel('log 10 mean squared error')
+            ax.plot(np.log10(sample_sizes), np.log10(final_mses_no_scaling_param), c=colour, alpha=0.4, marker='o', linestyle='--')
+    # ax.set_xlabel('log 10 sample size')
+    # ax.set_ylabel('log 10 mean squared error')
     ax.grid()
     ax.legend()
 
@@ -259,11 +259,11 @@ def plot2(ax, quant_to_run_dict, sample_sizes, colour, label):
     for quantile, runs in quant_to_run_dict.items():
         final_mses_scaling_param = get_final_mses_only_scaling_param(runs)
         if quantile == '0.5':
-            ax.plot(np.log10(sample_sizes), np.log10(final_mses_scaling_param), c=colour, linewidth=1.5, label=label, marker='o')
+            ax.plot(np.log10(sample_sizes), np.log10(final_mses_scaling_param), c=colour, linewidth=1, label=label, marker='o')
         else:
-            ax.plot(np.log10(sample_sizes), np.log10(final_mses_scaling_param), c=colour, alpha=0.5, marker='o', linestyle='--')
-    ax.set_xlabel('log 10 sample size')
-    ax.set_ylabel('log 10 mean squared error normalising parameter')
+            ax.plot(np.log10(sample_sizes), np.log10(final_mses_scaling_param), c=colour, alpha=0.4, marker='o', linestyle='--')
+    # ax.set_xlabel('log 10 sample size')
+    # ax.set_ylabel('log 10 mean squared error')
     ax.grid()
     ax.legend()
 
