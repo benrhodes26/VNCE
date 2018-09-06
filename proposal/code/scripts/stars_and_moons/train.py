@@ -31,7 +31,7 @@ from distribution import StarsAndMoonsPosterior, GaussianNoise
 seed = 10102016 
 rng = np.random.RandomState(seed)
 
-SAVE_DIR = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/experiments/stars-and-moons/'
+SAVE_DIR = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project-non-code/experiments/stars-and-moons/'
 
 # Set up a logger object to print info about the training run to stdout
 logger = logging.getLogger()
@@ -88,8 +88,7 @@ def train(train_data, valid_data, config, log=True, plot=True):
         Contains the following hyperparameters: num_layers, input_dim, output_dim
         hidden_dim, batch_size, learning_rate, num_epochs, stats_interval                  
     """
-    # Reset random number generator and data provider states on each run
-    # to ensure reproducibility of results
+    # Reset random number generator and data provider states on each run to ensure reproducibility of results
     rng.seed(seed)
     train_data.reset()
     valid_data.reset()
@@ -113,7 +112,7 @@ def train(train_data, valid_data, config, log=True, plot=True):
             data_cov = np.dot((X-data_mean).T, X-data_mean) / len(X)
             noise = GaussianNoise(mean=data_mean, cov=data_cov)
         elif config['noise'] == 'bad_noise':
-            noise = GaussianNoise(mean=np.ones(2), cov=10*np.identity(2))
+            noise = GaussianNoise(mean=np.ones(2), cov=30*np.identity(2))
         pickle.dump(noise, open(os.path.join(SAVE_DIR, "{}.p".format(config['noise'])), "wb"))
         error = VnceLoss(model=model,
                          noise=noise,
@@ -152,10 +151,10 @@ def main():
               'input_dim': 2,
               'output_dim': 4,
               'hidden_dim': 100,
-              'learning_rate': 0.0001,
+              'learning_rate': 0.01,
               'num_data': 10000,
               'batch_size': 100,
-              'num_epochs': 50,
+              'num_epochs': 100,
               'stats_interval': 1,
               'weights_init': UniformInit(-0.05, 0.05, rng=rng),
               'biases_init': ConstantInit(0.),
@@ -163,8 +162,8 @@ def main():
               'activation_layer': TanhLayer(),
               'c': 0.3,
               'nz': 1,
-              'noise': 'good_noise',
-              'nu': 100}
+              'noise': 'bad_noise',
+              'nu': 10}
     if config['noise']:
         exp_name = config['loss'] + '_' + 'truncate_gaussian=' + str(config['truncate_gaussian']) + '_' + config['noise'] + '_' + 'nu' + str(config['nu'])
     else:

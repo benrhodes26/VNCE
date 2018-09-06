@@ -304,19 +304,22 @@ class StarsAndMoonsPosterior(Distribution):
 
         return val
 
-    def get_mean_and_cov(self, U, outputs=None):
+    def get_mean_and_cov(self, U=None, outputs=None):
         """
         :param U: array (n, d)
         :return mean, cov: arrays (n, 2)
         """
         if outputs is None:
-            outputs = self.nn.fprop(U)[-1]
+            if U is None:
+                raise ValueError
+            else:
+                outputs = self.nn.fprop(U)[-1]
         mean, cov = outputs[:, :2], np.exp(outputs[:, 2:])**2
         return mean, cov
 
-    def sample(self, nz, U, miss_mask=None, outputs=None):
+    def sample(self, nz, U, nn_outputs=None):
         E = self.sample_E(nz, len(U))  # (nz, n, 2)
-        Z = self.get_Z_samples_from_E(E, U, outputs=outputs)  # (nz, n, 2)
+        Z = self.get_Z_samples_from_E(E, U, outputs=nn_outputs)  # (nz, n, 2)
         return Z
 
     def sample_E(self, nz, n):
@@ -379,7 +382,7 @@ class StarsAndMoonsPosterior(Distribution):
         :param Z:  array (nz, n, 2)
         :return: array (4, nz, n)
         """
-        mean, cov = self.get_mean_and_cov(U, outputs)  # (n, 2)
+        mean, cov = self.get_mean_and_cov(outputs=outputs)  # (n, 2)
         grad_log_wrt_out_1 = (Z - mean) / cov  # (nz, n, 2) - out_1 refers to the mean
         grad_log_wrt_z = - grad_log_wrt_out_1
         grad_log_wrt_out_2 = (Z - mean)**2 / cov - 1  # (nz, n, 2) - out_2 refers to log std

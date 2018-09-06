@@ -148,7 +148,7 @@ class VnceLoss(object):
         grad_z_wrt_nn_outputs = self.var_dist.grad_of_Z_wrt_nn_outputs(nn_outputs, E)  # (output_dim, nz, n, m)
         grad_of_log_model = self.model.grad_log_wrt_nn_outputs(X, Z, grad_z_wrt_nn_outputs)  # (output_dim, nz, n)
 
-        grad_of_var_dist_wrt_nn_out = self.var_dist.grad_log_wrt_nn_outputs(outputs=nn_outputs)  # (output_dim, nz, n)
+        grad_of_var_dist_wrt_nn_out = self.var_dist.grad_log_wrt_nn_outputs(outputs=nn_outputs, grad_z_wrt_nn_outputs=grad_z_wrt_nn_outputs, Z=Z)  # (output_dim, nz, n)
 
         joint_noise = (self.nu * self.noise(X) * self.var_dist(Z, X))
         a = joint_noise / (self.model(X, Z) + joint_noise)  # (nz, n)
