@@ -373,8 +373,27 @@ class StarsAndMoonsPosterior(Distribution):
         return grad
 
     def grad_log_wrt_nn_outputs(self, outputs, grad_z_wrt_nn_outputs, Z):
-        #todo: implement me!
-        raise NotImplementedError
+        """
+        :param outputs: array (n, 4)
+        :param grad_z_wrt_nn_outputs: array (4, nz, n, 2)
+        :param Z:  array (nz, n, 2)
+        :return: array (4, nz, n)
+        """
+        mean, cov = self.get_mean_and_cov(U, outputs)  # (n, 2)
+        grad_log_wrt_out_1 = (Z - mean) / cov  # (nz, n, 2) - out_1 refers to the mean
+        grad_log_wrt_z = - grad_log_wrt_out_1
+        grad_log_wrt_out_2 = (Z - mean)**2 / cov - 1  # (nz, n, 2) - out_2 refers to log std
+
+        # the gradient is the sum of two components: one component is obtained `indirectly' by differentiating through z using the
+        # chain rule. The other component of the gradient is obtained `directly`.
+        grad_log_indirect = np.sum(grad_z_wrt_nn_outputs * grad_log_wrt_z, axis=-1)  # (4, nz, n)
+        grad_log_wrt_out_1 = np.transpose(grad_log_wrt_out_1, axes=(2, 0, 1))  # (2, nz, n)
+        grad_log_wrt_out_2 = np.transpose(grad_log_wrt_out_2, axes=(2, 0, 1))  # (2, nz, n)
+        grad_log_direct = np.concatenate((grad_log_wrt_out_1, grad_log_wrt_out_2), axis=0)  # (4, nz, n)
+
+        grad_log_wrt_nn_outputs = grad_log_indirect + grad_log_direct  # (4, nz, n)
+
+        return grad_log_wrt_nn_outputs
 
 
 class MissingDataProductOfTruncNormsPosterior(Distribution):

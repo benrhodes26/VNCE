@@ -39,8 +39,8 @@ class FreeEnergyLoss(object):
 
     def grad(self, nn_outputs, inputs):
         """ grad of (negative) free energy w.r.t variational parameters (belonging to a neural network)
-        :param nn_outputs:
-        :param inputs:
+        :param nn_outputs: (n, num_outputs)
+        :param inputs: (n, d)
         :return:
         """
         X = (inputs * self.data_std) + self.data_mean
@@ -147,15 +147,16 @@ class VnceLoss(object):
 
         grad_z_wrt_nn_outputs = self.var_dist.grad_of_Z_wrt_nn_outputs(nn_outputs, E)  # (output_dim, nz, n, m)
         grad_of_log_model = self.model.grad_log_wrt_nn_outputs(X, Z, grad_z_wrt_nn_outputs)  # (output_dim, nz, n)
-        # todo: compute grad wrt. var_dist correctly...
-        grad_of_log_var_dist = self.var_dist.grad_log_wrt_nn_outputs(outputs=nn_outputs)  # (n, output_dim)
+
+        grad_of_var_dist_wrt_nn_out = self.var_dist.grad_log_wrt_nn_outputs(outputs=nn_outputs)  # (output_dim, nz, n)
 
         joint_noise = (self.nu * self.noise(X) * self.var_dist(Z, X))
         a = joint_noise / (self.model(X, Z) + joint_noise)  # (nz, n)
 
         term1 = np.mean(a * grad_of_log_model, axis=1).T  # (n, output_dim)
-        term2 = (np.mean(a, axis=0) * grad_of_log_var_dist.T).T  # (n, output_dim)
-        return - (term1 + term2)
+        term2 = np.mean(a * grad_of_var_dist_wrt_nn_out, axis=1).T  # (n, output_dim)
+
+        return - (term1 - term2)
 
     def __repr__(self):
         return 'VnceLoss'
