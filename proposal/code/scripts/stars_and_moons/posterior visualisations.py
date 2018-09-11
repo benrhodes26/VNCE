@@ -23,8 +23,8 @@ from sklearn.neighbors import KernelDensity as kd
 
 from plot import save_fig
 
-rc('lines', linewidth=1)
-rc('font', size=10)
+rc('lines', linewidth=0.5)
+rc('font', size=8)
 rc('legend', fontsize=10)
 rc('text', usetex=True)
 
@@ -61,20 +61,20 @@ def plot_contours(ax, f, lim, num_contours, levels=None):
     mesh = np.vstack([X.flatten(), Y.flatten()]).T
     Z = f(mesh).reshape(X.shape)
     if levels:
-        ax.contour(X, Y, Z, num_contours, colors='black', alpha=0.3, levels=levels, linewidths=2)
+        ax.contour(X, Y, Z, num_contours, colors='black', alpha=0.7, levels=levels, linewidths=1)
     else:
         ax.contour(X, Y, Z, num_contours, colors='black', alpha=0.3)
 
 
 def plot_prior(ax, z):
-    ax.set_title(r'$P(z): \mathcal{N}(0, \textbf{I})$', fontsize=16)
+    ax.set_title(r'$P(z): \mathcal{N}(0, \textbf{I})$', fontsize=10)
     sns.regplot(x=z[:, 0], y=z[:, 1], fit_reg=False, color='grey', ax=ax, scatter_kws={'s': 1})
     plot_contours(ax, lambda x: multivariate_normal.pdf(x, np.zeros(2), np.identity(2)), 10, 10)
 
 
 def plot_p_x(ax, x, x_landmarks):
     # ax.set_title(r'$P(x): \mathcal{N}(\textbf{w}, c \textbf{I})$', fontsize=8)
-    ax.set_title(r'$P(x)$', fontsize=16)
+    ax.set_title(r'$P(x)$', fontsize=10)
     sns.regplot(x=x[:, 0], y=x[:, 1], fit_reg=False, color='grey', ax=ax, scatter_kws={'s': 1})
     landmark_cols = ['red', 'green', 'blue']
     # landmark_cols = ['red', 'orange', 'green', 'blue', 'purple']
@@ -84,16 +84,16 @@ def plot_p_x(ax, x, x_landmarks):
 
 def plot_noise(ax, noise, sample_size, noise_num):
     if noise_num == 1:
-        ax.set_title(r'$P_y^1(Y): \mathcal{N}(\bar{\textbf{x}}, \bar{\Sigma})$', fontsize=16)
+        ax.set_title(r'$P_y^1(Y): \mathcal{N}(\bar{\textbf{x}}, \bar{\Sigma})$', fontsize=10)
     if noise_num == 2:
-        ax.set_title(r'$P_y^2(Y): \mathcal{N}(0, 30 \textbf{I})$', fontsize=16)
+        ax.set_title(r'$P_y^2(Y): \mathcal{N}(0, 30 \textbf{I})$', fontsize=10)
     y = noise.sample(sample_size)
     sns.regplot(x=y[:, 0], y=y[:, 1], fit_reg=False, color='grey', ax=ax, scatter_kws={'s': 1})
     plot_contours(ax, lambda x: noise(x), 10, 10)
 
 
 def plot_marginals(x, z, x_landmarks, noise, bad_noise, sample_size, title, save_dir):
-    fig, axs = plt.subplots(2, 2, figsize=(6.5, 6.5), sharex=True, sharey=True)
+    fig, axs = plt.subplots(2, 2, figsize=(3.25, 3.25), sharex=True, sharey=True)
     axs = axs.ravel()
     plot_prior(axs[0], z)
     plot_p_x(axs[1], x, x_landmarks)
@@ -142,7 +142,7 @@ def plot_landmark_posteriors(x_landmarks,
     sns.set_style('darkgrid')
     sns.set_palette(sns.color_palette("pastel"))
     num_rows, num_cols = 5, 3
-    fig, axs = plt.subplots(num_rows, num_cols, figsize=(5, 8))
+    fig, axs = plt.subplots(num_rows, num_cols, figsize=(3.25, 5.4))
 
     for j in range(num_cols):
         plot_true_posterior(axs[0, j], model, z1_mesh, z2_mesh, x_landmarks[j], p_x[j], cmaps[j])

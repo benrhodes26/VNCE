@@ -242,26 +242,26 @@ def run_experiment(args, rng):
     return sample_sizes, vnce_runs, nce_runs, mle_runs, max_run_time
 
 
-def plot1(ax, quant_to_run_dict, sample_sizes, colour, label):
+def plot1(ax, quant_to_run_dict, sample_sizes, colour, label, marker='o', markersize=1):
     for quantile, runs in quant_to_run_dict.items():
         final_mses_no_scaling_param = get_final_mses_no_scaling_param(runs)
         if quantile == '0.5':
-            ax.plot(np.log10(sample_sizes), np.log10(final_mses_no_scaling_param), c=colour, linewidth=1, label=label, marker='o')
+            ax.plot(np.log10(sample_sizes), np.log10(final_mses_no_scaling_param), c=colour, linewidth=1, label=label, marker=marker, markersize=markersize)
         else:
-            ax.plot(np.log10(sample_sizes), np.log10(final_mses_no_scaling_param), c=colour, alpha=0.4, marker='o', linestyle='--')
+            ax.plot(np.log10(sample_sizes), np.log10(final_mses_no_scaling_param), c=colour, alpha=0.4, marker=marker, markersize=markersize, linestyle='--')
     # ax.set_xlabel('log 10 sample size')
     # ax.set_ylabel('log 10 mean squared error')
     ax.grid()
     ax.legend()
 
 
-def plot2(ax, quant_to_run_dict, sample_sizes, colour, label):
+def plot2(ax, quant_to_run_dict, sample_sizes, colour, label, marker='o', markersize=1):
     for quantile, runs in quant_to_run_dict.items():
         final_mses_scaling_param = get_final_mses_only_scaling_param(runs)
         if quantile == '0.5':
-            ax.plot(np.log10(sample_sizes), np.log10(final_mses_scaling_param), c=colour, linewidth=1, label=label, marker='o')
+            ax.plot(np.log10(sample_sizes), np.log10(final_mses_scaling_param), c=colour, linewidth=1, label=label, marker=marker, markersize=markersize)
         else:
-            ax.plot(np.log10(sample_sizes), np.log10(final_mses_scaling_param), c=colour, alpha=0.4, marker='o', linestyle='--')
+            ax.plot(np.log10(sample_sizes), np.log10(final_mses_scaling_param), c=colour, alpha=0.4, marker=marker, markersize=markersize, linestyle='--')
     # ax.set_xlabel('log 10 sample size')
     # ax.set_ylabel('log 10 mean squared error')
     ax.grid()
