@@ -605,6 +605,8 @@ def main(args):
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
 
+        # todo: throw away all empty data!
+
         # for each value of fraction missing, search over regularisation param and pick best using cross-validation
         args.best_vnce_true = {}
         args.best_vnce_approx = {}

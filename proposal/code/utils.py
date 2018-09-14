@@ -201,3 +201,111 @@ def get_reduced_thetas_and_times(thetas, times, time_step_size, max_time=None):
     reduced_thetas = deepcopy(thetas[log_time_ids])
 
     return reduced_thetas, reduced_times
+
+def get_missing_variables(Z, miss_mask):
+    """
+    :param Z: array (nz, n, d)
+        array containing missing data (zeros correpsond to observed data)
+    :param miss_mask: (n, d)
+        mask that contains 1s when a value is missing, otherwise 0 (this mask could actually be extracted from Z if neccessary).
+    :return: list of arrays
+        n-length list of arrays with shape (nz, k), where k is variable. These arrays contain values for the missing entries of each datapoint.
+    """
+    d = Z.shape[-1]
+    miss_row_i, miss_col_i = np.nonzero(miss_mask)
+    missing_indices = group_cols_by_row(miss_row_i, miss_col_i, d)  # list of missing dims for each datapoint
+    Z_T = np.transpose(Z, [1, 0, 2])
+    missing = [z[:, miss_inds] for z, miss_inds in zip(Z_T, missing_indices)]
+    return missing
+
+def get_conditional_precisions(prec, missing_inds):
+    """
+    :param prec: array
+        a single precision matrix
+    :param missing_inds:
+        list of n arrays containing missing dims for each datapoint
+    :return: list of n arrays, each of a different size.
+        The arrays are submatrices of prec that correspond to the upper-left block used when
+        calculating the conditional distribution of a multivariate Gaussian
+    """
+    cond_precs = []
+    for missing in missing_inds:
+        m = len(missing)
+        missing_coords = list(product(missing, missing))
+        missing_coords = list(zip(*missing_coords))
+        cond_precs.append(prec[missing_coords].reshape(m, m))
+
+    return cond_precs
+
+def reshape_condprec_to_prec_shape(condprec, missing_inds, nz, d):
+    """
+    :param prec: array
+        matrix with shape of condprec
+    :param missing_inds:
+        array containing missing dims
+    :param d: int
+        original prec is d x d (so d is number of variables, both missing and observed)
+    :return: array
+        array containing elements of condprec, but reshaped to match original prec
+    """
+    prec = np.zeros((nz, d, d))  # (nz, d, d)
+    missing_coords = list(product(missing_inds, missing_inds))
+    missing_coords = list(zip(*missing_coords))
+    prec[:, missing_coords[0], missing_coords[1]] = cond_prec.reshape(nz, -1)
+
+    return prec  # (nz, d, d)
+
+def get_conditional_H(prec, miss_inds, obs_inds):
+    """ Returns H as defined in page 2 of https://www.apps.stat.vt.edu/leman/VTCourses/Precision.pdf
+    :param prec: array
+        a single precision matrix
+    :param miss_inds:
+        list of n arrays containing missing dims for each datapoint
+    :param obs_inds:
+        list of n arrays containing observed dims for each datapoint
+    :return: list of n arrays, each of a different size.
+        The arrays are submatrices of prec that correspond to the upper-right block used when
+        calculating the conditional distribution of a multivariate Gaussian
+    """
+    H_matrices = []
+    for missing, obs in zip(miss_inds, obs_inds):
+        m = len(missing)
+        k = len(obs)
+        H_coords = list(product(missing, obs))
+        H_coords = list(zip(*H_coords))
+        H_matrices.append(prec[H_coords].reshape(m, k))
+
+    return H_matrices
+
+def group_cols_by_row(row_i, col_i, d):
+    """row_i is a list of row_coords, col_i the corresponding col coords.
+    Return a list, where the ith element is a list of the column coords for the ith row (may be empty).
+    """
+    missing_coords = list(zip(row_i, col_i))
+    groups = []
+    for row in range(d):
+        cols = []
+        for coord in missing_coords:
+            if coord[0] == row:
+                cols.append(coord[1])
+            else:
+                num_to_remove = len(cols)
+                missing_coords = missing_coords[num_to_remove:]
+                break
+        groups.append(cols)
+
+    return groups
+
+def get_missing_and_observed_indices(miss_mask, d):
+    miss_row_i, miss_col_i = np.nonzero(miss_mask)
+    obs_row_i, obs_col_i = np.nonzero(1 - miss_mask)
+    missing_indices = group_cols_by_row(miss_row_i, miss_col_i, d)  # list of missing dims for each datapoint
+    obs_indices = group_cols_by_row(obs_row_i, obs_col_i, d)  # list of observed dims for each datapoint
+
+    return missing_indices, obs_indices
+
+def get_lower_tri_halving_diag(A):
+    B = np.tril(A)
+    i_diag = np.diag_indices_from(B)
+    B[i_diag] = B[i_diag] * 0.5
+    return B

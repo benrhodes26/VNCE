@@ -11,7 +11,7 @@ from matplotlib import pyplot as plt
 from plot import *
 from scipy.stats import norm
 from sklearn.neighbors import KernelDensity as kd
-from utils import validate_shape, sigmoid
+from utils import *
 # noinspection PyPep8Naming
 DEFAULT_SEED = 1083463236
 
@@ -1263,9 +1263,6 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         V_centred = V - mean
         VP = np.dot(V_centred, precision)  # (nz, n, k)
         power = -0.5 * np.sum(VP * V_centred, axis=-1)  # (nz, n)
-        # log_norm_const = (-self.mean_len / 2) * np.log(2 * np.pi) + np.sum(np.log(chol_diag))
-
-        # val = -scaling_param + log_norm_const + power
         val = -scaling_param + power
         if log:
             val = truncation_mask * val + (1 - truncation_mask) * -15  # should be -infty, but -15 avoids numerical issues
@@ -1347,6 +1344,41 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         grad_log_model_wrt_nn_outputs *= truncation_mask  # Since Gaussian is truncated
 
         return grad_log_model_wrt_nn_outputs  # (len(nn_outputs), nz, n)
+
+    def grad_log_wrt_z(self, U, Z, miss_mask):
+        """ grad of log_model w.r.t to variational parameters alpha
+
+        :param U: array (n, d)
+            observed data
+        :param Z: array (nz, n, d)
+            missing data
+        :return: array (len(alpha), nz, n)
+            gradient of log_model w.r.t alpha (which is non-zero due to the reparameterisation trick)
+        """
+        mean, prec, _, _ = self.get_mean_and_lprecision()
+        miss_inds, obs_inds = get_missing_and_observed_indices(miss_mask, self.mean_len)
+
+        # get precision of conditional for each data point
+        cond_precs = get_conditional_precisions(prec, miss_inds)  # list of cond precisions
+
+        # For each datapoint, get vector of missing & observed data and correpsonding means
+        missing = [z[:, miss_inds] for z, miss_inds in zip(Z, miss_inds)]  # each array is of shape (nz, k)
+        observed = [v[obs_inds] for v, obs_inds in zip(U, obs_inds)]
+        miss_means = [mean[miss_inds] for miss_inds in miss_inds]
+        obs_means = [mean[obs_inds] for obs_inds in obs_inds]
+
+        # get the H matrices, which are the blocks of the precision associated to the cross-terms between observed and
+        # unobserved dimensions (page 2 of https://www.apps.stat.vt.edu/leman/VTCourses/Precision.pdf)
+        H_matrices = get_conditional_H(prec, miss_inds, obs_inds)
+
+        grads_wrt_missing_vars = []
+        for miss, obs, m_mean, o_mean, c_prec, H in zip(missing, observed, miss_means, obs_means, cond_precs, H_matrices):
+            term_1 = - np.dot(miss - m_mean, c_prec)  # (nz, k)
+            term_2 = - np.dot(H, obs - o_mean)  # (k , )
+            grad_wrt_missing_vars.append(term_1 + term_2)  # (nz, k)
+
+        return grads_wrt_missing_vars  # n-length list of arrays with shape (nz, k)
+
 
     def sample(self, n):
         """ Sample from a truncated multivariate normal with rejection sampling with uniform proposal (note: this won't scale)
