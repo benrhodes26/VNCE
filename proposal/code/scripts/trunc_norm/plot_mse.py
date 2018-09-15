@@ -36,7 +36,7 @@ rc('ytick', labelsize=10)
 parser = ArgumentParser(description='plot relationship between fraction of training data missing and final mean-squared error for'
                                     'a truncated normal model trained with VNCE', formatter_class=ArgumentDefaultsHelpFormatter)
 parser.add_argument('--save_dir', type=str, default='~/masters-project-non-code/experiments/trunc-norm/')
-parser.add_argument('--exp_name', type=str, default='5d-vlr0.1-nz=10-final/', help='name of set of experiments this one belongs to')
+parser.add_argument('--exp_name', type=str, default='test/', help='name of set of experiments this one belongs to')  # 5d-vlr0.1-nz=10-final
 parser.add_argument('--load_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm/')
 # parser.add_argument('--load_dir', type=str, default='~/masters-project-non-code/experimental-results/trunc-norm/')
 

@@ -1346,7 +1346,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         return grad_log_model_wrt_nn_outputs  # (len(nn_outputs), nz, n)
 
     def grad_log_wrt_z(self, U, Z, miss_mask):
-        """ grad of log_model w.r.t to variational parameters alpha
+        """ grad of log_model w.r.t to the latent variables z
 
         :param U: array (n, d)
             observed data

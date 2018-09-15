@@ -3,126 +3,181 @@
 This module provides classes for loading datasets and iterating over batches of
 data points.
 """
+import sys
+code_dir = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/code'
+code_dir_2 = '/home/ben/masters-project/ben-rhodes-masters-project/proposal/code'
+if code_dir not in sys.path:
+    sys.path.append(code_dir)
+if code_dir_2 not in sys.path:
+    sys.path.append(code_dir_2)
 
 import numpy as np
+import time
+
+from collections import OrderedDict
+from copy import deepcopy
+from matplotlib import pyplot as plt
+from numpy import random as rnd
+from plot import *
+from scipy.optimize import minimize, check_grad
+from utils import validate_shape, average_log_likelihood, take_closest
+
+DEFAULT_SEED = 1083463236
 
 
 class DataProvider(object):
-    """Generic data provider."""
+    """Data provider for VNCE experiments"""
 
-    def __init__(self, inputs, targets, batch_size, max_num_batches=-1,
-                 shuffle_order=True, rng=None):
+    def __init__(self,
+                 train_data,
+                 val_data,
+                 noise_samples,
+                 noise_to_data_ratio,
+                 num_latent_per_data,
+                 variational_noise,
+                 train_missing_data_mask=None,
+                 val_missing_data_mask=None,
+                 noise_miss_mask=None,
+                 use_cdi=False,
+                 use_reparam_trick=False,
+                 X_means=None,
+                 Y_means=None,
+                 use_minibatches=False,
+                 batch_size=None,
+                 rng=None):
         """Create a new data provider object.
-        Args:
-            inputs (ndarray): Array of data input features of shape
-                (num_data, input_dim).
-            targets (ndarray): Array of data output targets of shape
-                (num_data, output_dim) or (num_data,) if output_dim == 1.
-            batch_size (int): Number of data points to include in each batch.
-            max_num_batches (int): Maximum number of batches to iterate over
-                in an epoch. If `max_num_batches * batch_size > num_data` then
-                only as many batches as the data can be split into will be
-                used. If set to -1 all of the data will be used.
-            shuffle_order (bool): Whether to randomly permute the order of
-                the data before each epoch.
-            rng (RandomState): A seeded random number generator.
         """
-        self.inputs = inputs
-        self.targets = targets
-        if batch_size < 1:
-            raise ValueError('batch_size must be >= 1')
-        self._batch_size = batch_size
-        if max_num_batches == 0 or max_num_batches < -1:
-            raise ValueError('max_num_batches must be -1 or > 0')
-        self._max_num_batches = max_num_batches
-        self._update_num_batches()
-        self.shuffle_order = shuffle_order
-        self._current_order = np.arange(inputs.shape[0])
-        if rng is None:
-            rng = np.random.RandomState(DEFAULT_SEED)
-        self.rng = rng
-        self.new_epoch()
-
-    @property
-    def batch_size(self):
-        """Number of data points to include in each batch."""
-        return self._batch_size
-
-    @batch_size.setter
-    def batch_size(self, value):
-        if value < 1:
-            raise ValueError('batch_size must be >= 1')
-        self._batch_size = value
-        self._update_num_batches()
-
-    @property
-    def max_num_batches(self):
-        """Maximum number of batches to iterate over in an epoch."""
-        return self._max_num_batches
-
-    @max_num_batches.setter
-    def max_num_batches(self, value):
-        if value == 0 or value < -1:
-            raise ValueError('max_num_batches must be -1 or > 0')
-        self._max_num_batches = value
-        self._update_num_batches()
-
-    def _update_num_batches(self):
-        """Updates number of batches to iterate over."""
-        # maximum possible number of batches is equal to number of whole times
-        # batch_size divides in to the number of data points which can be
-        # found using integer division
-        possible_num_batches = self.inputs.shape[0] // self.batch_size
-        if self.max_num_batches == -1:
-            self.num_batches = possible_num_batches
+        self.nu = noise_to_data_ratio
+        self.nz = num_latent_per_data
+        self.variational_noise = variational_noise
+        self.use_cdi = use_cdi
+        self.use_reparam_trick = use_reparam_trick
+        self.train_miss_mask = train_missing_data_mask
+        self.val_miss_mask = val_missing_data_mask
+        self.noise_miss_mask = noise_miss_mask
+        if self.train_miss_mask is not None:
+            self.val_data = deepcopy(val_data * (1 - self.val_miss_mask))
+            if use_cdi:
+                # we are using the CDI algorithm, and so fill in all missing vals with global means
+                self.train_data = deepcopy(train_data * (1 - self.train_miss_mask) + X_means * self.train_miss_mask)
+                self.noise_samples = deepcopy(noise_samples)  # could use global noise means, but this works too
+            else:
+                self.train_data = deepcopy(train_data * (1 - self.train_miss_mask))
+                self.noise_samples = deepcopy(noise_samples * (1 - self.noise_miss_mask))
         else:
-            self.num_batches = min(self.max_num_batches, possible_num_batches)
+            self.train_data = deepcopy(train_data)
+            self.val_data = deepcopy(val_data)
+            self.noise_samples = deepcopy(noise_samples)
 
-    def __iter__(self):
-        """Implements Python iterator interface.
-        This should return an object implementing a `next` method which steps
-        through a sequence returning one element at a time and raising
-        `StopIteration` when at the end of the sequence. Here the object
-        returned is the DataProvider itself.
-        """
-        return self
+        self.use_minibatches = use_minibatches
+        self.X = None
+        self.Y = None
+        if not self.use_minibatches:
+            self.X = deepcopy(self.train_data)
+            self.Y = deepcopy(self.noise_samples)
+        self.X_mask = None
+        self.Y_mask = None
+
+        self.batch_size = batch_size
+        if batch_size:
+            self.batches_per_epoch = int(len(self.train_data) / self.batch_size)
+        self.current_batch_id = 0
+        self.current_epoch = 0
+        self.current_loss = None
+
+        self.E_ZX = None  # samples from a simple 'base' distribution needed if using reparameterisation trick
+        self.ZX = None
+        self.ZY = None
+
+        self.resample_from_variational_noise = True
+        self.val_mode = False
+        if rng:
+            self.rng = rng
+        else:
+            self.rng = np.random.RandomState(DEFAULT_SEED)
+
+
+    def next_minibatch(self):
+        if self.current_batch_id % self.batches_per_epoch == 0:
+            self.new_epoch()
+            self.current_batch_id = 0
+
+        batch_start = self.current_batch_id * self.batch_size
+        self.batch_slice = slice(batch_start, batch_start + self.batch_size)
+        noise_batch_start = int(batch_start * self.nu)
+        self.noise_batch_slice = slice(noise_batch_start, noise_batch_start + int(self.batch_size * self.nu))
+
+        self.X = deepcopy(self.train_data[self.batch_slice])
+        self.Y = deepcopy(self.noise_samples[self.noise_batch_slice])
+
+        if self.train_miss_mask is not None:
+            self.set_masks_for_batch()
+
+        self.current_batch_id += 1
+        self.resample_from_variational_noise = True
+
+    def set_masks_for_batch(self):
+        global_X_mask = deepcopy(self.train_miss_mask[self.batch_slice])
+        global_Y_mask = deepcopy(self.noise_miss_mask[self.noise_batch_slice])
+
+        if not self.use_cdi:
+            self.X_mask = global_X_mask
+            self.Y_mask = global_Y_mask
+        else:
+            # For each row of X & Y, if the row contains at least one zero, randomly choose one of these zeros to keep,
+            # and fill in the rest with the 'global mean' from the observed data/noise
+            self.X_mask = np.zeros_like(self.X)
+            self.Y_mask = np.zeros((self.X.shape[0], self.nu, self.X.shape[1]))
+            for i in range(len(self.X_mask)):
+                row_i = global_X_mask[i]
+                # get indices of all missing dimensions except 1 (randomly chosen)
+                miss_indices = np.where(row_i == 1)[0]
+                if miss_indices.size > 0:
+                    if miss_indices.size > 1:
+                        throw = np.random.randint(0, len(miss_indices))
+                        throw_index = miss_indices[throw]
+                    else:
+                        throw_index = miss_indices[0]
+                    self.X_mask[i, throw_index] = 1
+                    self.Y_mask[i, :, throw_index] = 1
+            self.Y_mask = self.Y_mask.reshape(-1, self.X.shape[1])
 
     def new_epoch(self):
-        """Starts a new epoch (pass through data), possibly shuffling first."""
-        self._curr_batch = 0
-        if self.shuffle_order:
-            self.shuffle()
+        """Shuffle data X and noise Y and print current loss"""
+        n, d = self.train_data.shape
+        data_perm = rnd.permutation(n)
+        self.train_data = deepcopy(self.train_data[data_perm])
 
-    def __next__(self):
-        return self.next()
+        if self.train_miss_mask is not None:
+            self.train_miss_mask = deepcopy(self.train_miss_mask[data_perm])
+            # noise samples are grouped in nu-sized chunks that are missing the same features
+            # we need to keep this grouping when we shuffle the data
+            new_samples = deepcopy(self.noise_samples)
+            new_mask = deepcopy(self.noise_miss_mask)
+            new_samples = new_samples.reshape(n, self.nu, d)
+            new_mask = new_mask.reshape(n, self.nu, d)
+            self.noise_samples = new_samples[data_perm].reshape(self.noise_samples.shape)
+            self.noise_miss_mask = new_mask[data_perm].reshape(self.noise_samples.shape)
+        else:
+            noise_perm = rnd.permutation(len(self.noise_samples))
+            self.noise_samples = deepcopy(self.noise_samples[noise_perm])
 
-    def reset(self):
-        """Resets the provider to the initial state."""
-        inv_perm = np.argsort(self._current_order)
-        self._current_order = self._current_order[inv_perm]
-        self.inputs = self.inputs[inv_perm]
-        self.targets = self.targets[inv_perm]
-        self.new_epoch()
+        print('epoch {}: J1 = {}'.format(self.current_epoch, self.current_loss))
+        self.current_epoch += 1
 
-    def shuffle(self):
-        """Randomly shuffles order of data."""
-        perm = self.rng.permutation(self.inputs.shape[0])
-        self._current_order = self._current_order[perm]
-        self.inputs = self.inputs[perm]
-        self.targets = self.targets[perm]
+    def resample_latents_if_necessary(self):
+        if (self.ZX is None) or (self.ZY is None) or self.resample_from_variational_noise:
+            if self.use_reparam_trick:
+                # sample E from the 'base' distribution when using reparameterisation trick
+                self.E_ZX = self.variational_noise.sample_E(self.nz, self.X_mask)
+                self.ZX = self.variational_noise.get_Z_samples_from_E(self.nz, self.E_ZX, self.X, self.X_mask)
+            else:
+                self.ZX = self.variational_noise.sample(self.nz, self.X, self.X_mask)
+            self.ZY = self.variational_noise.sample(self.nz, self.Y, self.Y_mask)
+            self.resample_from_variational_noise = False
 
-    def next(self):
-        """Returns next data batch or raises `StopIteration` if at end."""
-        if self._curr_batch + 1 > self.num_batches:
-            # no more batches in current iteration through data set so start
-            # new epoch ready for another pass and indicate iteration is at end
-            self.new_epoch()
-            raise StopIteration()
-        # create an index slice corresponding to current batch number
-        batch_slice = slice(self._curr_batch * self.batch_size,
-                            (self._curr_batch + 1) * self.batch_size)
-        inputs_batch = self.inputs[batch_slice]
-        targets_batch = self.targets[batch_slice]
-        self._curr_batch += 1
-        return inputs_batch, targets_batch
-
+            if (self.use_cdi) and (not self.val_mode):
+                # for the missing dimensions we just sampled, replace their value in the global dataset with the mean
+                # of their respective conditional distribution
+                self.train_data[self.batch_slice] = deepcopy(self.ZX.mean(0) + (1 - self.X_mask) * self.train_data[self.batch_slice])
+                self.noise_samples[self.noise_batch_slice] = deepcopy(self.ZY.mean(0) + (1 - self.Y_mask) * self.noise_samples[self.noise_batch_slice])

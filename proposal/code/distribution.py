@@ -593,7 +593,7 @@ class MissingDataProductOfTruncNormsPosterior(Distribution):
         assert np.all((array != 0) == (new_mask != 0)), 'non-zero elements of array are inconsistent with the missing data mask'
 
 
-class MissingDataNormal(Distribution):
+class MissingDataLogNormal(Distribution):
 
     def __init__(self, mean, chol, rng=None):
         self.mean_len = len(mean)
@@ -617,10 +617,11 @@ class MissingDataNormal(Distribution):
             missing = get_missing_variables(Z, miss_mask)
             means, precs, _ = self.get_conditional_params(U, miss_mask)  # lists of arrays
 
-            # vals = np.zeros(Z.shape[:2])  # (nz, n)
-            vals = []
+            vals = np.zeros(Z.shape[:2])  # (nz, n)
             for i in range(len(means)):
                 z = missing[i]  # (nz, k)
+                if z.size == 0:
+                    continue
                 mean = means[i]  # (k, )
                 prec = precs[i]  # (k, k)
                 trunc = truncation_mask[:, i]  # (nz, )
@@ -640,13 +641,12 @@ class MissingDataNormal(Distribution):
                     val = trunc * val + (1 - trunc) * -15  # should be -infty, but -15 avoids numerical issues
                 else:
                     val = trunc * np.exp(val)
-            # vals[:, i] = val
-            vals.append(val)
+            vals[:, i] = val
 
         # return vals  # (nz, n)
         return np.array(vals).T
 
-    def grad_log_wrt_alpha(self, U, e, Z_bar):
+    def grad_log_wrt_alpha(self, U, E, Z_bar):
         return self._grad_wrt_alpha(U, E, Z_bar, model=False)
 
     def grad_log_model_wrt_alpha(self, U, E, Z_bar):
@@ -678,6 +678,8 @@ class MissingDataNormal(Distribution):
         grads = np.zeros(grad_shape)
         for i, vars in enumerate(zip(E, Z_bar, cond_means, cond_precs, H_matrices, obs, obs_means, miss_inds, obs_inds)):
             e, z_bar, mean, c_prec, H, o, o_mean, i_miss, i_obs = vars  # e & z_bar have shape (nz, k).
+            if e.size == 0:
+                continue
             nz, k = e.shape
 
             prec_chol = np.linalg.cholesky(prec)  # (k, k)
@@ -767,7 +769,7 @@ class MissingDataNormal(Distribution):
     def sample_E(self, nz, miss_mask):
         miss_row_i, miss_col_i = np.nonzero(miss_mask)
         missing_indices = self._group_cols_by_row(miss_row_i, miss_col_i, self.mean_len)  # list of missing dims for each datapoint
-        return [self.rng.randn(0, 1, size=(nz, len(m))) for m in missing_indices]
+        return [self.rng.randn(nz, len(m)) for m in missing_indices]
 
     def get_Z_samples_from_E(self, nz, E, U, miss_mask, nn_outputs=None):
         """Converts samples E from some simple base distribution to samples from posterior
@@ -780,6 +782,9 @@ class MissingDataNormal(Distribution):
         Z = np.transpose(Z, (1, 0, 2))  # (n, nz, d)
         for i, triple in enumerate(zip(E, means, precs)):
             e, mean, prec = triple
+            if e.size == 0:
+                continue
+
             chol = np.linalg.cholesky(prec)
             chol_T = chol.T
             z_minus_mean = np.linalg.solve(chol_T, e.T)  # (k, nz)
@@ -815,10 +820,13 @@ class MissingDataNormal(Distribution):
         H_matrices = get_conditional_H(precision, miss_inds, obs_inds)
         cond_means = []
         for obs, o_mean, m_mean, prec, H in zip(observed, obs_means, miss_means, cond_precs, H_matrices):
-            prec_inv =  np.linalg.inv(prec)  #todo: is there a better method? lingalg solve?
-            A =  - np.dot(prec_inv, H)  # (num_missing, num_observed)
-            cond_mean = m_mean + np.dot(A, obs - o_mean)  # (num_missing, )
-            cond_means.append(cond_mean)
+            if m_mean.size == 0:
+                cond_means.append(np.array([]))
+            else:
+                prec_inv =  np.linalg.inv(prec)  #todo: is there a better method? lingalg solve?
+                A =  - np.dot(prec_inv, H)  # (num_missing, num_observed)
+                cond_mean = m_mean + np.dot(A, obs - o_mean)  # (num_missing, )
+                cond_means.append(cond_mean)
 
         return cond_means, cond_precs, H_matrices
 
