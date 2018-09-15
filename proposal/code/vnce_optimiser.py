@@ -678,12 +678,13 @@ class MonteCarloVnceLoss:
         raise NotImplementedError
 
     def rejection_reparam_trick_grad_wrt_nn_output(self, nn_outputs):
-        reparam_grad, a, _, grad_log_var_dist = self.reparam_trick_grad_wrt_nn_output(nn_outputs, separate_terms=True)  # (n, nn_output_dim)
-        grad_log_proposal = self.variational_noise.grad_log_proposal(nn_ouputs)  # (output_dim, nz, n)
-
-        score_function_term = np.mean((grad_log_var_dist - grad_log_proposal) * np.log(a), axis=1).T  # (n, output_dim)
-
-        return reparam_grad + score_function_term  # (n, output_dim)
+        raise NotImplementedError
+        # reparam_grad, a, _, grad_log_var_dist = self.reparam_trick_grad_wrt_nn_output(nn_outputs, separate_terms=True)  # (n, nn_output_dim)
+        # grad_log_proposal = self.variational_noise.grad_log_proposal(nn_ouputs)  # (output_dim, nz, n)
+        #
+        # score_function_term = np.mean((grad_log_var_dist - grad_log_proposal) * np.log(a), axis=1).T  # (n, output_dim)
+        #
+        # return reparam_grad + score_function_term  # (n, output_dim)
 
     def take_grad_step_wrt_theta(self, learning_rate):
         if self.use_neural_model:
