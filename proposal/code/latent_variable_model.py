@@ -1356,13 +1356,17 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
             gradient of log_model w.r.t alpha (which is non-zero due to the reparameterisation trick)
         """
         mean, prec, _, _ = self.get_mean_and_lprecision()
-        miss_inds, obs_inds = get_missing_and_observed_indices(miss_mask, self.mean_len)
+        miss_inds, obs_inds = get_missing_and_observed_indices(miss_mask, miss_mask.shape[0])
 
         # get precision of conditional for each data point
         cond_precs = get_conditional_precisions(prec, miss_inds)  # list of cond precisions
 
         # For each datapoint, get vector of missing & observed data and correpsonding means
-        missing = [z[:, miss_inds] for z, miss_inds in zip(Z, miss_inds)]  # each array is of shape (nz, k)
+        Z_T = np.transpose(Z, (1, 0, 2))
+        try:
+            missing = [z[:, miss_ind] for z, miss_ind in zip(Z_T, miss_inds)]  # each array is of shape (nz, k)
+        except IndexError:
+            print('hey!')
         observed = [v[obs_inds] for v, obs_inds in zip(U, obs_inds)]
         miss_means = [mean[miss_inds] for miss_inds in miss_inds]
         obs_means = [mean[obs_inds] for obs_inds in obs_inds]
@@ -1375,7 +1379,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         for miss, obs, m_mean, o_mean, c_prec, H in zip(missing, observed, miss_means, obs_means, cond_precs, H_matrices):
             term_1 = - np.dot(miss - m_mean, c_prec)  # (nz, k)
             term_2 = - np.dot(H, obs - o_mean)  # (k , )
-            grad_wrt_missing_vars.append(term_1 + term_2)  # (nz, k)
+            grads_wrt_missing_vars.append(term_1 + term_2)  # (nz, k)
 
         return grads_wrt_missing_vars  # n-length list of arrays with shape (nz, k)
 

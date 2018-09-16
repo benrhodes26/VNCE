@@ -26,6 +26,7 @@ from vnce_optimiser import VemOptimiser, SgdEmStep, MonteCarloVnceLoss
 
 n = 10
 d = 2
+len_alpha = d * (d + 3) / 2
 
 true_mean = np.array([1., 1.])
 # true_chol = np.identity(d) * 0.1  # choleksy of precision
@@ -35,6 +36,7 @@ data_dist = MissingDataUnnormalisedTruncNorm(scaling_param=np.array([0.]), mean=
 
 # generate synthetic data
 X_train = data_dist.sample(n)  # (n, d)
+X_mask = rnd.uniform(0, 1, X_train.shape) < 0.5
 Z = np.zeros((1, ) + X_train.shape)
 
 # init the model p(x, z)

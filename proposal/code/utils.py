@@ -8,6 +8,7 @@ import pickle
 from bisect import bisect_left
 from collections import OrderedDict
 from copy import deepcopy
+from itertools import product
 from matplotlib import pyplot as plt
 
 
@@ -213,7 +214,7 @@ def get_missing_variables(Z, miss_mask):
     """
     d = Z.shape[-1]
     miss_row_i, miss_col_i = np.nonzero(miss_mask)
-    missing_indices = group_cols_by_row(miss_row_i, miss_col_i, d)  # list of missing dims for each datapoint
+    missing_indices = group_cols_by_row(miss_row_i, miss_col_i, miss_mask.shape[0])  # list of missing dims for each datapoint
     Z_T = np.transpose(Z, [1, 0, 2])
     missing = [z[:, miss_inds] for z, miss_inds in zip(Z_T, missing_indices)]
     return missing
@@ -251,9 +252,10 @@ def reshape_condprec_to_prec_shape(condprec, missing_inds, nz, d):
     prec = np.zeros((nz, d, d))  # (nz, d, d)
     missing_coords = list(product(missing_inds, missing_inds))
     missing_coords = list(zip(*missing_coords))
-    prec[:, missing_coords[0], missing_coords[1]] = cond_prec.reshape(nz, -1)
+    prec[:, missing_coords[0], missing_coords[1]] = condprec.reshape(nz, -1)
 
     return prec  # (nz, d, d)
+
 
 def get_conditional_H(prec, miss_inds, obs_inds):
     """ Returns H as defined in page 2 of https://www.apps.stat.vt.edu/leman/VTCourses/Precision.pdf
@@ -277,13 +279,14 @@ def get_conditional_H(prec, miss_inds, obs_inds):
 
     return H_matrices
 
-def group_cols_by_row(row_i, col_i, d):
+
+def group_cols_by_row(row_i, col_i, n):
     """row_i is a list of row_coords, col_i the corresponding col coords.
     Return a list, where the ith element is a list of the column coords for the ith row (may be empty).
     """
     missing_coords = list(zip(row_i, col_i))
     groups = []
-    for row in range(d):
+    for row in range(n):
         cols = []
         for coord in missing_coords:
             if coord[0] == row:
@@ -296,16 +299,23 @@ def group_cols_by_row(row_i, col_i, d):
 
     return groups
 
-def get_missing_and_observed_indices(miss_mask, d):
+
+def get_missing_and_observed_indices(miss_mask, n):
     miss_row_i, miss_col_i = np.nonzero(miss_mask)
     obs_row_i, obs_col_i = np.nonzero(1 - miss_mask)
-    missing_indices = group_cols_by_row(miss_row_i, miss_col_i, d)  # list of missing dims for each datapoint
-    obs_indices = group_cols_by_row(obs_row_i, obs_col_i, d)  # list of observed dims for each datapoint
+    missing_indices = group_cols_by_row(miss_row_i, miss_col_i, n)  # list of missing dims for each datapoint
+    obs_indices = group_cols_by_row(obs_row_i, obs_col_i, n)  # list of observed dims for each datapoint
 
     return missing_indices, obs_indices
 
+
 def get_lower_tri_halving_diag(A):
     B = np.tril(A)
-    i_diag = np.diag_indices_from(B)
-    B[i_diag] = B[i_diag] * 0.5
+    i_diag = np.diag_indices_from(B[0])
+
+    B[:, i_diag[0], i_diag[1]] = B[:, i_diag[0], i_diag[1]] * 0.5
     return B
+
+def dot_2d_with_3d(A, B):
+    B_T = np.transpose(B, (0, 2, 1))
+    return np.transpose(np.dot(B_T, A.T), (0, 2, 1))  # (nz, k, k)

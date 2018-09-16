@@ -389,8 +389,8 @@ def generate_mask(args):
     train_miss_mask = args.rng.uniform(0, 1, args.X_train.shape) < args.frac_missing
 
     # discard any data points that are all-zero
-    args.train_missing_data_mask = train_miss_mask[~np.all(train_miss_mask == 0, axis=1)]
-    args.X_train = args.X_train[~np.all(args.X_train == 0, axis=1)]
+    args.train_missing_data_mask = train_miss_mask[~np.all(train_miss_mask == 1, axis=1)]
+    args.X_train = args.X_train[~np.all(train_miss_mask == 1, axis=1)]
     args.n = len(args.X_train)
     print("There are {} remaining data points after discarding".format(args.n))
 

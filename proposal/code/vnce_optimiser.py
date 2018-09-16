@@ -588,14 +588,14 @@ class MonteCarloVnceLoss:
         X, ZX, E_ZX, X_mask = self.dp.X, self.dp.ZX, self.dp.E_ZX, self.dp.X_mask
         if self.use_reparam_trick:
             grad_logmodel_wrt_z  = self.model.grad_log_wrt_z(X, ZX, X_mask)
-            grad_log_model = self.variational_noise.grad_log_model_wrt_alpha(X, E_ZX, grad_logmodel_wrt_z)
-            grad_log_var_dist = self.variational_noise.grad_log_wrt_alpha(X, E_ZX, grad_logmodel_wrt_z)
+            grad_log_model = self.variational_noise.grad_log_model_wrt_alpha(X, E_ZX, grad_logmodel_wrt_z, X_mask)
+            grad_log_var_dist = self.variational_noise.grad_log_wrt_alpha(X, E_ZX, grad_logmodel_wrt_z, X_mask)
             grad_wrt_alpha = self.reparam_trick_grad(grad_log_model, grad_log_var_dist)  # (n, len(alpha))
         elif self.use_score_function:
             raise NotImplementedError
         else:
             print('No method has been specified to backpropagate through stochastic nodes in the loss function.'
-                  'Set one of the following to True: "use_reparam_trick", "use_score_function")
+                  'Set one of the following to True: "use_reparam_trick", "use_score_function"')
             raise ValueError
 
         return np.mean(grads_wrt_alpha, axis=0)  # (len(alpha), )
