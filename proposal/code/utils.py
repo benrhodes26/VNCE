@@ -102,7 +102,7 @@ def evaluate_loss_at_param(loss_function, theta=None, alpha=None):
 
 
 def get_av_log_like(thetas, model, X):
-    av_log_like = np.zeros(len(thetas))
+    av_log_like = np.zeros(len(thetas), dtype='float64')
     for i in np.arange(0, len(thetas)):
         model.theta = deepcopy(thetas[i])
         av_log_like[i] = average_log_likelihood(model, X)
@@ -249,16 +249,33 @@ def reshape_condprec_to_prec_shape(condprec, missing_inds, nz, d):
     :return: array
         array containing elements of condprec, but reshaped to match original prec
     """
-    prec = np.zeros((nz, d, d))  # (nz, d, d)
+    prec = np.zeros((nz, d, d), dtype='float64')  # (nz, d, d)
     missing_coords = list(product(missing_inds, missing_inds))
     missing_coords = list(zip(*missing_coords))
     prec[:, missing_coords[0], missing_coords[1]] = condprec.reshape(nz, -1)
 
     return prec  # (nz, d, d)
 
+def reshape_H_to_prec_shape(H, missing_inds, obs_inds, nz, d):
+    """Reshapes H into full precision (H is as defined in page 2 of https://www.apps.stat.vt.edu/leman/VTCourses/Precision.pdf)
+    :param H: array
+    :param missing_inds:
+        array containing missing dims
+    :param d: int
+        original prec is d x d (so d is number of variables, both missing and observed)
+    :return: array
+        array containing elements of condprec, but reshaped to match original prec
+    """
+    prec = np.zeros((nz, d, d), dtype='float64')  # (nz, d, d)
+    H_coords = list(product(missing_inds, obs_inds))
+    H_coords = list(zip(*H_coords))
+    prec[:, H_coords[0], H_coords[1]] = H.reshape(nz, -1)
+
+    return prec  # (nz, d, d)
+
 
 def get_conditional_H(prec, miss_inds, obs_inds):
-    """ Returns H as defined in page 2 of https://www.apps.stat.vt.edu/leman/VTCourses/Precision.pdf
+    """Get H as defined in page 2 of https://www.apps.stat.vt.edu/leman/VTCourses/Precision.pdf)
     :param prec: array
         a single precision matrix
     :param miss_inds:

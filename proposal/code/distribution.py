@@ -617,7 +617,7 @@ class MissingDataLogNormal(Distribution):
             missing = get_missing_variables(Z, miss_mask)
             means, precs, _, _ = self.get_conditional_params(U, miss_mask)  # lists of arrays
 
-            vals = np.zeros(Z.shape[:2])  # (nz, n)
+            vals = np.zeros(Z.shape[:2], dtype='float64')  # (nz, n)
             for i in range(len(means)):
                 z = missing[i]  # (nz, k)
                 if z.size == 0:
@@ -641,10 +641,9 @@ class MissingDataLogNormal(Distribution):
                     val = trunc * log_probs + (1 - trunc) * -15  # should be -infty, but -15 avoids numerical issues
                 else:
                     val = trunc * np.exp(log_probs)
-            vals[:, i] = val
+                vals[:, i] = val
 
-        # return vals  # (nz, n)
-        return np.array(vals).T
+        return np.array(vals).T  # (n, nz)
 
     def grad_log_wrt_alpha(self, U, E, Z_bar, miss_mask):
         return self._grad_wrt_alpha(U, E, Z_bar, miss_mask, model=False)
@@ -677,7 +676,7 @@ class MissingDataLogNormal(Distribution):
         len_alpha = len(self.alpha)
         nz = E[0].shape[0]
         grad_shape = (len_alpha, nz, V.shape[0])
-        grads = np.zeros(grad_shape)
+        grads = np.zeros(grad_shape, dtype='float64')
         for i, vars in enumerate(zip(E, Z_bar, cond_means, cond_precs, H_matrices, obs, obs_means, miss_inds, obs_inds)):
             e, z_bar, mean, prec, H, o, o_mean, i_miss, i_obs = vars  # e & z_bar have shape (nz, k).
             if e.size == 0:
@@ -693,53 +692,52 @@ class MissingDataLogNormal(Distribution):
             if model:
                 W_bar = np.exp(np.dot(cov_chol, e.T).T + mean) * z_bar  # (nz, k)
             else:
-                W_bar = - np.ones_like(z_bar)
-            L_bar = np.einsum('ij,ik->ijk', e, W_bar)  # outer product. (nz, k, k)
+                W_bar = - np.ones_like(z_bar, dtype='float64')
+            L_bar = np.einsum('ij,ik->ijk', W_bar, e)  # outer product. (nz, k, k)
+            L_bar_T = np.transpose(L_bar, (0, 2, 1))
+            A = -dot_2d_with_3d(cov_chol, L_bar_T)  # (nz, k, k)
+            prec_chol_bar = np.dot(A, cov_chol)
 
-            # A = get_lower_tri_halving_diag(np.dot(cov_chol_T, L_bar))  # (nz, k, k)
-            A = dot_2d_with_3d(cov_chol_T, L_bar)  # (nz, k, k)
+            A = dot_2d_with_3d(prec_chol_T, prec_chol_bar)  # (nz, k, k)
             A = get_lower_tri_halving_diag(A)  # (nz, k, k)
-            B = np.dot(A, prec_chol_T)  # (nz, k, k)
-            R = dot_2d_with_3d(prec_chol_T, B)  # (nz, k, k)
-            R_T = np.transpose(R, (0, 2, 1))  # (nz, k, k)
-            diag = np.ones_like(R)
-            diag *= np.identity(k)
-            R_diag = R * diag
-            cov_bar = R + R_T - R_diag  # (nz, k, k)
+            B = np.dot(A, cov_chol_T)  # (nz, k, k)
+            R = dot_2d_with_3d(cov_chol, B)  # (nz, k, k)
+            prec_bar_1 = R
 
-            C = np.dot(cov_bar, cov)  # (nz, k, k)
-            prec_bar_1 = - dot_2d_with_3d(cov, C)  # (nz, k, k)
-
-            D_bar = - np.einsum('ij,k->ijk', W_bar, o - o_mean)  # outer product. (nz, k, k)
+            D_bar = - np.einsum('ij,k->ijk', W_bar, o - o_mean)  # outer product. (nz, k, d-k)
             cov_bar_2 = np.dot(D_bar, H.T)
             E = np.dot(cov_bar_2, cov)  # (nz, k, k)
             prec_bar_2 = - dot_2d_with_3d(cov, E)  # (nz, k, k)
 
             prec_bar = prec_bar_1 + prec_bar_2  # (nz, k, k)
+            if not model:
+                prec_bar += 0.5 * cov
             prec_bar_T = np.transpose(prec_bar, (0, 2, 1))
+            diag = np.ones_like(prec_bar, dtype='float64')
+            diag *= np.identity(k)
             prec_bar_diag = prec_bar * diag
             F = prec_bar + prec_bar_T - prec_bar_diag  # (nz, k, k)
-            if not model:
-                F += 0.5 * cov
+
             i_diag = np.diag_indices_from(prec)
             F[:, i_diag[0], i_diag[1]] *= prec[i_diag]  # since our parametrisation of the diag is in log-domain
 
             F_reshape = reshape_condprec_to_prec_shape(F, i_miss, nz, self.mean_len)  # (nz, d, d)
-            tril = np.ones((self.mean_len, self.mean_len))
+            tril = np.ones((self.mean_len, self.mean_len), dtype='float64')
             tril = np.tril(tril)
             S1_bar = F_reshape * tril  # (nz, d, d)
 
-            H_bar = dot_2d_with_3d(cov.T, D_bar)  # (nz, k, k)
-            S2_bar = reshape_condprec_to_prec_shape(H_bar, i_miss, nz, self.mean_len)  # (nz, d, d)
-            S2_bar = np.transpose(H_bar, (0, 2, 1))  # should be lower triangular now
+            H_bar = dot_2d_with_3d(cov.T, D_bar)  # (nz, k, d-k)
+            S2_bar = reshape_H_to_prec_shape(H_bar, i_miss, i_obs, nz, self.mean_len)  # (nz, d, d)
+            S2_bar = np.transpose(S2_bar, (0, 2, 1))  # should be lower triangular now
 
             S_bar = S1_bar + S2_bar  # (nz, d, d)
             tril =  np.tril_indices(self.mean_len)
             S_bar = S_bar[:, tril[0], tril[1]]  # (nz, -1)
             S_bar = S_bar.T  # (-1, nz)
 
-            mean_bar = np.zeros((nz, self.mean_len))
-            mean_bar[:, i_miss] = W_bar.reshape(-1)  # (nz, d)
+            mean_bar = np.zeros((nz, self.mean_len), dtype='float64')
+            # mean_bar[:, i_miss] = W_bar.reshape(-1)  # (nz, d)
+            mean_bar[:, i_miss] = W_bar  # (nz, d)
             mean_bar = mean_bar.T  # (d, nz)
 
             G = np.dot(H.T, cov)  # (d-k, k)
@@ -750,6 +748,120 @@ class MissingDataLogNormal(Distribution):
             grads[:, :, i] = alpha_bar
 
         return grads  # (len(alpha), nz, n)
+
+
+    # def _test_grad_wrt_alpha(self, U, E, Z_bar, miss_mask, model=True):
+    #     """Depending on whether model=True, compute one of two gradient terms required to update alpha.
+    #
+    #     When model=True, compute nabla_alpha(log_model)
+    #     Otherwise, compute nabla_alpha(log_var_dist)
+    #
+    #     :param U: array (n, d)
+    #         observed data (zeros represent missing vals)
+    #     :param E: list of arrays
+    #         n-length list of arrays of shape (nz, k), where k varies
+    #     :param Z_bar: list of arrays
+    #         n-length list of arrays of shape (nz, k), where k varies.
+    #         contains gradients of missing vals w.r.t log_model
+    #     :param model: boolean
+    #         if True, returns the grad w.r.t log_model. Else, returns the grad w.r.t log_var_dist
+    #     :returns array (len(alpha), nz, n)
+    #         gradients of log_model w.r.t variational params alpha
+    #     """
+    #     V = deepcopy(U * (1 - miss_mask))  # (n, d)
+    #     cond_means, cond_precs, H_matrices, inds_and_means = self.get_conditional_params(U, miss_mask)
+    #     miss_inds, obs_inds, obs, obs_means, miss_mean = inds_and_means
+    #
+    #     len_alpha = len(self.alpha)
+    #     nz = E[0].shape[0]
+    #     grad_shape = (len_alpha, nz, V.shape[0])
+    #     grads = np.zeros(grad_shape, dtype='float64')
+    #     for i, vars in enumerate(zip(E, Z_bar, cond_means, cond_precs, H_matrices, obs, obs_means, miss_inds, obs_inds)):
+    #         e, z_bar, mean, prec, H, o, o_mean, i_miss, i_obs = vars  # e & z_bar have shape (nz, k).
+    #         if e.size == 0:
+    #             continue
+    #         nz, k = e.shape
+    #
+    #         prec_chol = np.linalg.cholesky(prec)  # (k, k)
+    #         prec_chol_T = prec_chol.T  # (k, k)
+    #         cov_chol_T = np.linalg.inv(prec_chol)  # (k, k)
+    #         cov_chol = cov_chol_T.T  # (k, k)
+    #         cov = np.dot(cov_chol, cov_chol_T)  # (k, k)
+    #
+    #         if model:
+    #             z_minus_mean = np.dot(cov_chol, e.T).T
+    #             mean = np.array([[1., 1.]])
+    #             # z_minus_mean = np.array([[1., 1.]])
+    #             W_bar = np.exp(z_minus_mean + mean) * z_bar  # (nz, k)
+    #         else:
+    #             W_bar = - np.ones_like(z_bar, dtype='float64')
+    #         L_bar = np.einsum('ij,ik->ijk', e, W_bar)  # outer product. (nz, k, k)
+    #
+    #         # A = dot_2d_with_3d(cov_chol_T, L_bar)  # (nz, k, k)
+    #         # A = get_lower_tri_halving_diag(A)  # (nz, k, k)
+    #         # B = np.dot(A, prec_chol_T)  # (nz, k, k)
+    #         # R = dot_2d_with_3d(prec_chol, B)  # (nz, k, k)
+    #         # R_T = np.transpose(R, (0, 2, 1))  # (nz, k, k)
+    #         # diag = np.ones_like(R, dtype='float64')
+    #         # diag *= np.identity(k)
+    #         # R_diag = R * diag
+    #         # cov_bar = R + R_T - R_diag  # (nz, k, k)
+    #
+    #         L_bar_T = np.transpose(L_bar, (0, 2, 1))
+    #         A = -dot_2d_with_3d(cov_chol, L_bar_T)  # (nz, k, k)
+    #         prec_chol_bar = np.dot(A, cov_chol)
+    #
+    #         A = dot_2d_with_3d(prec_chol_T, prec_chol_bar)  # (nz, k, k)
+    #         A = get_lower_tri_halving_diag(A)  # (nz, k, k)
+    #         B = np.dot(A, cov_chol_T)  # (nz, k, k)
+    #         R = dot_2d_with_3d(cov_chol, B)  # (nz, k, k)
+    #         R_T = np.transpose(R, (0, 2, 1))  # (nz, k, k)
+    #         diag = np.ones_like(R, dtype='float64')
+    #         diag *= np.identity(k)
+    #         R_diag = R * diag
+    #         prec_bar_1 = R + R_T - R_diag  # (nz, k, k)
+    #
+    #         D_bar = - np.einsum('ij,k->ijk', W_bar, o - o_mean)  # outer product. (nz, k, d-k)
+    #         cov_bar_2 = np.dot(D_bar, H.T)
+    #         E = np.dot(cov_bar_2, cov)  # (nz, k, k)
+    #         prec_bar_2 = - dot_2d_with_3d(cov, E)  # (nz, k, k)
+    #
+    #         prec_bar = prec_bar_1 + prec_bar_2  # (nz, k, k)
+    #         prec_bar = prec_bar_1  # (nz, k, k)
+    #         prec_bar_T = np.transpose(prec_bar, (0, 2, 1))
+    #         prec_bar_diag = prec_bar * diag
+    #         F = prec_bar + prec_bar_T - prec_bar_diag  # (nz, k, k)
+    #         if not model:
+    #             F += 0.5 * cov
+    #         i_diag = np.diag_indices_from(prec)
+    #         F[:, i_diag[0], i_diag[1]] *= prec[i_diag]  # since our parametrisation of the diag is in log-domain
+    #
+    #         F_reshape = reshape_condprec_to_prec_shape(F, i_miss, nz, self.mean_len)  # (nz, d, d)
+    #         tril = np.ones((self.mean_len, self.mean_len), dtype='float64')
+    #         tril = np.tril(tril)
+    #         S1_bar = F_reshape * tril  # (nz, d, d)
+    #
+    #         H_bar = dot_2d_with_3d(cov.T, D_bar)  # (nz, k, d-k)
+    #         S2_bar = reshape_H_to_prec_shape(H_bar, i_miss, i_obs, nz, self.mean_len)  # (nz, d, d)
+    #         S2_bar = np.transpose(S2_bar, (0, 2, 1))  # should be lower triangular now
+    #
+    #         S_bar = S1_bar + S2_bar  # (nz, d, d)
+    #         tril =  np.tril_indices(self.mean_len)
+    #         S_bar = S_bar[:, tril[0], tril[1]]  # (nz, -1)
+    #         S_bar = S_bar.T  # (-1, nz)
+    #
+    #         mean_bar = np.zeros((nz, self.mean_len), dtype='float64')
+    #         mean_bar[:, i_miss] = W_bar.reshape(-1)  # (nz, d)
+    #         mean_bar = mean_bar.T  # (d, nz)
+    #
+    #         G = np.dot(H.T, cov)  # (d-k, k)
+    #         o_mean_bar = np.dot(G, W_bar.T)  # (d-k, nz)
+    #         mean_bar[i_obs, :] = o_mean_bar  # (d, nz)
+    #
+    #         alpha_bar = np.concatenate((mean_bar, S_bar), axis=0)  # (len(alpha), nz)
+    #         grads[:, :, i] = alpha_bar
+    #
+    #     return grads  # (len(alpha), nz, n)
 
 
     def grad_of_Z_wrt_nn_outputs(self, nn_outputs, E):
@@ -796,10 +908,40 @@ class MissingDataLogNormal(Distribution):
             z_minus_mean = np.linalg.solve(chol_T, e.T)  # (k, nz)
             z = np.exp(z_minus_mean.T + mean)  # (nz, k)
             miss_inds = np.nonzero(Z[i, 0, :])  # k-length tuples
-            Z[i, :, :][:, miss_inds[0]] *= z
+            try:
+                Z[i, :, :][:, miss_inds[0]] *= z
+            except ValueError:
+                print('hey!')
 
         Z = np.transpose(Z, (1, 0, 2))  # (nz, n, d)
         return Z  # (nz, n, d)
+
+
+    # def _test_get_Z_samples_from_E(self, nz, E, U, miss_mask, nn_outputs=None):
+    #     """Converts samples E from some simple base distribution to samples from posterior
+    #
+    #     This function is needed to apply the reparametrization trick. E is from a uniform distribution
+    #     and Z is from a product of truncated normals whose location & scale depend on a neural network with parameters alpha.
+    #     """
+    #     means, precs, _, _ = self.get_conditional_params(U, miss_mask)  # lists of arrays
+    #     Z = np.tile(miss_mask, (nz, 1, 1)) * 1.
+    #     Z = np.transpose(Z, (1, 0, 2))  # (n, nz, d)
+    #     for i, triple in enumerate(zip(E, means, precs)):
+    #         e, mean, prec = triple
+    #         if e.size == 0:
+    #             continue
+    #
+    #         chol = np.linalg.cholesky(prec)
+    #         chol_T = chol.T
+    #         z_minus_mean = np.linalg.solve(chol_T, e.T)  # (k, nz)
+    #         mean = np.array([[1., 1.]])
+    #         # z_minus_mean = np.array([[1.], [1.]])
+    #         z = np.exp(z_minus_mean.T + mean)  # (nz, k)
+    #         miss_inds = np.nonzero(Z[i, 0, :])  # k-length tuples
+    #         Z[i, :, :][:, miss_inds[0]] *= z
+    #
+    #     Z = np.transpose(Z, (1, 0, 2))  # (nz, n, d)
+    #     return Z  # (nz, n, d)
 
     def get_conditional_params(self, U, miss_mask):
         """Get the means and variances of the conditional normal distributions over latent dimensions
@@ -849,12 +991,12 @@ class MissingDataLogNormal(Distribution):
         return miss_inds, obs_inds, observed, obs_means, miss_means
 
     def get_joint_pretruncated_params(self, mean=None, lprec=None):
-        """Get mean and precision of the joint multivariate normal"""
+        """Get mean and precision of the log dist (which is a joint multivariate normal)"""
         if mean is None:
             mean, lprec = deepcopy(self.alpha[:self.mean_len]), deepcopy(self.alpha[self.mean_len:])
 
         # symmetric decomposition of precision (with diagonal in log-domain)
-        lprecision = np.zeros((self.mean_len, self.mean_len))
+        lprecision = np.zeros((self.mean_len, self.mean_len), dtype='float64')
         ilower = np.tril_indices(self.mean_len)
         lprecision[ilower] = lprec
 

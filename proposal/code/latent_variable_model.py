@@ -1248,9 +1248,9 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
     def __call__(self, U, Z, miss_mask, log=False):
         """Evaluate unnormalised model
 
-        :param U: array (n, k)
+        :param U: array (n, d)
             observed data (elements set to 0 are missing)
-        :param Z: array (nz, n, k)
+        :param Z: array (nz, n, d)
             filled-in missing data (elements set to 0 are not missing)
         :param log: boolean
             if True, return value of logphi, where phi is the unnormalised model
@@ -1276,7 +1276,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
 
         :param U: array (n, d)
              either data or noise for NCE
-        :param Z: (nz, n, m) or (n, m)
+        :param Z: (nz, n, d) or (n, d)
             m-dimensional latent variable samples. nz per datapoint in U.
         :return grad: array (len(theta), nz, n)
         """
@@ -1284,10 +1284,10 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)
 
         mean, precision, lprecision, precision_diag = self.get_mean_and_lprecision()
-        ones_with_prec_diag = np.ones_like(precision)  # (d , d)
+        ones_with_prec_diag = np.ones_like(precision, dtype='float64')  # (d , d)
         ones_with_prec_diag[np.diag_indices_from(ones_with_prec_diag)] = precision_diag
 
-        grad_wrt_to_scaling_param = np.ones((1, ) + Z.shape[:2]) * -1  # (1, nz, n)
+        grad_wrt_to_scaling_param = np.ones((1, ) + Z.shape[:2], dtype='float64') * -1  # (1, nz, n)
 
         V_centred = V - mean  # (nz, n, d)
         grad_wrt_to_mean = np.dot(V_centred, precision.T)  # (nz, n, d)
@@ -1363,10 +1363,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
 
         # For each datapoint, get vector of missing & observed data and correpsonding means
         Z_T = np.transpose(Z, (1, 0, 2))
-        try:
-            missing = [z[:, miss_ind] for z, miss_ind in zip(Z_T, miss_inds)]  # each array is of shape (nz, k)
-        except IndexError:
-            print('hey!')
+        missing = [z[:, miss_ind] for z, miss_ind in zip(Z_T, miss_inds)]  # each array is of shape (nz, k)
         observed = [v[obs_inds] for v, obs_inds in zip(U, obs_inds)]
         miss_means = [mean[miss_inds] for miss_inds in miss_inds]
         obs_means = [mean[obs_inds] for obs_inds in obs_inds]
@@ -1377,7 +1374,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
 
         grads_wrt_missing_vars = []
         for miss, obs, m_mean, o_mean, c_prec, H in zip(missing, observed, miss_means, obs_means, cond_precs, H_matrices):
-            term_1 = - np.dot(miss - m_mean, c_prec)  # (nz, k)
+            term_1 = - np.dot(c_prec, (miss - m_mean).T).T  # (nz, k)
             term_2 = - np.dot(H, obs - o_mean)  # (k , )
             grads_wrt_missing_vars.append(term_1 + term_2)  # (nz, k)
 
@@ -1399,7 +1396,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         high_proposal = mean + (5 * stds)
         k = len(mean)
 
-        sample = np.zeros((n, k))
+        sample = np.zeros((n, k), dtype='float64')
         total_n_accepted = 0
         expected_num_proposals_per_accept = (100 / (2 * np.pi))**(k/2)
         proposal_size = int(4 * n * expected_num_proposals_per_accept)
@@ -1452,7 +1449,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         mean, lprec = deepcopy(self.theta[1:1+self.mean_len]), deepcopy(self.theta[1+self.mean_len:])
 
         # lower-triangular cholesky decomposition of the precision
-        lprecision = np.zeros((self.mean_len, self.mean_len))
+        lprecision = np.zeros((self.mean_len, self.mean_len), dtype='float64')
         ilower = np.tril_indices(self.mean_len)
         lprecision[ilower] = lprec
 
