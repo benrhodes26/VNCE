@@ -374,7 +374,7 @@ class MonteCarloVnceLoss:
                  data_provider,
                  model,
                  noise,
-                 variational_noise,
+                 variational_dist,
                  noise_to_data_ratio,
                  use_neural_model=False,
                  use_neural_variational_noise=False,
@@ -392,7 +392,7 @@ class MonteCarloVnceLoss:
         """
         :param model: see latent_variable_model.py for examples
         :param noise: see distribution.py for examples
-        :param variational_noise: see distribution.py for examples
+        :param variational_dist: see distribution.py for examples
         :param noise_to_data_ratio: int
         :param separate_terms: boolean
             the VNCE loss function is made of two terms: an expectation w.r.t the data and an expectation w.r.t the noise.
@@ -401,7 +401,7 @@ class MonteCarloVnceLoss:
         self.dp = data_provider
         self.model = model
         self.noise = noise
-        self.variational_noise = variational_noise
+        self.variational_dist = variational_dist
         self.nu = noise_to_data_ratio
         self.model_regulariser = regulariser
         self.reg_param_indices = reg_param_indices
@@ -531,7 +531,7 @@ class MonteCarloVnceLoss:
             Z = Z.reshape((1, ) + Z.shape)
 
         log_model = self.model(U, Z, mask, log=True)
-        log_q = self.variational_noise(Z, U, log=True)
+        log_q = self.variational_dist(Z, U, log=True)
         log_noise = self.noise(U, Z, log=True)
         val = log_model - log_q - log_noise
         validate_shape(val.shape, (Z.shape[0], Z.shape[1]))
@@ -632,8 +632,8 @@ class MonteCarloVnceLoss:
         X, ZX, E_ZX, X_mask = self.dp.X, self.dp.ZX, self.dp.E_ZX, self.dp.X_mask
         if self.use_reparam_trick:
             grad_logmodel_wrt_z  = self.model.grad_log_wrt_z(X, ZX, X_mask)
-            grad_log_model = self.variational_noise.grad_log_model_wrt_alpha(X, E_ZX, grad_logmodel_wrt_z, X_mask)  # (len(alpha), nz, n)
-            grad_log_var_dist = self.variational_noise.grad_log_wrt_alpha(X, E_ZX, grad_logmodel_wrt_z, X_mask)  # (len(alpha), nz, n)
+            grad_log_model = self.variational_dist.grad_log_model_wrt_alpha(X, E_ZX, grad_logmodel_wrt_z, X_mask)  # (len(alpha), nz, n)
+            grad_log_var_dist = self.variational_dist.grad_log_wrt_alpha(X, E_ZX, grad_logmodel_wrt_z, X_mask)  # (len(alpha), nz, n)
             grad_wrt_alpha = self.reparam_trick_grad(grad_log_model, grad_log_var_dist)  # (n, len(alpha))
         elif self.use_score_function:
             raise NotImplementedError
@@ -643,7 +643,6 @@ class MonteCarloVnceLoss:
             raise ValueError
 
         return np.mean(grad_wrt_alpha, axis=0)  # (len(alpha), )
-
 
     def grad_wrt_variational_noise_nn_params(self, next_minibatch=False):
         """ returns gradient of parameters of neural network parametrising the variational distribution
@@ -655,7 +654,7 @@ class MonteCarloVnceLoss:
         self.dp.resample_latents_if_necessary()
 
         X = deepcopy(self.dp.X)
-        activations = self.variational_noise.nn.fprop(X)
+        activations = self.variational_dist.nn.fprop(X)
         nn_outputs = activations[-1]
         if self.use_reparam_trick:
             grad_wrt_nn_outputs = self.reparam_trick_grad_wrt_nn_output(nn_outputs)
@@ -666,7 +665,7 @@ class MonteCarloVnceLoss:
                   'Set one of the following to True: "use_reparam_trick", "use_score_function"')
             raise ValueError
 
-        grads_wrt_params = self.variational_noise.nn.grads_wrt_params(activations, grad_wrt_nn_outputs)
+        grads_wrt_params = self.variational_dist.nn.grads_wrt_params(activations, grad_wrt_nn_outputs)
         return grads_wrt_params
 
     def reparam_trick_grad_wrt_nn_output(self, nn_outputs, separate_terms=False):
@@ -678,14 +677,14 @@ class MonteCarloVnceLoss:
         :return: array (n, nn_output_dim)
         """
         X, ZX, E_ZX, X_mask = self.dp.X, self.dp.ZX, self.dp.E_ZX, self.dp.X_mask
-        grad_z_wrt_nn_outputs = self.variational_noise.grad_of_Z_wrt_nn_outputs(nn_outputs=nn_outputs, E=E_ZX)
+        grad_z_wrt_nn_outputs = self.variational_dist.grad_of_Z_wrt_nn_outputs(nn_outputs=nn_outputs, E=E_ZX)
         grad_log_model = self.model.grad_log_wrt_nn_outputs(U=X,
                                                             Z=ZX,
                                                             grad_z_wrt_nn_outputs=grad_z_wrt_nn_outputs,
                                                             miss_mask=X_mask)  # (out_dim, nz, n)
-        grad_log_var_dist = self.variational_noise.grad_log_wrt_nn_outputs(nn_outputs=nn_outputs,
-                                                                           grad_z_wrt_nn_outputs=grad_z_wrt_nn_outputs,
-                                                                           Z=ZX)  # (out_dim, nz, n)
+        grad_log_var_dist = self.variational_dist.grad_log_wrt_nn_outputs(nn_outputs=nn_outputs,
+                                                                          grad_z_wrt_nn_outputs=grad_z_wrt_nn_outputs,
+                                                                          Z=ZX)  # (out_dim, nz, n)
         return self.reparam_trick_grad(grad_log_model, grad_log_var_dist, separate_terms)
 
     def reparam_trick_grad(self, grad_log_model, grad_log_var_dist, separate_terms=False):
@@ -707,7 +706,6 @@ class MonteCarloVnceLoss:
             return term1 - term2, a, grad_log_model, grad_log_var_dist
         else:
             return term1 - term2  # (n, output_dim)
-
 
     def score_function_grad_wrt_nn_output(self, nn_outputs):
         print('The score function grad for VNCE can be derived, but we have yet to implement it')
@@ -738,7 +736,7 @@ class MonteCarloVnceLoss:
             inds = np.arange(len(self.get_alpha()))
         if self.use_neural_variational_noise:
             grad_wrt_nn_params = self.grad_wrt_variational_noise_nn_params(next_minibatch=True)
-            for param, grad in zip(self.variational_noise.nn.params, grad_wrt_nn_params):
+            for param, grad in zip(self.variational_dist.nn.params, grad_wrt_nn_params):
                 param += learning_rate * grad
         else:
             grad = self.grad_wrt_alpha(next_minibatch=True)
@@ -812,9 +810,9 @@ class MonteCarloVnceLoss:
 
     def get_alpha(self):
         if self.use_neural_variational_noise:
-            alpha = deepcopy(self.variational_noise.nn.params)
+            alpha = deepcopy(self.variational_dist.nn.params)
         else:
-            alpha = deepcopy(self.variational_noise.alpha)
+            alpha = deepcopy(self.variational_dist.alpha)
 
         return alpha
 
@@ -829,9 +827,9 @@ class MonteCarloVnceLoss:
 
     def set_alpha(self, new_alpha):
         if self.use_neural_variational_noise:
-            self.variational_noise.nn.params = new_alpha
+            self.variational_dist.nn.params = new_alpha
         else:
-            self.variational_noise.alpha = deepcopy(new_alpha)
+            self.variational_dist.alpha = deepcopy(new_alpha)
         self.dp.resample_from_variational_noise = True
 
     def __repr__(self):

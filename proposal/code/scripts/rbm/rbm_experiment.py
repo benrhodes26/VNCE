@@ -194,7 +194,7 @@ if args.loss == 'MonteCarloVnceLoss':
                                             data=X_train,
                                             noise=noise_dist,
                                             noise_samples=Y,
-                                            variational_noise=var_dist,
+                                            variational_dist=var_dist,
                                             noise_to_data_ratio=args.nu,
                                             num_latent_per_data=args.nz,
                                             use_minibatches=use_sgd,

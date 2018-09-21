@@ -113,7 +113,7 @@ def make_vnce_loss_function(args, noise=None):
                                             val_data=args.X_val,
                                             noise=noise,
                                             noise_samples=Y,
-                                            variational_noise=var_dist,
+                                            variational_dist=var_dist,
                                             noise_to_data_ratio=args.nu,
                                             num_latent_per_data=args.nz,
                                             use_neural_model=False,
@@ -300,11 +300,11 @@ def iteratively_learn_noise(args):
     args.vnce_optimiser = make_vnce_optimiser(args)
     args.vnce_optimiser.fit(loss_function=args.vnce_loss,
                             theta0=deepcopy(args.vnce_loss.model.theta),
-                            alpha0=deepcopy(args.vnce_loss.variational_noise.nn.params),
+                            alpha0=deepcopy(args.vnce_loss.variational_dist.nn.params),
                             stop_threshold=args.stop_threshold,
                             max_num_em_steps=args.max_num_em_steps)
 
-    var_dist_0 = deepcopy(args.vnce_loss.variational_noise)
+    var_dist_0 = deepcopy(args.vnce_loss.variational_dist)
     noise_i = LearnedVariationalNoise(var_dist_0, args.rng)
     args.models.append(deepcopy(args.vnce_loss.model))
     args.learned_noises.append(deepcopy(noise_i))
@@ -313,14 +313,14 @@ def iteratively_learn_noise(args):
         vnce_loss_i = make_vnce_loss_function(args, noise=noise_i)
         args.vnce_optimiser.fit(loss_function=vnce_loss_i,
                                 theta0=deepcopy(vnce_loss_i.model.theta),
-                                alpha0=deepcopy(vnce_loss_i.variational_noise.nn.params),
+                                alpha0=deepcopy(vnce_loss_i.variational_dist.nn.params),
                                 stop_threshold=args.stop_threshold,
                                 max_num_em_steps=args.max_num_em_steps)
 
         args.models.append(deepcopy(vnce_loss_i.model))
         args.learned_noises.append(deepcopy(noise_i))
 
-        var_dist_i = deepcopy(vnce_loss_i.variational_noise)
+        var_dist_i = deepcopy(vnce_loss_i.variational_dist)
         noise_i = LearnedVariationalNoise(var_dist_i, args.rng)
 
 
