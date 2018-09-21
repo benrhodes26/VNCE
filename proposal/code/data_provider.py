@@ -162,7 +162,7 @@ class DataProvider(object):
             noise_perm = rnd.permutation(len(self.noise_samples))
             self.noise_samples = deepcopy(self.noise_samples[noise_perm])
 
-        print('epoch {}: J1 = {}'.format(self.current_epoch, self.current_loss))
+        # print('epoch {}: J1 = {}'.format(self.current_epoch, self.current_loss))
         self.current_epoch += 1
 
     def resample_latents_if_necessary(self):

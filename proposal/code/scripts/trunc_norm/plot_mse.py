@@ -9,6 +9,7 @@ for code_dir in code_dirs:
     if code_dir not in sys.path:
         sys.path.append(code_dir)
 
+import matplotlib as matplotlib
 import numpy as np
 import pickle
 import seaborn as sns
@@ -16,7 +17,6 @@ import seaborn as sns
 from distribution import RBMLatentPosterior, MultivariateBernoulliNoise, ChowLiuTree
 from fully_observed_models import VisibleRestrictedBoltzmannMachine
 from latent_variable_model import RestrictedBoltzmannMachine
-import matplotlib as matplotlib
 from plot import *
 from utils import take_closest, mean_square_error
 
@@ -25,6 +25,7 @@ from copy import deepcopy
 from matplotlib import pyplot as plt
 from matplotlib import rc
 from numpy import random as rnd
+
 
 rc('lines', linewidth=0.5)
 rc('font', size=8)
@@ -38,7 +39,6 @@ parser = ArgumentParser(description='plot relationship between fraction of train
 parser.add_argument('--save_dir', type=str, default='~/masters-project-non-code/experiments/trunc-norm/')
 parser.add_argument('--exp_name', type=str, default='test/', help='name of set of experiments this one belongs to')  # 5d-vlr0.1-nz=10-final
 parser.add_argument('--load_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm/')
-# parser.add_argument('--load_dir', type=str, default='~/masters-project-non-code/experimental-results/trunc-norm/')
 
 args = parser.parse_args()
 main_load_dir = os.path.join(args.load_dir, args.exp_name)
@@ -74,43 +74,52 @@ def get_mses(true_theta, theta, d):
     true_b = np.dot(true_prec, true_mean)
     b = np.dot(prec, mean)
 
-    #mean_mse = mean_square_error(true_mean, mean)
+    mean = mean_square_error(true_mean, mean)
     mean_b = mean_square_error(true_b, b)
     diag_prec_mse = mean_square_error(true_prec_diag, prec_diag)
     n_diag_prec_mse = mean_square_error(true_prec_n_diag, prec_n_diag)
-    # diag_prec_mse = mean_square_error(true_cov_diag, cov_diag)
-    # n_diag_prec_mse = mean_square_error(true_cov_n_diag, cov_n_diag)
-    # diag_prec_mse = mean_square_error(np.ones_like(A_diag), A_diag)
-    # n_diag_prec_mse = mean_square_error(np.ones_like(A_ndiag), A_ndiag)
 
-    return mean_b, diag_prec_mse, n_diag_prec_mse
+    return mean, mean_b, diag_prec_mse, n_diag_prec_mse
 
 
-all_vnce1_means_mses = []
-all_vnce2_means_mses = []
-all_nce1_means_mses = []
-all_nce2_means_mses = []
-all_nce3_means_mses = []
+def plot_errorbar_helper(ax, fracs, mses, deciles, label, color):
+    median = np.median(np.array(mses), 0)
+    ax.errorbar(fracs, median, yerr=[median - deciles[0], deciles[1] - median], fmt='o',
+                markersize=1, linestyle='None', label=label, color=color, capsize=1, capthick=1)
 
-all_vnce1_diag_mses = []
-all_vnce2_diag_mses = []
-all_nce1_diag_mses = []
-all_nce2_diag_mses = []
-all_nce3_diag_mses = []
 
-all_vnce1_ndiag_mses = []
-all_vnce2_ndiag_mses = []
-all_nce1_ndiag_mses = []
-all_nce2_ndiag_mses = []
-all_nce3_ndiag_mses = []
+def plot_errorbar(ax, fracs, mses, label, color):
+    deciles = np.percentile(mses, percentiles, axis=0)
+    plot_errorbar_helper(ax, fracs, mses, deciles, label, color)
+
+def plot_theta0_mses(axs, theta0_mu_mse, theta0_mean_mse, theta0_diag_mse, theta0_ndiag_mse):
+    axs[0].plot((0, 1), (theta0_mu_mse, theta0_mu_mse), linestyle='--')
+    axs[1].plot((0, 1), (theta0_mean_mse, theta0_mean_mse), linestyle='--')
+    axs[2].plot((0, 1), (theta0_diag_mse, theta0_diag_mse), linestyle='--')
+    axs[3].plot((0, 1), (theta0_ndiag_mse, theta0_ndiag_mse), linestyle='--')
+
+
+# methods = ['VNCE (true)', 'VNCE (cdi approx)', 'VNCE (lognormal approx)', 'NCE (means fill in)', 'NCE (noise fill in)', 'NCE (random fill in)']
+# filenames = ['vnce_results1.npz', 'vnce_results2.npz', 'vnce_results3.npz', 'nce_results1.npz', 'nce_results2.npz', 'nce_results3.npz']
+# colors = ['black', 'blue', 'purple', 'orange', 'green', 'red']
+methods = ['VNCE (true)', 'VNCE (lognormal approx)', 'NCE (means fill in)', 'NCE (noise fill in)']
+filenames = ['vnce_results1.npz', 'vnce_results3.npz', 'nce_results1.npz', 'nce_results2.npz']
+colors = ['black', 'purple', 'orange', 'green']
+num_methods = len(methods)
+
+all_mus = [[] for i in range(num_methods)]
+all_means = [[] for i in range(num_methods)]
+all_diags = [[] for i in range(num_methods)]
+all_ndiags = [[] for i in range(num_methods)]
+
 for outer_file in os.listdir(main_load_dir):
     load_dir = os.path.join(main_load_dir, outer_file, 'best')
 
+    frac_to_mu_mse_dict = {}
     frac_to_mean_mse_dict = {}
     frac_to_prec_diag_mse_dict = {}
     frac_to_n_prec_diag_mse_dict = {}
 
-    # frac_to_rel_mse_dict = {}
     # loop through files and get mses of vnce and nce with 0s
     sorted_fracs = sorted([float(f[4:]) for f in os.listdir(load_dir)])
     sorted_dirs = ['frac' + str(frac) for frac in sorted_fracs]
@@ -120,129 +129,58 @@ for outer_file in os.listdir(main_load_dir):
         frac = float(config.frac_missing)
         d = config.d
 
-        loaded = np.load(os.path.join(exp, 'theta0_and_theta_true.npz'))
-        loaded1 = np.load(os.path.join(exp, 'vnce_results1.npz'))
-        loaded2 = np.load(os.path.join(exp, 'vnce_results2.npz'))
-        loaded3 = np.load(os.path.join(exp, 'nce_results1.npz'))
-        loaded4 = np.load(os.path.join(exp, 'nce_results2.npz'))
-        loaded5 = np.load(os.path.join(exp, 'nce_results3.npz'))
-        true_theta = loaded['theta_true']
-        vnce_theta1 = loaded1['vnce_thetas'][-1][-1]
-        vnce_theta2 = loaded2['vnce_thetas'][-1][-1]
-        nce_means_theta = loaded3['nce_thetas'][-1]
-        nce_noise_theta = loaded4['nce_thetas'][-1]
-        nce_rnd_theta = loaded5['nce_thetas'][-1]
+        loaded_theta = np.load(os.path.join(exp, 'theta0_and_theta_true.npz'))
+        true_theta = loaded_theta['theta_true']
+        theta0 = loaded_theta['theta0']
+        if i == 0:
+            theta0_mu_mse, theta0_mean_mse, theta0_diag_mse, theta0_ndiag_mse = get_mses(true_theta, theta0, d)
 
-        vnce_mean_mse1, vnce_diag_prec_mse1, vnce_n_diag_prec_mse1 = get_mses(true_theta, vnce_theta1, d)
-        vnce_mean_mse2, vnce_diag_prec_mse2, vnce_n_diag_prec_mse2 = get_mses(true_theta, vnce_theta2, d)
-        nce1_mean_mse, nce1_diag_prec_mse, nce1_n_diag_prec_mse = get_mses(true_theta, nce_means_theta, d)
-        nce2_mean_mse, nce2_diag_prec_mse, nce2_n_diag_prec_mse = get_mses(true_theta, nce_noise_theta, d)
-        nce3_mean_mse, nce3_diag_prec_mse, nce3_n_diag_prec_mse = get_mses(true_theta, nce_rnd_theta, d)
+        for filename in filenames:
+            loaded = np.load(os.path.join(exp, filename))
+            if filename[0] == 'v':
+                theta = loaded['vnce_thetas'][-1][-1]
+            else:
+                theta = loaded['nce_thetas'][-1]
 
-        frac_to_mean_mse_dict[str(frac)] = [vnce_mean_mse1, vnce_mean_mse2, nce1_mean_mse, nce2_mean_mse, nce3_mean_mse]
-        frac_to_prec_diag_mse_dict[str(frac)] = [vnce_diag_prec_mse1, vnce_diag_prec_mse2, nce1_diag_prec_mse, nce2_diag_prec_mse, nce3_diag_prec_mse]
-        frac_to_n_prec_diag_mse_dict[str(frac)] = [vnce_n_diag_prec_mse1, vnce_n_diag_prec_mse2, nce1_n_diag_prec_mse, nce2_n_diag_prec_mse, nce3_n_diag_prec_mse]
-
-        # frac_to_rel_mse_dict[str(frac)] = [1, nce_missing_mse / vnce_mse, nce_missing_mse_2 / vnce_mse]
+            mu_mse, mean_mse, diag_prec_mse, n_diag_prec_mse = get_mses(true_theta, theta, d)
+            frac_to_mu_mse_dict.setdefault(str(frac), []).append(mu_mse)
+            frac_to_mean_mse_dict.setdefault(str(frac), []).append(mean_mse)
+            frac_to_prec_diag_mse_dict.setdefault(str(frac), []).append(diag_prec_mse)
+            frac_to_n_prec_diag_mse_dict.setdefault(str(frac), []).append(n_diag_prec_mse)
 
     fracs = sorted([float(key) for key in frac_to_mean_mse_dict.keys()])
 
-    all_vnce1_means_mses.append([frac_to_mean_mse_dict[str(frac)][0] for frac in fracs])
-    all_vnce2_means_mses.append([frac_to_mean_mse_dict[str(frac)][1] for frac in fracs])
-    all_nce1_means_mses.append([frac_to_mean_mse_dict[str(frac)][2] for frac in fracs])
-    all_nce2_means_mses.append([frac_to_mean_mse_dict[str(frac)][3] for frac in fracs])
-    all_nce3_means_mses.append([frac_to_mean_mse_dict[str(frac)][4] for frac in fracs])
-
-    all_vnce1_diag_mses.append([frac_to_prec_diag_mse_dict[str(frac)][0] for frac in fracs])
-    all_vnce2_diag_mses.append([frac_to_prec_diag_mse_dict[str(frac)][1] for frac in fracs])
-    all_nce1_diag_mses.append([frac_to_prec_diag_mse_dict[str(frac)][2] for frac in fracs])
-    all_nce2_diag_mses.append([frac_to_prec_diag_mse_dict[str(frac)][3] for frac in fracs])
-    all_nce3_diag_mses.append([frac_to_prec_diag_mse_dict[str(frac)][4] for frac in fracs])
-
-    all_vnce1_ndiag_mses.append([frac_to_n_prec_diag_mse_dict[str(frac)][0] for frac in fracs])
-    all_vnce2_ndiag_mses.append([frac_to_n_prec_diag_mse_dict[str(frac)][1] for frac in fracs])
-    all_nce1_ndiag_mses.append([frac_to_n_prec_diag_mse_dict[str(frac)][2] for frac in fracs])
-    all_nce2_ndiag_mses.append([frac_to_n_prec_diag_mse_dict[str(frac)][3] for frac in fracs])
-    all_nce3_ndiag_mses.append([frac_to_n_prec_diag_mse_dict[str(frac)][4] for frac in fracs])
-
-# rel_vnce_mses = [frac_to_rel_mse_dict[str(frac)][0] for frac in fracs]
-# rel_nce_missing_mses = [frac_to_rel_mse_dict[str(frac)][1] for frac in fracs]
-# rel_nce_missing_mses_2 = [frac_to_rel_mse_dict[str(frac)][2] for frac in fracs]
-
-
-def plot_errorbar(ax, fracs, mses, deciles, method, color):
-    median = np.median(np.array(mses), 0)
-    ax.errorbar(fracs, median, yerr=[median - deciles[0], deciles[1] - median], fmt='o',
-                markersize=1, linestyle='None', label=method, color=color, capsize=1, capthick=1)
+    for i in range(num_methods):
+        all_mus[i].append([frac_to_mu_mse_dict[str(frac)][i] for frac in fracs])
+        all_means[i].append([frac_to_mean_mse_dict[str(frac)][i] for frac in fracs])
+        all_diags[i].append([frac_to_prec_diag_mse_dict[str(frac)][i] for frac in fracs])
+        all_ndiags[i].append([frac_to_n_prec_diag_mse_dict[str(frac)][i] for frac in fracs])
 
 
 sns.set_style("darkgrid")
-fig, axs = plt.subplots(3, 1, figsize=(5.7, 8.5))
+fig, axs = plt.subplots(4, 1, figsize=(5.7, 10))
 axs = axs.ravel()
 fracs = np.array(fracs)
-fracs1 = fracs - 0.015
-fracs2 = fracs - 0.0075
-fracs3 = fracs
-fracs4 = fracs + 0.0075
-fracs5 = fracs + 0.015
+x_positions = []
+for i in np.linspace(-0.015, 0.015, num_methods):
+    x_positions.append(fracs + i)
 percentiles = [25, 75]
 
-ax = axs[0]
-vnce1_means_deciles = np.percentile(all_vnce1_means_mses, percentiles, axis=0)
-vnce2_means_deciles = np.percentile(all_vnce2_means_mses, percentiles, axis=0)
-nce1_means_deciles = np.percentile(all_nce1_means_mses, percentiles, axis=0)
-nce2_means_deciles = np.percentile(all_nce2_means_mses, percentiles, axis=0)
-nce3_means_deciles = np.percentile(all_nce3_means_mses, percentiles, axis=0)
+for i in range(num_methods):
+    plot_errorbar(axs[0], x_positions[i], all_mus[i], methods[i], colors[i])
+    plot_errorbar(axs[1], x_positions[i], all_means[i], methods[i], colors[i])
+    plot_errorbar(axs[2], x_positions[i], all_diags[i], methods[i], colors[i])
+    plot_errorbar(axs[3], x_positions[i], all_ndiags[i], methods[i], colors[i])
+    plot_theta0_mses(axs, theta0_mu_mse, theta0_mean_mse, theta0_diag_mse, theta0_ndiag_mse)
 
-plot_errorbar(ax, fracs1, all_vnce1_means_mses, vnce1_means_deciles, 'VNCE (true)', 'black')
-plot_errorbar(ax, fracs2, all_vnce2_means_mses, vnce2_means_deciles, 'VNCE (approx)', 'blue')
-plot_errorbar(ax, fracs3, all_nce1_means_mses, nce1_means_deciles, 'NCE (means fill in)', 'orange')
-plot_errorbar(ax, fracs4, all_nce2_means_mses, nce2_means_deciles, 'NCE (noise fill in)', 'green')
-plot_errorbar(ax, fracs5, all_nce3_means_mses, nce3_means_deciles, 'NCE (random fill in)', 'red')
-
-ax.set_ylim(0, 2)
-ax.set_title(r'\textbf{b}')
-ax.set_xlabel('fraction of data missing')
-ax.set_ylabel('MSE')
-ax.legend(loc='upper left')
-
-ax = axs[1]
-vnce1_diag_deciles = np.percentile(all_vnce1_diag_mses, percentiles, axis=0)
-vnce2_diag_deciles = np.percentile(all_vnce2_diag_mses, percentiles, axis=0)
-nce1_diag_deciles = np.percentile(all_nce1_diag_mses, percentiles, axis=0)
-nce2_diag_deciles = np.percentile(all_nce2_diag_mses, percentiles, axis=0)
-nce3_diag_deciles = np.percentile(all_nce3_diag_mses, percentiles, axis=0)
-
-plot_errorbar(ax, fracs1, all_vnce1_diag_mses, vnce1_diag_deciles, 'VNCE (true)', 'black')
-plot_errorbar(ax, fracs2, all_vnce2_diag_mses, vnce2_diag_deciles, 'VNCE (approx)', 'blue')
-plot_errorbar(ax, fracs3, all_nce1_diag_mses, nce1_diag_deciles, 'NCE (means fill in)', 'orange')
-plot_errorbar(ax, fracs4, all_nce2_diag_mses, nce2_diag_deciles, 'NCE (noise fill in)', 'green')
-plot_errorbar(ax, fracs5, all_nce3_diag_mses, nce3_diag_deciles, 'NCE (random fill in)', 'red')
-
-ax.set_ylim(0, 0.125)
-ax.set_title('Diagonal of K')
-ax.set_xlabel('fraction of data missing')
-ax.set_ylabel('MSE')
-ax.legend(loc='upper left')
-
-ax = axs[2]
-vnce1_ndiag_deciles = np.percentile(all_vnce1_ndiag_mses, percentiles, axis=0)
-vnce2_ndiag_deciles = np.percentile(all_vnce2_ndiag_mses, percentiles, axis=0)
-nce1_ndiag_deciles = np.percentile(all_nce1_ndiag_mses, percentiles, axis=0)
-nce2_ndiag_deciles = np.percentile(all_nce2_ndiag_mses, percentiles, axis=0)
-nce3_ndiag_deciles = np.percentile(all_nce3_ndiag_mses, percentiles, axis=0)
-
-plot_errorbar(ax, fracs1, all_vnce1_ndiag_mses, vnce1_ndiag_deciles, 'VNCE (true)', 'black')
-plot_errorbar(ax, fracs2, all_vnce2_ndiag_mses, vnce2_ndiag_deciles, 'VNCE (approx)', 'blue')
-plot_errorbar(ax, fracs3, all_nce1_ndiag_mses, nce1_ndiag_deciles, 'NCE (means fill in)', 'orange')
-plot_errorbar(ax, fracs4, all_nce2_ndiag_mses, nce2_ndiag_deciles, 'NCE (noise fill in)', 'green')
-plot_errorbar(ax, fracs5, all_nce3_ndiag_mses, nce3_ndiag_deciles, 'NCE (random fill in)', 'red')
-
-ax.set_ylim(0, 0.125)
-ax.set_title('Off-diagonal of K')
-ax.set_xlabel('fraction of data missing')
-ax.set_ylabel('MSE')
-ax.legend(loc='upper left')
+titles = [r'$\mu$', r'\textbf{b}', 'Diagonal of K', 'Off-diagonal of K']
+upper_lims = [2, 10, 2, 2]
+for i, ax in enumerate(axs):
+    ax.set_ylim(0, upper_lims[i])
+    ax.set_title(titles[i])
+    ax.set_xlabel('fraction of data missing')
+    ax.set_ylabel('MSE')
+    ax.legend(loc='upper left')
 
 fig.tight_layout()
 save_fig(fig, save_dir, 'fraction_missing_vs_mse')

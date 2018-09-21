@@ -16,7 +16,7 @@ from numpy import random as rnd
 from scipy.optimize import check_grad
 from scipy.stats import norm, multivariate_normal
 
-from distribution import MissingDataLogNormal, MissingDataProductOfTruncNormNoise
+from distribution import MissingDataLogNormalPosterior, MissingDataProductOfTruncNormNoise
 from initialisers import GlorotUniformInit, ConstantInit, UniformInit, ConstantVectorInit
 from latent_variable_model import MissingDataUnnormalisedTruncNorm
 from layers import AffineLayer, ReluLayer, TanhLayer
@@ -24,9 +24,11 @@ from models import MultipleLayerModel
 from utils import *
 from vnce_optimiser import VemOptimiser, SgdEmStep, MonteCarloVnceLoss
 
-n = 2
+# eps = np.sqrt(np.finfo(float).eps)
+eps = 1e-8
+n = 10
 nz = 3
-d = 5
+d = 3
 len_alpha = int(d * (d + 3) / 2)
 
 true_mean = np.ones(d, dtype='float64') * 1.
@@ -35,31 +37,40 @@ data_dist = MissingDataUnnormalisedTruncNorm(scaling_param=np.array([0.]), mean=
 
 # generate synthetic data
 X_train = data_dist.sample(n)  # (n, d)
-# old_X_mask = rnd.uniform(0, 1, X_train.shape) < 0.5
-# X_mask = old_X_mask[~np.all(old_X_mask == 1, axis=1)]
-# X_train = X_train[~np.all(old_X_mask == 1, axis=1)]
-# n = len(X_train)
-# print("num data points remaining: {}".format(n))
-X_mask = np.zeros((n, d), dtype='float64')
-X_mask[:int(d/2), 0] = 1
-X_mask[:int(d/2), 1] = 1
-X_mask[int(d/2):, 2] = 1
-X_mask[int(d/2):, 4] = 1
+old_X_mask = rnd.uniform(0, 1, X_train.shape) < 0.5
+X_mask = old_X_mask[~np.all(old_X_mask == 1, axis=1)].astype('int')
+X_train = X_train[~np.all(old_X_mask == 1, axis=1)]
+n = len(X_train)
+print("num data points remaining: {}".format(n))
+# X_mask = np.zeros((n, d), dtype='float64')
+# X_mask[:int(n/2), 0] = 1
+# X_mask[:int(n/2), 3] = 1
+# X_mask[int(n/2): int(3*n/4), 2] = 1
+# X_mask[int(n/2): int(3*n/4), 4] = 1
+# print(X_mask)
 
 # init the model p(x, z)
 scale0 = np.array([0.])
-mean0 = np.ones(d, dtype='float64') * 2.
-a = np.diag(np.ones(d))
+# mean0 = np.ones(d, dtype='float64') * 1.2
+# a = np.diag(np.ones(d)) * 1.2
+mean0 = np.ones(d, dtype='float64') * rnd.uniform(0.5, 4)
+a = np.diag(np.ones(d)) * rnd.uniform(1, 4)
 b = np.diag(rnd.uniform(0.3, 0.5, d - 1), 1)
 prec0 = a + b + b.T
 model = MissingDataUnnormalisedTruncNorm(scaling_param=scale0, mean=mean0, precision=prec0)
 
+print('model mean: {}'.format(mean0))
+print('model prec diag: {}'.format(a))
 # init the variational distribution
-var_mean0 = np.ones(d) * 0.5
-a = np.diag(np.ones(d)) * 1.2
+# var_mean0 = np.ones(d) * 1.2
+# a = np.diag(np.ones(d)) * 1.2
+var_mean0 = np.ones(d) * rnd.uniform(0, 2)
+a = np.diag(np.ones(d)) * rnd.uniform(1, 5)
+print('var_mean0: {}'.format(var_mean0))
+print('var prec diag: {}'.format(a))
 b = np.diag(rnd.uniform(0.3, 0.5, d - 1), 1)
 var_prec0 = a + b + b.T
-var_dist = MissingDataLogNormal(mean=var_mean0, precision=var_prec0)
+var_dist = MissingDataLogNormalPosterior(mean=var_mean0, precision=var_prec0)
 alpha0 = deepcopy(var_dist.alpha)
 E = var_dist.sample_E(nz, X_mask)
 
@@ -76,7 +87,6 @@ def check_model_wrt_alpha_grad(alph, inds):
         var_dist.alpha = deepcopy(alpha)
 
         Z_from_E = var_dist.get_Z_samples_from_E(nz, E, X_train, X_mask)
-        # Z_from_E = var_dist._test_get_Z_samples_from_E(1, E, X_train, X_mask)
         val = model(X_train, Z_from_E, X_mask, log=True)  # (nz, n)
         return np.mean(val)
 
@@ -85,14 +95,12 @@ def check_model_wrt_alpha_grad(alph, inds):
         var_dist.alpha = deepcopy(alpha)
 
         Z_from_E = var_dist.get_Z_samples_from_E(nz, E, X_train, X_mask)
-        # Z_from_E = var_dist._test_get_Z_samples_from_E(1, E, X_train, X_mask)
         grad_logmodel_wrt_z = model.grad_log_wrt_z(X_train, Z_from_E, X_mask)
         grad_log_model = var_dist.grad_log_model_wrt_alpha(X_train, E, grad_logmodel_wrt_z, X_mask)  # (len(alpha), nz, n)
-        # grad_log_model = var_dist._test_grad_wrt_alpha(X_train, E, grad_logmodel_wrt_z, X_mask)  # (len(alpha), nz, n)
         grad = np.mean(grad_log_model, axis=(1,2))  # (len(alpha), )
         return grad[inds]
 
-    diff = check_grad(eval_log_model_wrt_alpha, grad_log_model_wrt_alpha, alph)
+    diff = check_grad(eval_log_model_wrt_alpha, grad_log_model_wrt_alpha, alph, epsilon=eps)
     print('{} grad finite diff: {}'.format(inds, diff))
 
 
@@ -121,7 +129,8 @@ def check_var_dist_wrt_alpha_grad(alph, inds):
         grad = np.mean(grad_log_var_dist, axis=(1,2))  # (len(alpha), )
         return grad[inds]
 
-    print('{} grad finite diff: {}'.format(inds, check_grad(eval_log_var_dist_wrt_alpha, grad_log_var_dist_wrt_alpha, alph)))
+    diff = check_grad(eval_log_var_dist_wrt_alpha, grad_log_var_dist_wrt_alpha, alph, epsilon = eps)
+    print('{} grad finite diff: {}'.format(inds, diff))
 
 
 def check_log_model_wrt_z_grad(z0):

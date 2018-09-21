@@ -219,25 +219,6 @@ def get_missing_variables(Z, miss_mask):
     missing = [z[:, miss_inds] for z, miss_inds in zip(Z_T, missing_indices)]
     return missing
 
-def get_conditional_precisions(prec, missing_inds):
-    """
-    :param prec: array
-        a single precision matrix
-    :param missing_inds:
-        list of n arrays containing missing dims for each datapoint
-    :return: list of n arrays, each of a different size.
-        The arrays are submatrices of prec that correspond to the upper-left block used when
-        calculating the conditional distribution of a multivariate Gaussian
-    """
-    cond_precs = []
-    for missing in missing_inds:
-        m = len(missing)
-        missing_coords = list(product(missing, missing))
-        missing_coords = list(zip(*missing_coords))
-        cond_precs.append(prec[missing_coords].reshape(m, m))
-
-    return cond_precs
-
 def reshape_condprec_to_prec_shape(condprec, missing_inds, nz, d):
     """
     :param prec: array
@@ -272,6 +253,26 @@ def reshape_H_to_prec_shape(H, missing_inds, obs_inds, nz, d):
     prec[:, H_coords[0], H_coords[1]] = H.reshape(nz, -1)
 
     return prec  # (nz, d, d)
+
+
+def get_conditional_precisions(prec, missing_inds):
+    """
+    :param prec: array
+        a single precision matrix
+    :param missing_inds:
+        list of n arrays containing missing dims for each datapoint
+    :return: list of n arrays, each of a different size.
+        The arrays are submatrices of prec that correspond to the upper-left block used when
+        calculating the conditional distribution of a multivariate Gaussian
+    """
+    cond_precs = []
+    for missing in missing_inds:
+        m = len(missing)
+        missing_coords = list(product(missing, missing))
+        missing_coords = list(zip(*missing_coords))
+        cond_precs.append(prec[missing_coords].reshape(m, m))
+
+    return cond_precs
 
 
 def get_conditional_H(prec, miss_inds, obs_inds):

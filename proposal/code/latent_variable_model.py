@@ -1,6 +1,9 @@
 """Module provides classes for unnormalised latent-variable models
 """
 import numpy as np
+import rpy2
+import rpy2.robjects as ro
+import rpy2.robjects.numpy2ri
 
 from abc import ABCMeta, abstractmethod
 from copy import deepcopy
@@ -9,6 +12,7 @@ from numpy.linalg import inv
 from numpy import random as rnd
 from matplotlib import pyplot as plt
 from plot import *
+from rpy2.robjects.packages import importr
 from scipy.stats import norm
 from sklearn.neighbors import KernelDensity as kd
 from utils import *
@@ -1223,7 +1227,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
     #
     #     return grad
 
-    def __init__(self, scaling_param, mean, precision, rng=None):
+    def __init__(self, scaling_param, mean, prec_type='circular', precision=None, prec_subgraph_size=None, p_prec_nzero=None, rng=None):
         """
         :param scaling_param: array (1, )
         :param mean: array (d, )
@@ -1232,10 +1236,17 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         :param rng:
         :return:
         """
-
         self.mean_len = len(mean)
 
-        # cholesky of precision with log of diagonal elements (to enforce positivity)
+        if prec_type == 'circular':
+            precision = self.make_circular_precision()
+        elif prec_type == 'subgraph':
+            precision = self.make_disconnected_subgraph_precision(prec_subgraph_size, p_prec_nzero)
+        elif precision is None:
+            print('must either specify prec_type of provide the precision matrix with prec argument.')
+            raise ValueError
+
+        # Get lower triangle of precision with log of diagonal elements (to enforce positivity)
         prec = deepcopy(precision)
         idiag = np.diag_indices_from(prec)
         prec[idiag] = np.log(prec[idiag])
@@ -1380,69 +1391,68 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
 
         return grads_wrt_missing_vars  # n-length list of arrays with shape (nz, k)
 
+    # def sample(self, n):
+    #     """ Sample from a truncated multivariate normal with rejection sampling with uniform proposal (note: this won't scale)
+    #     :param n: sample size
+    #     """
+    #     # mean, chol, chol_diag = self.get_mean_and_chol()
+    #     # stds = (1 / chol_diag)
+    #     mean, precision, lprecision, precision_diag = self.get_mean_and_lprecision()
+    #     cov = np.linalg.inv(precision)
+    #     print('covariance: {}'.format(cov))
+    #     print('variances: {}'.format(np.diag(cov)))
+    #     stds = np.diag(cov)**0.5
+    #     low_proposal = np.maximum(mean - (5 * stds), 0)
+    #     high_proposal = mean + (5 * stds)
+    #     k = len(mean)
+    #
+    #     sample = np.zeros((n, k), dtype='float64')
+    #     total_n_accepted = 0
+    #     expected_num_proposals_per_accept = (100 / (2 * np.pi))**(k/2)
+    #     proposal_size = int(4 * n * expected_num_proposals_per_accept)
+    #     if proposal_size > 10**8:
+    #         print('WARNING: GENERATING THE MAXIMUM NUMBER (10**8) OF SAMPLES FROM THE PROPOSAL DISTRIBUTION INSIDE A WHILE LOOP,'
+    #               ' AS PART OF THE ACCEPT-REJECT ALGORITHM. THIS COULD TAKE A VERY LONG TIME. THE DIMENSIONALITY OF YOUR DATA MAY'
+    #               ' BE TOO HIGH')
+    #         proposal_size = 10**8
+    #
+    #     print('sampling from the model...')
+    #     while total_n_accepted < n:
+    #         proposal = self.rng.uniform(low_proposal, high_proposal, (proposal_size, k))  # (proposal_size, k)
+    #         V = proposal - mean
+    #
+    #         # P = np.dot(chol, chol.T)  # (k, k) - precision matrix
+    #         VP = np.dot(V, precision)  # (proposal_size, k)
+    #         acceptance_prob = np.exp(-0.5 * np.sum(VP * V, axis=-1))  # (proposal_size, )
+    #         accept = self.rng.uniform(0, 1, proposal_size) < acceptance_prob
+    #         accepted = proposal[accept]
+    #
+    #         n_accepted = len(accepted)
+    #         if total_n_accepted + n_accepted >= n:
+    #             remain = n - total_n_accepted
+    #             sample[total_n_accepted:] = accepted[:remain]
+    #         else:
+    #             sample[total_n_accepted: total_n_accepted+n_accepted] = accepted
+    #         total_n_accepted += n_accepted
+    #         print('total num samples from model accepted: {}'.format(min(total_n_accepted, n)))
+    #     print('finished sampling!')
+    #
+    #     return sample
 
     def sample(self, n):
-        """ Sample from a truncated multivariate normal with rejection sampling with uniform proposal (note: this won't scale)
-        :param n: sample size
-        """
-        # mean, chol, chol_diag = self.get_mean_and_chol()
-        # stds = (1 / chol_diag)
-        mean, precision, lprecision, precision_diag = self.get_mean_and_lprecision()
-        cov = np.linalg.inv(precision)
-        print('covariance: {}'.format(cov))
-        print('variances: {}'.format(np.diag(cov)))
-        stds = np.diag(cov)**0.5
-        low_proposal = np.maximum(mean - (5 * stds), 0)
-        high_proposal = mean + (5 * stds)
-        k = len(mean)
+        ro.numpy2ri.activate()
+        r = ro.r
+        tm = importr("tmvtnorm")
+        rtmvnorm = tm.rtmvnorm
 
-        sample = np.zeros((n, k), dtype='float64')
-        total_n_accepted = 0
-        expected_num_proposals_per_accept = (100 / (2 * np.pi))**(k/2)
-        proposal_size = int(4 * n * expected_num_proposals_per_accept)
-        if proposal_size > 10**8:
-            print('WARNING: GENERATING THE MAXIMUM NUMBER (10**8) OF SAMPLES FROM THE PROPOSAL DISTRIBUTION INSIDE A WHILE LOOP,'
-                  ' AS PART OF THE ACCEPT-REJECT ALGORITHM. THIS COULD TAKE A VERY LONG TIME. THE DIMENSIONALITY OF YOUR DATA MAY'
-                  ' BE TOO HIGH')
-            proposal_size = 10**8
-
-        print('sampling from the model...')
-        while total_n_accepted < n:
-            proposal = self.rng.uniform(low_proposal, high_proposal, (proposal_size, k))  # (proposal_size, k)
-            V = proposal - mean
-
-            # P = np.dot(chol, chol.T)  # (k, k) - precision matrix
-            VP = np.dot(V, precision)  # (proposal_size, k)
-            acceptance_prob = np.exp(-0.5 * np.sum(VP * V, axis=-1))  # (proposal_size, )
-            accept = self.rng.uniform(0, 1, proposal_size) < acceptance_prob
-            accepted = proposal[accept]
-
-            n_accepted = len(accepted)
-            if total_n_accepted + n_accepted >= n:
-                remain = n - total_n_accepted
-                sample[total_n_accepted:] = accepted[:remain]
-            else:
-                sample[total_n_accepted: total_n_accepted+n_accepted] = accepted
-            total_n_accepted += n_accepted
-            print('total num samples from model accepted: {}'.format(min(total_n_accepted, n)))
-        print('finished sampling!')
-
-        return sample
-
-    # def get_mean_and_chol(self):
-    #     """get mean and lower triangular cholesky of the precision matrix"""
-    #     mean, chol = deepcopy(self.theta[1:1+self.mean_len]), deepcopy(self.theta[1+self.mean_len:])
-    #
-    #     # lower-triangular cholesky decomposition of the precision
-    #     chol_mat = np.zeros((self.mean_len, self.mean_len))
-    #     ilower = np.tril_indices(self.mean_len)
-    #     chol_mat[ilower] = chol
-    #
-    #     # exp the diagonal, to enforce positivity
-    #     idiag = np.diag_indices_from(chol_mat)
-    #     chol_mat[idiag] = np.exp(chol_mat[idiag])
-    #
-    #     return mean, chol_mat, chol_mat[idiag]
+        d = self.mean_len
+        mean, precision, _, _ = self.get_mean_and_lprecision()
+        r_mean = r.c(mean)
+        r_prec = r.matrix(precision, ncol=d, nrow=d)
+        lower_bounds = r.c(np.zeros(d))
+        samples = rtmvnorm(n=n, mean=r_mean, H=r_prec, lower=lower_bounds,
+                           algorithm="gibbs", thinning=100, **{'burn.in.samples': 100})
+        return np.array(samples)
 
     def get_mean_and_lprecision(self):
         """get mean and lower triangular elements of the precision matrix (note: we get log of diagonal elements)"""
@@ -1460,3 +1470,38 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         precision = lprecision + lprecision.T - np.diag(np.diag(lprecision))
 
         return mean, precision, lprecision, precision[idiag]
+
+    def make_circular_precision(self):
+        d = self.mean_len
+        a = np.diag(np.ones(d)) * 1.5
+        b = np.diag(rnd.uniform(0.3, 0.5, d - 1), 1)
+        prec = a + b + b.T
+        prec[0, -1] = rnd.uniform(0.3, 0.5)
+        prec[-1, 0] = deepcopy(prec[0, -1])
+        return prec
+
+    def make_disconnected_subgraph_precision(self, prec_subgraph_size, p_prec_nzero):
+        d = self.mean_len
+        m = prec_subgraph_size
+        assert d % m == 0, "subgraph size, m, is not a divisor of full graph size, d"
+        prec = np.zeros((d, d))
+        num_subgraphs = int(d / m)
+        for i in range(num_subgraphs):
+            subgraph = np.zeros((m, m))
+            for j in range(m):
+                for k in range(j):
+                    a = rnd.uniform(0, 1) < p_prec_nzero
+                    if a == 1:
+                        subgraph[j, k] = rnd.uniform(0.5, 1)
+            prec[i * m:(i + 1) * m, i * m:(i + 1) * m] = subgraph
+        prec = prec + prec.T
+
+        min_eig = np.min(np.linalg.eig(prec)[0])
+        i_diag = np.diag_indices(d)
+        diag = 0
+        while min_eig < 0.1:
+            diag += 0.1
+            prec[i_diag] = diag
+            min_eig = np.min(np.linalg.eig(prec)[0])
+
+        return prec

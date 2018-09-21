@@ -25,10 +25,11 @@ from utils import *
 from vnce_optimiser import VemOptimiser, SgdEmStep, MonteCarloVnceLoss
 
 n = 10
-d = 2
+nz = 2
+d = 4
 len_alpha = d * (d + 3) / 2
 
-true_mean = np.array([1., 1.])
+true_mean = np.ones(d) * 1.2
 # true_chol = np.identity(d) * 0.1  # choleksy of precision
 # data_dist = MissingDataUnnormalisedTruncNorm(scaling_param=np.array([0.]), mean=true_mean, chol=true_chol)
 true_prec = np.identity(d) * 0.1  # choleksy of precision
@@ -36,22 +37,29 @@ data_dist = MissingDataUnnormalisedTruncNorm(scaling_param=np.array([0.]), mean=
 
 # generate synthetic data
 X_train = data_dist.sample(n)  # (n, d)
-X_mask = rnd.uniform(0, 1, X_train.shape) < 0.5
-Z = np.zeros((1, ) + X_train.shape)
+# X_mask = rnd.uniform(0, 1, X_train.shape) < 0.5
+X_mask = np.zeros((n, d))
+X_mask[:, 0] = 1
+Z = np.ones((nz, ) + X_train.shape)
+Z *= X_mask * 1.5
 
 # init the model p(x, z)
 scale0 = np.array([0.])
-mean0 = np.ones(d) * 2
+mean0 = np.ones(d) * 5.
 # chol0 = np.identity(d)  # cholesky of precision
 # chol0 = np.array([[1, 0], [-1, 1]])
 # model = MissingDataUnnormalisedTruncNorm(scaling_param=scale0, mean=mean0, chol=chol0)
-prec0 = np.array([[5, -1], [-1, 5]])
+a = np.diag(np.ones(d)) * rnd.uniform(1, 4)
+b = np.diag(rnd.uniform(0.3, 0.5, d - 1), 1)
+prec0 = a + b + b.T
 model = MissingDataUnnormalisedTruncNorm(scaling_param=scale0, mean=mean0, precision=prec0)
 
 # init the variational distribution
 var_dist = MissingDataProductOfTruncNormsPosterior(nn=None, data_dim=d)
-E = var_dist.sample_E(1, np.ones_like(X_train))
+E = var_dist.sample_E(nz, np.ones_like(X_train))
 
+nn_output = rnd.uniform(0, 1, (n, 2 * d))
+nn_output = np.zeros((n, 2*d))
 
 def check_model_grad(theta0, check=None):
     if check == 'scale':
@@ -65,11 +73,11 @@ def check_model_grad(theta0, check=None):
 
     def eval_log_model(theta):
         model.theta[ind] = deepcopy(theta)
-        return np.mean(model(X_train, Z, log=True))
+        return np.mean(model(X_train, Z, X_mask, log=True))
 
     def grad_log_model(theta):
         model.theta[ind] = deepcopy(theta)
-        return np.mean(model.grad_log_wrt_params(X_train, Z)[ind], axis=(1, 2))
+        return np.mean(model.grad_log_wrt_params(X_train, Z, X_mask)[ind], axis=(1, 2))
 
     print('{} grad finite diff: {}'.format(check, check_grad(eval_log_model, grad_log_model, theta0)))
 
@@ -78,7 +86,8 @@ def check_model_wrt_nn_out_grad(nn_out, check=None):
 
     def get_nn_out(nn_out):
         nn_out = nn_out.reshape(n, -1)
-        new_nn_out = np.zeros((n, 2 * d))
+        new_nn_out = nn_output
+        # new_nn_out = np.zeros((n, 2 * d))
         if check == 'mean':
             new_nn_out[:, :d] = nn_out
         elif check == 'chol':
@@ -89,15 +98,16 @@ def check_model_wrt_nn_out_grad(nn_out, check=None):
 
     def eval_log_model_wrt_nn_out(nn_out):
         nn_out = get_nn_out(nn_out)
-        Z_from_E = var_dist.get_Z_samples_from_E(1, E, X_train, np.ones_like(X_train), nn_out)
-        val = model(X_train, Z_from_E, log=True)
+        Z_from_E = var_dist.get_Z_samples_from_E(nz, E, X_train, X_mask, nn_out)
+        val = model(X_train, Z_from_E, X_mask, log=True)
         return np.sum(np.mean(val, axis=0))
+
 
     def grad_log_model_wrt_nn_out(nn_out):
         nn_out = get_nn_out(nn_out)
-        Z_from_E = var_dist.get_Z_samples_from_E(1, E, X_train, np.ones_like(X_train), nn_out)
+        Z_from_E = var_dist.get_Z_samples_from_E(nz, E, X_train, X_mask, nn_out)
         grad_z_wrt_nn_out = var_dist.grad_of_Z_wrt_nn_outputs(nn_out, E)
-        grad = model.grad_log_wrt_nn_outputs(X_train, Z_from_E, grad_z_wrt_nn_out)
+        grad = model.grad_log_wrt_nn_outputs(X_train, Z_from_E, grad_z_wrt_nn_out, X_mask)
         grad = np.mean(grad, axis=1).T  # (n, 2*d)
 
         if check == 'mean':
@@ -113,7 +123,7 @@ def check_var_wrt_nn_out_grad(nn_out, check=None):
 
     def get_nn_out(nn_out):
         nn_out = nn_out.reshape(n, -1)
-        new_nn_out = np.zeros((n, 2 * d))
+        new_nn_out = nn_output
         if check == 'mean':
             new_nn_out[:, :d] = nn_out
         elif check == 'chol':
@@ -124,13 +134,13 @@ def check_var_wrt_nn_out_grad(nn_out, check=None):
 
     def eval_log_var(nn_out):
         nn_out = get_nn_out(nn_out)
-        Z_from_E = var_dist.get_Z_samples_from_E(1, E, X_train, np.ones_like(X_train), nn_out)
+        Z_from_E = var_dist.get_Z_samples_from_E(nz, E, X_train, X_mask, nn_out)
         val = var_dist(Z_from_E, X_train, log=True, nn_outputs=nn_out)
         return np.sum(np.mean(val, axis=0))
 
     def grad_log_var(nn_out):
         nn_out = get_nn_out(nn_out)
-        Z_from_E = var_dist.get_Z_samples_from_E(1, E, X_train, np.ones_like(X_train), nn_out)
+        Z_from_E = var_dist.get_Z_samples_from_E(nz, E, X_train, X_mask, nn_out)
         grad_z_wrt_nn_out = var_dist.grad_of_Z_wrt_nn_outputs(nn_out, E)
         grad = var_dist.grad_log_wrt_nn_outputs(nn_out, grad_z_wrt_nn_out, Z_from_E)
         grad = np.mean(grad, axis=1).T  # (n, 2*d)
@@ -145,13 +155,13 @@ def check_var_wrt_nn_out_grad(nn_out, check=None):
 
 
 check_model_grad(deepcopy(scale0), 'scale')
-check_model_grad(deepcopy(mean0), 'mean')
-check_model_grad(deepcopy(model.theta[-3:]), 'chol')
+check_model_grad(deepcopy(mean0) * rnd.uniform(-0.5, 2, mean0.shape), 'mean')
+check_model_grad(deepcopy(model.theta[1+d:]), 'chol')
 
-check_model_wrt_nn_out_grad(np.zeros((n, 2 * d)))
-check_model_wrt_nn_out_grad(np.zeros((n, d)), check='mean')
-check_model_wrt_nn_out_grad(np.zeros((n, d)), check='chol')
+# check_model_wrt_nn_out_grad(np.zeros((n, 2 * d)))
+check_model_wrt_nn_out_grad(rnd.uniform(0, 1, (n, d)), check='mean')
+check_model_wrt_nn_out_grad(rnd.uniform(0, 1, (n, d)), check='chol')
 
-check_var_wrt_nn_out_grad(np.zeros((n, 2 * d)))
-check_var_wrt_nn_out_grad(np.zeros((n, d)), check='mean')
-check_var_wrt_nn_out_grad(np.zeros((n, d)), check='chol')
+# check_var_wrt_nn_out_grad(np.zeros((n, 2 * d)))
+check_var_wrt_nn_out_grad(rnd.uniform(0, 1, (n, d)), check='mean')
+check_var_wrt_nn_out_grad(rnd.uniform(0, 1, (n, d)), check='chol')

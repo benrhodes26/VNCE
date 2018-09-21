@@ -106,7 +106,7 @@ class VemOptimiser:
 
     def update_results(self, params, losses, times, loss_function, m_step=False, e_step=False):
         """Update optimisation results during learning"""
-        train_loss, val_loss = loss_function.compute_end_of_epoch_loss()
+        train_loss, val_loss = loss_function.compute_end_of_epoch_loss(m_step=m_step)
         self.times.append(times)
         self.losses.append(losses)
         self.train_losses.append(train_loss)
@@ -216,13 +216,15 @@ class SgdEmStep:
     If used during the E step, it optimises the VNCE objective w.r.t the variational parameters alpha.
     In either case, it uses stochastic gradient descent with adjustable mini-batch size and learning rate.
     """
-    def __init__(self, do_m_step, learning_rate, num_batches_per_em_step, noise_to_data_ratio, rng, track_loss=False):
+    def __init__(self, do_m_step, learning_rate, num_batches_per_em_step, noise_to_data_ratio, rng, inds=None, track_loss=False):
         """
         :param do_m_step: boolean
             if True, optimise loss function w.r.t model params theta. Else w.r.t variational params alpha.
         :param learning_rate: float
         :param num_batches_per_em_step: int
         :param noise_to_data_ratio: int
+        :param inds array
+            indices of subset of parameters to optimise
         :param track_loss: boolean
             if True, calculate loss at the end of the step
         :param rng: np.RandomState
@@ -231,6 +233,7 @@ class SgdEmStep:
         self.learning_rate = learning_rate
         self.num_batches_per_em_step = num_batches_per_em_step
         self.nu = noise_to_data_ratio
+        self.inds = inds
         self.track_loss = track_loss
         self.rng = rng
 
@@ -241,10 +244,10 @@ class SgdEmStep:
         """
         for _ in range(self.num_batches_per_em_step):
             if self.do_m_step:
-                loss_function.take_grad_step_wrt_theta(self.learning_rate)
+                loss_function.take_grad_step_wrt_theta(self.learning_rate, self.inds)
                 new_param = loss_function.get_theta()
             else:
-                loss_function.take_grad_step_wrt_alpha(self.learning_rate)
+                loss_function.take_grad_step_wrt_alpha(self.learning_rate, self.inds)
                 new_param = loss_function.get_alpha()
         loss = loss_function() if self.track_loss else 0
 
@@ -383,6 +386,7 @@ class MonteCarloVnceLoss:
                  use_minibatches=True,
                  separate_terms=False,
                  use_importance_sampling=True,
+                 use_numeric_stable_approx_second_term=False,
                  eps=1e-7,
                  rng=None):
         """
@@ -411,6 +415,9 @@ class MonteCarloVnceLoss:
         self.use_rejection_reparam_trick = use_rejection_reparam_trick
         self.separate_terms = separate_terms
         self.use_importance_sampling = use_importance_sampling
+        # This flag uses an extra layer of approximation for the second term of the VNCE objective.
+        # any extra approximations are undesirable, but it can be useful for increasing numerically stablility
+        self.use_numeric_stable_approx_second_term = use_numeric_stable_approx_second_term
         self.use_minibatches = use_minibatches
         self.eps = eps
 
@@ -452,26 +459,54 @@ class MonteCarloVnceLoss:
         h_x = self.h(X, ZX, X_mask)
         exp1 = np.exp(h_x, out=np.zeros_like(h_x), where=h_x <= 0)
         exp2 = np.exp(-h_x, out=np.zeros_like(h_x), where=h_x > 0)
-        a = (h_x > 0) * np.log(1 + nu * exp2)
-        b = (h_x <= 0) * (-h_x + np.log(nu + exp1))
+        a = (h_x <= 0) * (-h_x + np.log(nu + exp1, out=np.zeros_like(h_x), where=h_x <= 0))
+        b = np.log(1 + nu * exp2, out=np.zeros_like(h_x), where=h_x > 0)
         first_term = -np.mean(a + b)
 
         # validate_shape(a.shape, (self.nz, len(self.X)))
         return first_term
 
+    # def second_term_of_loss(self):
+    #     Y = self.dp.Y
+    #     nu = self.nu
+    #
+    #     if self.use_importance_sampling:
+    #         ZY, Y_mask = self.dp.ZY, self.dp.Y_mask
+    #         h_y = self.h(Y, ZY, Y_mask)
+    #         expectation = np.mean(np.exp(h_y), axis=0)
+    #         c = (1 / nu) * expectation  # (n*nu, )
+    #         second_term = -nu * np.mean(np.log(1 + c))
+    #     else:
+    #         h_y = self.h2(Y)
+    #         exp1 = np.exp(h_y, out=np.zeros_like(h_y), where=h_y <= 0)
+    #         exp2 = np.exp(-h_y, out=np.zeros_like(h_y), where=h_y > 0)
+    #         c = (h_y <= 0) * np.log(1 + (1/nu) * exp1)
+    #         d = (h_y > 0) * (h_y + np.log((1/nu) + exp2))
+    #         second_term = -np.mean(c + d)
+    #
+    #     validate_shape(c.shape, (len(Y), ))
+    #     return second_term
+
     def second_term_of_loss(self):
-        Y = self.dp.Y
+        Y, ZY, Y_mask = self.dp.Y, self.dp.ZY, self.dp.Y_mask
         nu = self.nu
 
-        if self.use_importance_sampling:
-            ZY, Y_mask = self.dp.ZY, self.dp.Y_mask
-            # We could use the same cross-entropy sigmoid trick as we do in the first term of loss, BEFORE using importance sampling.
-            # Currently not doing this - not sure if it is better.
+        if self.use_importance_sampling and self.use_numeric_stable_approx_second_term:
+            h_y = self.h(Y, ZY, Y_mask)
+            # This is an approximation to the importance sampling term that uses the variational lower bound
+            # combined with an approximation to the softplus function (that works for nu < 100, say)
+            m = np.mean(h_y, axis=0)
+            exp1 = np.exp(m, out=np.zeros_like(m), where=m <= 25)
+            a = np.log((1 + (exp1 / nu)) * (m <= 25), out=np.zeros_like(exp1), where=m <= 25)
+            b = (m > 25) * (m - np.log(nu))
+            second_term = -nu * np.mean(a + b)
+        elif self.use_importance_sampling:
             h_y = self.h(Y, ZY, Y_mask)
             expectation = np.mean(np.exp(h_y), axis=0)
             c = (1 / nu) * expectation  # (n*nu, )
             second_term = -nu * np.mean(np.log(1 + c))
         else:
+            # We presume here that we can marginalise over latents exactly
             h_y = self.h2(Y)
             exp1 = np.exp(h_y, out=np.zeros_like(h_y), where=h_y <= 0)
             exp2 = np.exp(-h_y, out=np.zeros_like(h_y), where=h_y > 0)
@@ -479,7 +514,7 @@ class MonteCarloVnceLoss:
             d = (h_y > 0) * (h_y + np.log((1/nu) + exp2))
             second_term = -np.mean(c + d)
 
-        validate_shape(c.shape, (len(Y), ))
+        # validate_shape(c.shape, (len(Y), ))
         return second_term
 
     def h(self, U, Z, mask=None):
@@ -553,9 +588,18 @@ class MonteCarloVnceLoss:
         return first_term
 
     def second_term_grad_wrt_theta(self):
-        Y = self.dp.Y
-        if self.use_importance_sampling:
-            ZY, Y_mask = self.dp.ZY, self.dp.Y_mask
+        Y, ZY, Y_mask = self.dp.Y, self.dp.ZY, self.dp.Y_mask
+        if self.use_importance_sampling and self.use_numeric_stable_approx_second_term:
+            gradY = np.mean(self.model.grad_log_wrt_params(Y, ZY, Y_mask), axis=1)  # (len(theta), n)
+            h_y = self.h(Y, ZY, Y_mask)  # (nz, n)
+            m = np.mean(h_y, axis=0)  # (n, )
+            exp = np.exp(m, out=np.zeros_like(m), where=m <= 25)  # (n, )
+            r = (m <= 25) * exp / (self.nu + exp)  # (n, )
+            a = r * gradY  # (len(theta), n)
+            b = (m > 25) * gradY  # (len(theta), n)
+            second_term = -self.nu * np.mean(a + b, axis=1)  # (len(theta), )
+
+        elif self.use_importance_sampling:
             gradY = self.model.grad_log_wrt_params(Y, ZY, Y_mask)  # (len(theta), nz, n)
             r = np.exp(self.h(Y, ZY, Y_mask))  # (nz, n)
             E_ZY = np.mean(gradY * r, axis=1)  # (len(theta), n)
@@ -588,8 +632,8 @@ class MonteCarloVnceLoss:
         X, ZX, E_ZX, X_mask = self.dp.X, self.dp.ZX, self.dp.E_ZX, self.dp.X_mask
         if self.use_reparam_trick:
             grad_logmodel_wrt_z  = self.model.grad_log_wrt_z(X, ZX, X_mask)
-            grad_log_model = self.variational_noise.grad_log_model_wrt_alpha(X, E_ZX, grad_logmodel_wrt_z, X_mask)
-            grad_log_var_dist = self.variational_noise.grad_log_wrt_alpha(X, E_ZX, grad_logmodel_wrt_z, X_mask)
+            grad_log_model = self.variational_noise.grad_log_model_wrt_alpha(X, E_ZX, grad_logmodel_wrt_z, X_mask)  # (len(alpha), nz, n)
+            grad_log_var_dist = self.variational_noise.grad_log_wrt_alpha(X, E_ZX, grad_logmodel_wrt_z, X_mask)  # (len(alpha), nz, n)
             grad_wrt_alpha = self.reparam_trick_grad(grad_log_model, grad_log_var_dist)  # (n, len(alpha))
         elif self.use_score_function:
             raise NotImplementedError
@@ -598,7 +642,7 @@ class MonteCarloVnceLoss:
                   'Set one of the following to True: "use_reparam_trick", "use_score_function"')
             raise ValueError
 
-        return np.mean(grads_wrt_alpha, axis=0)  # (len(alpha), )
+        return np.mean(grad_wrt_alpha, axis=0)  # (len(alpha), )
 
 
     def grad_wrt_variational_noise_nn_params(self, next_minibatch=False):
@@ -642,12 +686,19 @@ class MonteCarloVnceLoss:
         grad_log_var_dist = self.variational_noise.grad_log_wrt_nn_outputs(nn_outputs=nn_outputs,
                                                                            grad_z_wrt_nn_outputs=grad_z_wrt_nn_outputs,
                                                                            Z=ZX)  # (out_dim, nz, n)
-        return reparam_trick_grad(grad_log_model, grad_log_var_dist, separate_terms)
+        return self.reparam_trick_grad(grad_log_model, grad_log_var_dist, separate_terms)
 
     def reparam_trick_grad(self, grad_log_model, grad_log_var_dist, separate_terms=False):
         X, ZX, X_mask = self.dp.X, self.dp.ZX, self.dp.X_mask
-        joint_noise = (self.nu * self.noise(X, ZX) * self.variational_noise(ZX, X))
-        a = joint_noise / (self.model(X, ZX, X_mask) + joint_noise)  # (nz, n)
+
+        # joint_noise = (self.nu * self.noise(X, ZX) * self.variational_noise(ZX, X))
+        # a = joint_noise / (self.model(X, ZX, X_mask) + joint_noise)  # (nz, n)
+        h_x = self.h(X, ZX, X_mask)
+        exp1 = np.exp(h_x, out=np.zeros_like(h_x), where=h_x <= 0)
+        exp2 = np.exp(-h_x, out=np.zeros_like(h_x), where=h_x > 0)
+        a0 = (h_x <= 0) * (1 / (1 + ((1 / self.nu) * exp1)))
+        a1 = (h_x > 0) * (exp2 / ((1 / self.nu) + exp2))
+        a = a0 + a1  # (nz, n)
 
         term1 = np.mean(a * grad_log_model, axis=1).T  # (n, output_dim)
         term2 = np.mean(a * grad_log_var_dist, axis=1).T  # (n, output_dim)
@@ -671,16 +722,20 @@ class MonteCarloVnceLoss:
         #
         # return reparam_grad + score_function_term  # (n, output_dim)
 
-    def take_grad_step_wrt_theta(self, learning_rate):
+    def take_grad_step_wrt_theta(self, learning_rate, inds=None):
+        if inds is None:
+            inds = np.arange(len(self.get_theta()))
         if self.use_neural_model:
             raise NotImplementedError
         else:
             grad = self.grad_wrt_theta(next_minibatch=True)
             current_theta = self.get_theta()
-            new_param = current_theta + learning_rate * grad
-            self.set_theta(new_param)
+            current_theta[inds] += learning_rate * grad[inds]
+            self.set_theta(current_theta)
 
-    def take_grad_step_wrt_alpha(self, learning_rate):
+    def take_grad_step_wrt_alpha(self, learning_rate, inds=None):
+        if inds is None:
+            inds = np.arange(len(self.get_alpha()))
         if self.use_neural_variational_noise:
             grad_wrt_nn_params = self.grad_wrt_variational_noise_nn_params(next_minibatch=True)
             for param, grad in zip(self.variational_noise.nn.params, grad_wrt_nn_params):
@@ -688,10 +743,10 @@ class MonteCarloVnceLoss:
         else:
             grad = self.grad_wrt_alpha(next_minibatch=True)
             current_alpha = self.get_alpha()
-            new_param = current_alpha + learning_rate * grad
-            self.set_alpha(new_param)
+            current_alpha[inds] += learning_rate * grad[inds]
+            self.set_alpha(current_alpha)
 
-    def compute_end_of_epoch_loss(self):
+    def compute_end_of_epoch_loss(self, m_step=True):
         """"Compute loss on *whole* training set and validation set at end of each epoch"""
         # save current data
         cur_X = deepcopy(self.dp.X)
@@ -725,6 +780,9 @@ class MonteCarloVnceLoss:
             self.dp.Y_mask = np.zeros_like(self.dp.Y)
             self.dp.resample_from_variational_noise = True
             train_loss = self.__call__()
+        if m_step:
+            print('epoch {}: J1 (train) = {}'.format(self.dp.current_epoch, train_loss))
+            print('epoch {}: J1 (val) = {}'.format(self.dp.current_epoch, val_loss))
 
         # substitute back in the original data
         self.dp.X = cur_X
