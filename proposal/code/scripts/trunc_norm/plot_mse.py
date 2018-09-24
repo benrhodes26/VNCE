@@ -30,16 +30,16 @@ from numpy import random as rnd
 rc('lines', linewidth=0.5)
 rc('font', size=8)
 rc('legend', fontsize=9)
-# rc('text', usetex=True)
+rc('text', usetex=True)
 rc('xtick', labelsize=10)
 rc('ytick', labelsize=10)
 
 parser = ArgumentParser(description='plot relationship between fraction of training data missing and final mean-squared error for'
                                     'a truncated normal model trained with VNCE', formatter_class=ArgumentDefaultsHelpFormatter)
 parser.add_argument('--save_dir', type=str, default='~/masters-project-non-code/experiments/trunc-norm/')
-parser.add_argument('--exp_name', type=str, default='test/', help='name of set of experiments this one belongs to')  # 5d-vlr0.1-nz=10-final
-# parser.add_argument('--load_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm/')
-parser.add_argument('--load_dir', type=str, default='/home/ben/masters-project-non-code/experimental-results/trunc-norm/')
+parser.add_argument('--exp_name', type=str, default='test5d_nu10/', help='name of set of experiments this one belongs to')  # 5d-vlr0.1-nz=10-final
+parser.add_argument('--load_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm/')
+# parser.add_argument('--load_dir', type=str, default='/home/ben/masters-project-non-code/experimental-results/trunc-norm/')
 
 args = parser.parse_args()
 main_load_dir = os.path.join(args.load_dir, args.exp_name)
@@ -183,7 +183,8 @@ for i in range(num_methods):
     plot_theta0_mses(axs, theta0_mu_mse, theta0_mean_mse, theta0_diag_mse, theta0_ndiag_mse)
 
 titles = [r'$\mu$', r'\textbf{b}', 'Diagonal of K', 'Off-diagonal of K']
-upper_lims = [2, 10, 2, 2]
+# upper_lims = [1, 1, 0.2, 0.2]
+upper_lims = [1, 10, 10, 0.2]
 for i, ax in enumerate(axs):
     ax.set_ylim(0, upper_lims[i])
     ax.set_title(titles[i])

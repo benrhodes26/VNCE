@@ -1,10 +1,6 @@
 """Module provides classes for unnormalised latent-variable models
 """
 import numpy as np
-# import rpy2
-# import rpy2.robjects as ro
-# import rpy2.robjects.numpy2ri
-# from rpy2.robjects.packages import importr
 
 from abc import ABCMeta, abstractmethod
 from copy import deepcopy
@@ -1388,68 +1384,72 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
 
         return grads_wrt_missing_vars  # n-length list of arrays with shape (nz, k)
 
-    def sample(self, n):
-        """ Sample from a truncated multivariate normal with rejection sampling with uniform proposal (note: this won't scale)
-        :param n: sample size
-        """
-        # mean, chol, chol_diag = self.get_mean_and_chol()
-        # stds = (1 / chol_diag)
-        mean, precision, lprecision, precision_diag = self.get_mean_and_lprecision()
-        cov = np.linalg.inv(precision)
-        print('covariance: {}'.format(cov))
-        print('variances: {}'.format(np.diag(cov)))
-        stds = np.diag(cov)**0.5
-        low_proposal = np.maximum(mean - (5 * stds), 0)
-        high_proposal = mean + (5 * stds)
-        k = len(mean)
-
-        sample = np.zeros((n, k), dtype='float64')
-        total_n_accepted = 0
-        expected_num_proposals_per_accept = (100 / (2 * np.pi))**(k/2)
-        proposal_size = int(4 * n * expected_num_proposals_per_accept)
-        if proposal_size > 10**8:
-            print('WARNING: GENERATING THE MAXIMUM NUMBER (10**8) OF SAMPLES FROM THE PROPOSAL DISTRIBUTION INSIDE A WHILE LOOP,'
-                  ' AS PART OF THE ACCEPT-REJECT ALGORITHM. THIS COULD TAKE A VERY LONG TIME. THE DIMENSIONALITY OF YOUR DATA MAY'
-                  ' BE TOO HIGH')
-            proposal_size = 10**8
-
-        print('sampling from the model...')
-        while total_n_accepted < n:
-            proposal = self.rng.uniform(low_proposal, high_proposal, (proposal_size, k))  # (proposal_size, k)
-            V = proposal - mean
-
-            # P = np.dot(chol, chol.T)  # (k, k) - precision matrix
-            VP = np.dot(V, precision)  # (proposal_size, k)
-            acceptance_prob = np.exp(-0.5 * np.sum(VP * V, axis=-1))  # (proposal_size, )
-            accept = self.rng.uniform(0, 1, proposal_size) < acceptance_prob
-            accepted = proposal[accept]
-
-            n_accepted = len(accepted)
-            if total_n_accepted + n_accepted >= n:
-                remain = n - total_n_accepted
-                sample[total_n_accepted:] = accepted[:remain]
-            else:
-                sample[total_n_accepted: total_n_accepted+n_accepted] = accepted
-            total_n_accepted += n_accepted
-            print('total num samples from model accepted: {}'.format(min(total_n_accepted, n)))
-        print('finished sampling!')
-
-        return sample
-
     # def sample(self, n):
-    #     ro.numpy2ri.activate()
-    #     r = ro.r
-    #     tm = importr("tmvtnorm")
-    #     rtmvnorm = tm.rtmvnorm
+    #     """ Sample from a truncated multivariate normal with rejection sampling with uniform proposal (note: this won't scale)
+    #     :param n: sample size
+    #     """
+    #     # mean, chol, chol_diag = self.get_mean_and_chol()
+    #     # stds = (1 / chol_diag)
+    #     mean, precision, lprecision, precision_diag = self.get_mean_and_lprecision()
+    #     cov = np.linalg.inv(precision)
+    #     print('covariance: {}'.format(cov))
+    #     print('variances: {}'.format(np.diag(cov)))
+    #     stds = np.diag(cov)**0.5
+    #     low_proposal = np.maximum(mean - (5 * stds), 0)
+    #     high_proposal = mean + (5 * stds)
+    #     k = len(mean)
     #
-    #     d = self.mean_len
-    #     mean, precision, _, _ = self.get_mean_and_lprecision()
-    #     r_mean = r.c(mean)
-    #     r_prec = r.matrix(precision, ncol=d, nrow=d)
-    #     lower_bounds = r.c(np.zeros(d))
-    #     samples = rtmvnorm(n=n, mean=r_mean, H=r_prec, lower=lower_bounds,
-    #                        algorithm="gibbs", thinning=100, **{'burn.in.samples': 100})
-    #     return np.array(samples)
+    #     sample = np.zeros((n, k), dtype='float64')
+    #     total_n_accepted = 0
+    #     expected_num_proposals_per_accept = (100 / (2 * np.pi))**(k/2)
+    #     proposal_size = int(4 * n * expected_num_proposals_per_accept)
+    #     if proposal_size > 10**8:
+    #         print('WARNING: GENERATING THE MAXIMUM NUMBER (10**8) OF SAMPLES FROM THE PROPOSAL DISTRIBUTION INSIDE A WHILE LOOP,'
+    #               ' AS PART OF THE ACCEPT-REJECT ALGORITHM. THIS COULD TAKE A VERY LONG TIME. THE DIMENSIONALITY OF YOUR DATA MAY'
+    #               ' BE TOO HIGH')
+    #         proposal_size = 10**8
+    #
+    #     print('sampling from the model...')
+    #     while total_n_accepted < n:
+    #         proposal = self.rng.uniform(low_proposal, high_proposal, (proposal_size, k))  # (proposal_size, k)
+    #         V = proposal - mean
+    #
+    #         # P = np.dot(chol, chol.T)  # (k, k) - precision matrix
+    #         VP = np.dot(V, precision)  # (proposal_size, k)
+    #         acceptance_prob = np.exp(-0.5 * np.sum(VP * V, axis=-1))  # (proposal_size, )
+    #         accept = self.rng.uniform(0, 1, proposal_size) < acceptance_prob
+    #         accepted = proposal[accept]
+    #
+    #         n_accepted = len(accepted)
+    #         if total_n_accepted + n_accepted >= n:
+    #             remain = n - total_n_accepted
+    #             sample[total_n_accepted:] = accepted[:remain]
+    #         else:
+    #             sample[total_n_accepted: total_n_accepted+n_accepted] = accepted
+    #         total_n_accepted += n_accepted
+    #         print('total num samples from model accepted: {}'.format(min(total_n_accepted, n)))
+    #     print('finished sampling!')
+    #
+    #     return sample
+
+    def sample(self, n):
+        import rpy2
+        import rpy2.robjects as ro
+        import rpy2.robjects.numpy2ri
+        from rpy2.robjects.packages import importr
+        ro.numpy2ri.activate()
+        r = ro.r
+        tm = importr("tmvtnorm")
+        rtmvnorm = tm.rtmvnorm
+
+        d = self.mean_len
+        mean, precision, _, _ = self.get_mean_and_lprecision()
+        r_mean = r.c(mean)
+        r_prec = r.matrix(precision, ncol=d, nrow=d)
+        lower_bounds = r.c(np.zeros(d))
+        samples = rtmvnorm(n=n, mean=r_mean, H=r_prec, lower=lower_bounds,
+                           algorithm="gibbs", thinning=100, **{'burn.in.samples': 100})
+        return np.array(samples)
 
     def get_mean_and_lprecision(self):
         """get mean and lower triangular elements of the precision matrix (note: we get log of diagonal elements)"""

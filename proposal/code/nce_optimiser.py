@@ -49,6 +49,7 @@ class NCEOptimiser:
         self.thetas = []  # for storing values of parameters during optimisation
         self.Js = []  # for storing values of objective function during optimisation
         self.times = []  # seconds spent to reach each iteration during optimisation
+        self.num_iters = 0
 
     def h(self, U):
         return self.model(U, log=True) - self.noise(U, log=True)
@@ -67,17 +68,21 @@ class NCEOptimiser:
 
         h_x = self.h(X)
         exp1 = np.exp(h_x, out=np.zeros_like(h_x), where=h_x <= 0)
+        a = (h_x <= 0) * (-h_x + np.log(nu + exp1))
+
         exp2 = np.exp(-h_x, out=np.zeros_like(h_x), where=h_x > 0)
-        a = (h_x >= 0) * np.log(1 + nu * exp2)
-        b = (h_x < 0) * (-h_x + np.log(nu + exp1))
+        b = (h_x > 0) * np.log(1 + (nu * exp2))
+
         first_term = -np.mean(a + b)
 
         h_y = self.h(Y)
         exp1 = np.exp(h_y, out=np.zeros_like(h_y), where=h_y <= 0)
+        c = (h_y <= 0) * np.log(1 + ((1/nu) * exp1))
+
         exp2 = np.exp(-h_y, out=np.zeros_like(h_y), where=h_y > 0)
-        c = (h_y <= 0) * np.log(1 + (1/nu) * exp1)
         d = (h_y > 0) * (h_y + np.log((1/nu) + exp2))
-        second_term = -np.mean(c + d)
+
+        second_term = -nu * np.mean(c + d)
 
         if self.regulariser:
             reg_params = self.get_theta(self.reg_param_indices)
@@ -103,21 +108,25 @@ class NCEOptimiser:
 
         h_x = self.h(X)
         exp1 = np.exp(h_x, out=np.zeros_like(h_x), where=h_x <= 0)
-        exp2 = np.exp(-h_x, out=np.zeros_like(h_x), where=h_x > 0)
         a0 = (h_x <= 0) * (1 / (1 + ((1 / nu) * exp1)))
-        a1 = (h_x > 0) * (exp2 / ((1 / nu) + exp2))
-        a = a0 + a1
 
+        exp2 = np.exp(-h_x, out=np.zeros_like(h_x), where=h_x > 0)
+        a1 = (h_x > 0) * (exp2 / ((1 / nu) + exp2))
+
+        a = a0 + a1
         gradX = self.model.grad_log_wrt_params(X)  # (len(theta), n)
         term_1 = np.mean(gradX*a, axis=1)  # (len(theta), )
 
-        gradY = self.model.grad_log_wrt_params(Y)  # (len(theta), nu*n)
+        # second term
         h_y = self.h(Y)
         exp1 = np.exp(h_y, out=np.zeros_like(h_y), where=h_y <= 0)
+        b0 = (h_y <= 0) * (exp1 / (exp1 + nu))
+
         exp2 = np.exp(-h_y, out=np.zeros_like(h_y), where=h_y > 0)
-        b0 = (h_y > 0) * (1 / (1 + nu * exp2))
-        b1 = (h_y <= 0) * (exp1 / (exp1 + nu))
+        b1 = (h_y > 0) * (1 / (1 + nu * exp2))
+
         b = b0 + b1
+        gradY = self.model.grad_log_wrt_params(Y)  # (len(theta), nu*n)
         term_2 = -nu * np.mean(gradY*b, axis=1)  # (len(theta), )
 
         grad = term_1 + term_2
@@ -174,7 +183,7 @@ class NCEOptimiser:
 
         # initialise parameters
         self.model.theta = deepcopy(theta0)
-        # self.update_opt_results(self.compute_J(X, separate_terms=separate_terms))
+        self.update_opt_results(self.compute_J(X, separate_terms=separate_terms))
 
         # optimise w.r.t to theta
         if opt_method == 'SGD':
@@ -204,6 +213,7 @@ class NCEOptimiser:
         thetas, Js, times = [], [], []
 
         def callback(_):
+            self.num_iters += 1
             self.update_opt_results(self.compute_J(X, separate_terms=separate_terms))
             # print("nce finite diff is: {}".format(check_grad(J1_k_neg, J1_k_grad_neg, self.model.theta)))
 
@@ -288,6 +298,7 @@ class NCEOptimiser:
         self.times.append(time.time())
         self.thetas.append(deepcopy(self.model.theta))
         self.Js.append(deepcopy(J))
+        print('iter {}: loss: {}'.format(self.num_iters, J))
 
     def plot_loss_curve(self):
         fig, axs = plt.subplots(1, 1, figsize=(10, 7))

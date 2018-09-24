@@ -146,10 +146,11 @@ class ScipyOptimiser:
             grad = -loss_function.grad_wrt_theta_and_alpha()
             return grad
 
-        start_param = loss_function.get_theta_and_alpha()
+        self.update_results(loss_function.get_theta_and_alpha(), loss_function)
 
+        start_param = loss_function.get_theta_and_alpha()
         _ = minimize(loss_neg, start_param, method=self.opt_method, jac=loss_grad_neg,
-                     callback=callback, options={'maxiter': self.max_iter, 'gtol': 0, 'disp': True})
+                     callback=callback, options={'maxiter': self.max_iter, 'disp': True})
 
         self.update_results(loss_function.get_theta_and_alpha(), loss_function)
         params, losses, times = deepcopy(self.params), deepcopy(self.losses), deepcopy(self.times)
@@ -175,6 +176,9 @@ class ScipyOptimiser:
         start_time = times[0]
         times -= start_time
         return params, losses, times
+
+    def __repr__(self):
+        return "ScipyOptimiser"
 
 
 # noinspection PyPep8Naming,PyTypeChecker,PyMethodMayBeStatic
@@ -254,7 +258,9 @@ class VemOptimiser:
 
     def update_results(self, params, losses, times, loss_function, m_step=False, e_step=False):
         """Update optimisation results during learning"""
-        train_loss, val_loss = loss_function.compute_end_of_epoch_loss(print_loss=m_step)
+        train_loss, val_loss = loss_function.compute_end_of_epoch_loss(print_loss=False)
+        print('iter {}: J1 (train) = {}'.format(len(self.times), train_loss))
+        print('iter {}: J1 (val) = {}'.format(len(self.times), val_loss))
         self.times.append(times)
         self.losses.append(losses)
         self.train_losses.append(train_loss)
@@ -437,14 +443,17 @@ class ScipyMinimiseEmStep:
             "but you are trying to optimise it with a non-linear optimiser. Use SGD instead."
 
         def callback(param):
-            self.update_results(deepcopy(param))
+            self.loss_function.dp.reset_mask_for_cdi_if_necessary()
+            # self.update_results(deepcopy(param), loss_function)
             # print("vnce finite diff is: {}".format(check_grad(loss_neg, loss_grad_neg, start_param)))
 
         def loss_neg(param_k):
             if self.do_m_step:
                 loss_function.set_theta(param_k)
+                loss_function.just_first_term = False
             else:
                 loss_function.set_alpha(param_k)
+                loss_function.just_first_term = True
             self.current_loss = loss_function()
             return deepcopy(-np.sum(self.current_loss))
 
@@ -463,21 +472,21 @@ class ScipyMinimiseEmStep:
             start_param = loss_function.get_alpha()
 
         _ = minimize(loss_neg, start_param, method=self.opt_method, jac=loss_grad_neg,
-                     callback=callback, options={'maxiter': self.max_iter, 'disp': True})
+                     options={'maxiter': self.max_iter, 'disp': True})
 
         if self.do_m_step:
-            self.update_results(loss_function.get_theta())
+            self.update_results(loss_function.get_theta(), loss_function)
         else:
-            self.update_results(loss_function.get_alpha())
+            self.update_results(loss_function.get_alpha(), loss_function)
 
-        params, losses, times = deepcopy(self.params), deepcopy(self.losses), deepcopy(self.times)
+        params, losses, times,  = deepcopy(self.params), deepcopy(self.losses), deepcopy(self.times)
         self.reset_results()
 
         return params, losses, times
 
-    def update_results(self, theta):
+    def update_results(self, param, loss_function):
         """Save current parameter, loss and time for plotting after optimisation"""
-        self.params.append(deepcopy(theta))
+        self.params.append(deepcopy(param))
         self.losses.append(deepcopy(self.current_loss))
         self.times.append(time.time())
 
@@ -531,6 +540,7 @@ class MonteCarloVnceLoss:
                  use_rejection_reparam_trick=False,
                  use_minibatches=True,
                  separate_terms=False,
+                 just_first_term=False,
                  use_importance_sampling=True,
                  use_numeric_stable_approx_second_term=False,
                  eps=1e-7,
@@ -559,7 +569,8 @@ class MonteCarloVnceLoss:
         self.use_reparam_trick = use_reparam_trick
         self.use_score_function = use_score_function
         self.use_rejection_reparam_trick = use_rejection_reparam_trick
-        self.separate_terms = separate_terms
+        self.separate_terms = separate_terms  # if true, __call__ returns a tuple (first_term, second_term)
+        self.just_first_term = just_first_term  # if true, __call__ returns first_term
         self.use_importance_sampling = use_importance_sampling
         # This flag uses an extra layer of approximation for the second term of the VNCE objective.
         # any extra approximations are undesirable, but it can be useful for increasing numerically stablility
@@ -592,7 +603,12 @@ class MonteCarloVnceLoss:
         else:
             val = np.array([first_term, second_term])
 
-        val = val if self.separate_terms else np.sum(val)
+        if self.separate_terms:
+            val = val
+        elif self.just_first_term:
+            val = val[0]
+        else:
+            val = np.sum(val)
         self.dp.current_loss = val
 
         return val
@@ -637,7 +653,7 @@ class MonteCarloVnceLoss:
             exp2 = np.exp(-h_y, out=np.zeros_like(h_y), where=h_y > 0)
             c = (h_y <= 0) * np.log(1 + (1/nu) * exp1)
             d = (h_y > 0) * (h_y + np.log((1/nu) + exp2))
-            second_term = -np.mean(c + d)
+            second_term = -nu * np.mean(c + d)
 
         # validate_shape(c.shape, (len(Y), ))
         return second_term
@@ -890,12 +906,14 @@ class MonteCarloVnceLoss:
             self.dp.X_mask = np.zeros_like(self.dp.X_mask)
             self.dp.E_ZX = self.variational_dist.sample_E(self.dp.nz, self.dp.X_mask)
             self.dp.Y_mask = np.zeros_like(self.dp.Y_mask)
+            #todo: if we make E_ZY global, need to resample here
             train_loss = self.__call__()
             val_loss = 0
 
         # substitute back in the original data
         self.dp.set_data_and_masks(which_set='prev', save_current=False)
 
+        self.dp.reset_mask_for_cdi_if_necessary()
         if print_loss:
             print('epoch {}: J1 (train) = {}'.format(self.dp.current_epoch, train_loss))
             print('epoch {}: J1 (val) = {}'.format(self.dp.current_epoch, val_loss))

@@ -78,6 +78,9 @@ class DataProvider(object):
             self.set_data_and_masks(save_current=False)
         else:
             self.set_data_and_masks(which_set='train', save_current=False)
+            self.batch_slice = slice(0, len(self.train_miss_mask))
+            self.noise_batch_slice = slice(0, len(self.noise_miss_mask))
+            self.reset_mask_for_cdi_if_necessary()
 
         self.batch_size = batch_size
         if batch_size:
@@ -197,6 +200,11 @@ class DataProvider(object):
                     self.X_mask[i, throw_index] = 1
                     self.Y_mask[i, :, throw_index] = 1
             self.Y_mask = self.Y_mask.reshape(-1, self.X.shape[1])
+
+    def reset_mask_for_cdi_if_necessary(self):
+        if (not self.use_minibatches) and self.use_cdi:
+            self.set_masks_for_batch()  # `batch' here refers to the whole dataset
+            self.E_ZX = self.variational_dist.sample_E(self.nz, self.X_mask)
 
     def get_minibatch_E(self):
         """ get a minibatch of E (samples from a base distribution in reparam trick)
