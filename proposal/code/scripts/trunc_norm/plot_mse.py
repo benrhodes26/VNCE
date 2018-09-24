@@ -30,7 +30,7 @@ from numpy import random as rnd
 rc('lines', linewidth=0.5)
 rc('font', size=8)
 rc('legend', fontsize=9)
-rc('text', usetex=True)
+# rc('text', usetex=True)
 rc('xtick', labelsize=10)
 rc('ytick', labelsize=10)
 
@@ -38,7 +38,8 @@ parser = ArgumentParser(description='plot relationship between fraction of train
                                     'a truncated normal model trained with VNCE', formatter_class=ArgumentDefaultsHelpFormatter)
 parser.add_argument('--save_dir', type=str, default='~/masters-project-non-code/experiments/trunc-norm/')
 parser.add_argument('--exp_name', type=str, default='test/', help='name of set of experiments this one belongs to')  # 5d-vlr0.1-nz=10-final
-parser.add_argument('--load_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm/')
+# parser.add_argument('--load_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm/')
+parser.add_argument('--load_dir', type=str, default='/home/ben/masters-project-non-code/experimental-results/trunc-norm/')
 
 args = parser.parse_args()
 main_load_dir = os.path.join(args.load_dir, args.exp_name)
@@ -50,7 +51,10 @@ if not os.path.exists(save_dir):
 
 
 def split_params(theta):
-    mean = theta[1:1+d]
+    try:
+        mean = theta[1:1+d]
+    except IndexError:
+        pass
     prec_flat = theta[1+d:]
     prec = np.zeros((d, d))
     prec[np.tril_indices(d)] = prec_flat
@@ -91,6 +95,7 @@ def plot_errorbar_helper(ax, fracs, mses, deciles, label, color):
 def plot_errorbar(ax, fracs, mses, label, color):
     deciles = np.percentile(mses, percentiles, axis=0)
     plot_errorbar_helper(ax, fracs, mses, deciles, label, color)
+
 
 def plot_theta0_mses(axs, theta0_mu_mse, theta0_mean_mse, theta0_diag_mse, theta0_ndiag_mse):
     axs[0].plot((0, 1), (theta0_mu_mse, theta0_mu_mse), linestyle='--')
@@ -138,7 +143,11 @@ for outer_file in os.listdir(main_load_dir):
         for filename in filenames:
             loaded = np.load(os.path.join(exp, filename))
             if filename[0] == 'v':
-                theta = loaded['vnce_thetas'][-1][-1]
+                thetas = loaded['vnce_thetas']
+                if isinstance(thetas[-1][-1], float):
+                    theta = thetas[-1]
+                else:
+                    theta = thetas[-1][-1]
             else:
                 theta = loaded['nce_thetas'][-1]
 

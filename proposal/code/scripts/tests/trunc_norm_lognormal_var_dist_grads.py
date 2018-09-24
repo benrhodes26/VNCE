@@ -57,7 +57,6 @@ def make_var_dist(d):
 
 
 def make_noise(n, nu, d, X_mask):
-    # estimate (from the synthetic data) the parameters of a factorial truncated normal for the noise distribution
     noise_mean = np.ones(d, dtype='float64') * rnd.uniform(0.5, 4)
     noise_chol = np.ones(d, dtype='float64') * rnd.uniform(1, 2)
     print('noise parameters: \n mean: {} \n chol: {}'.format(noise_mean, noise_chol))
@@ -76,7 +75,7 @@ def make_dp(X_train, Y, n, noise_miss_mask, X_mask, nu, nz, var_dist):
                                  noise_samples=Y,
                                  noise_to_data_ratio=nu,
                                  num_latent_per_data=nz,
-                                 variational_noise=var_dist,
+                                 variational_dist=var_dist,
                                  train_missing_data_mask=X_mask,
                                  val_missing_data_mask=X_mask,
                                  noise_miss_mask=noise_miss_mask,
@@ -98,12 +97,7 @@ def generate_data(n, d):
     X_train = X_train[~np.all(old_X_mask == 1, axis=1)]
     n = len(X_train)
     print("num data points remaining: {}".format(n))
-    # X_mask = np.zeros((n, d), dtype='float64')
-    # X_mask[:int(n/2), 0] = 1
-    # X_mask[:int(n/2), 3] = 1
-    # X_mask[int(n/2): int(3*n/4), 2] = 1
-    # X_mask[int(n/2): int(3*n/4), 4] = 1
-    # print(X_mask)
+
     return X_train, X_mask, n
 
 
@@ -114,7 +108,7 @@ def make_loss(data_provider, model, nu, use_numeric_stable_approx_second_term, v
                                    variational_dist=var_dist,
                                    noise_to_data_ratio=nu,
                                    use_neural_model=False,
-                                   use_neural_variational_noise=False,
+                                   use_neural_variational_dist=False,
                                    use_minibatches=True,
                                    use_reparam_trick=True,
                                    separate_terms=True,
@@ -225,10 +219,12 @@ def check_model_grad(theta0, model, X_train, X_mask, Z, d, check=None):
 
 
 def check_vnce_loss_grad_wrt_theta(theta0, loss, term=1):
+    loss.dp.next_minibatch()
+    loss.dp.resample_latents_if_necessary()
 
     def eval_loss(theta):
         loss.model.theta = deepcopy(theta)
-        term1, term2 = loss(next_minibatch=True)
+        term1, term2 = loss()
         if term == 1:
             return term1
         elif term == 2:
@@ -249,30 +245,33 @@ def check_vnce_loss_grad_wrt_theta(theta0, loss, term=1):
     print('grad finite diff: {}'.format(diff))
 
 
-def check_vnce_loss_grad_wrt_alpha(alpha0, loss):
+def check_vnce_loss_grad_wrt_alpha(alpha0, loss, nz):
+    loss.dp.next_minibatch()
+    loss.dp.E_ZX = loss.variational_dist.sample_E(nz, loss.dp.X_mask)
 
-    def eval_loss(alpha):
+    def eval_loss_wrt_alpha(alpha):
         loss.variational_dist.alpha = deepcopy(alpha)
-        term1, term2 = loss(next_minibatch=True)
+        loss.dp.ZX = loss.variational_dist.get_Z_samples_from_E(nz, loss.dp.E_ZX, loss.dp.X, loss.dp.X_mask)
+        term1, term2 = loss()
         return term1
 
-    def grad_loss_wrt_theta(alpha):
+    def grad_loss_wrt_alpha(alpha):
         loss.variational_dist.alpha = deepcopy(alpha)
+        loss.dp.ZX = loss.variational_dist.get_Z_samples_from_E(nz, loss.dp.E_ZX, loss.dp.X, loss.dp.X_mask)
         grad = loss.grad_wrt_alpha()
         return grad
 
-    diff = check_grad(eval_loss, grad_loss_wrt_theta, alpha0)
+    diff = check_grad(eval_loss_wrt_alpha, grad_loss_wrt_alpha, alpha0)
     print('grad finite diff: {}'.format(diff))
 
 
 def main():
-    eps = np.sqrt(np.finfo(float).eps)
-    # eps = 1e-8
+    # eps = np.sqrt(np.finfo(float).eps)
+    eps = 1e-8
     n = 10
-    nu = 1
+    nu = 10
     nz = 3
     d = 3
-    # len_alpha = int(d * (d + 3) / 2)
     use_numeric_stable_approx_second_term = False
 
     # generate synthetic data
@@ -336,9 +335,9 @@ def main():
     check_vnce_loss_grad_wrt_theta(deepcopy(model.theta), loss, term=2)
 
     print('-----------------------------------')
-    print('checking grad of vnce objective w.r.t theta')
+    print('checking grad of vnce objective w.r.t alpha')
     print('-----------------------------------')
-    check_vnce_loss_grad_wrt_alpha(deepcopy(var_dist.alpha), loss)
+    check_vnce_loss_grad_wrt_alpha(deepcopy(var_dist.alpha), loss, nz)
 
 
 if __name__ == '__main__':

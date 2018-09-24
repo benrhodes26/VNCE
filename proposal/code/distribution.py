@@ -939,7 +939,7 @@ class UnivariateTruncNormTruePosteriors(Distribution):
         :param U: array (n, d)
         """
         mean, var = self.get_conditional_pretruncated_params(U, miss_mask)
-        collapsed_mask = miss_mask.sum(-1)
+        collapsed_mask = np.any(miss_mask != 0, axis=-1)
         std = var**0.5
         std_inv = np.divide(1, std, out=np.zeros_like(std), where=std != 0)
 

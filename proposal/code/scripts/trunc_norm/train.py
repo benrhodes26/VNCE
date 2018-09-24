@@ -13,14 +13,10 @@ import matplotlib
 matplotlib.use('Agg')
 import numpy as np
 import pickle
-import rpy2
-import rpy2.robjects as ro
-import rpy2.robjects.numpy2ri
 
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from copy import deepcopy
 from numpy import random as rnd
-from rpy2.robjects.packages import importr
 from scipy.io import loadmat
 from scipy.optimize import fsolve
 from scipy.special import erfcx
@@ -39,7 +35,7 @@ from nce_optimiser import NCEOptimiser
 from plot import *
 from regularisers import L1Regulariser
 from utils import *
-from vnce_optimiser import VemOptimiser, SgdEmStep, ScipyMinimiseEmStep, ExactEStep, MonteCarloVnceLoss
+from vnce_optimiser import VemOptimiser, SgdEmStep, ScipyMinimiseEmStep, ExactEStep, MonteCarloVnceLoss, ScipyOptimiser
 
 START_TIME = strftime('%Y%m%d-%H%M', gmtime())
 
@@ -47,17 +43,17 @@ parser = ArgumentParser(description='Experiments for learning the parameters of 
                         formatter_class=ArgumentDefaultsHelpFormatter)
 # Read/write arguments
 
-# parser.add_argument('--save_dir', type=str, default='/home/ben/masters-project-non-code/experimental-results/trunc-norm',
-#                     help='Path to directory where model will be saved')
-parser.add_argument('--save_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm',
+parser.add_argument('--save_dir', type=str, default='/home/ben/masters-project-non-code/experimental-results/trunc-norm',
                     help='Path to directory where model will be saved')
+# parser.add_argument('--save_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm',
+#                     help='Path to directory where model will be saved')
 parser.add_argument('--exp_name', type=str, default='test', help='name of set of experiments this one belongs to') #lognormal_50d_nu10
 parser.add_argument('--name', type=str, default=START_TIME, help='name of this exact experiment')
 
 # Data arguments
 parser.add_argument('--sample_size', type=int, default=1000, help='Number of datapoints')
 parser.add_argument('--nz', type=int, default=1, help='Number of latent samples per datapoint')
-parser.add_argument('--nu', type=int, default=100, help='ratio of noise to data samples in NCE')
+parser.add_argument('--nu', type=int, default=1, help='ratio of noise to data samples in NCE')
 parser.add_argument('--load_data', dest='load_data', action='store_true', help='load 100d data generated in matlab')
 parser.add_argument('--no-load_data', dest='load_data', action='store_false')
 parser.set_defaults(load_data=False)
@@ -69,14 +65,18 @@ parser.add_argument('--hidden_dim', type=int, default=100, help='dimension of hi
 parser.add_argument('--activation_layer', type=object, default=TanhLayer(), help='type of non-linearity in neural network')
 
 # Latent NCE optimisation arguments
-parser.add_argument('--opt_method', type=str, default='SGD', help='optimisation method. L-BFGS-B and CG both seem to work')
-parser.add_argument('--maxiter', type=int, default=5, help='number of iterations performed by L-BFGS-B optimiser inside each M step of EM')
+parser.add_argument('--opt_method1', type=str, default='SGD', help='optimisation method. L-BFGS-B and CG both seem to work')
+parser.add_argument('--opt_method2', type=str, default='SGD', help='optimisation method. L-BFGS-B and CG both seem to work')
+parser.add_argument('--opt_method3', type=str, default='BFGS', help='optimisation method. L-BFGS-B and CG both seem to work')
+parser.add_argument('--maxiter1', type=int, default=1, help='number of iterations performed by L-BFGS-B optimiser inside each M step of EM')
+parser.add_argument('--maxiter2', type=int, default=1, help='number of iterations performed by L-BFGS-B optimiser inside each M step of EM')
+parser.add_argument('--maxiter3', type=int, default=500, help='number of iterations performed by L-BFGS-B optimiser')
 parser.add_argument('--stop_threshold', type=float, default=0, help='Tolerance used as stopping criterion in EM loop')
-parser.add_argument('--max_num_epochs1', type=int, default=500, help='Maximum number of loops through the dataset during training')  # 500
+parser.add_argument('--max_num_epochs1', type=int, default=1, help='Maximum number of loops through the dataset during training')  # 500
 parser.add_argument('--max_num_epochs2', type=int, default=1, help='Maximum number of loops through the dataset during training')  # 500
 parser.add_argument('--max_num_epochs3', type=int, default=1, help='Maximum number of loops through the dataset during training')  # 500
-parser.add_argument('--model_learn_rate', type=float, default=0.01, help='if opt_method=SGD, this is the learning rate used to train the model')
-parser.add_argument('--var_learn_rate', type=float, default=0.03, help='if opt_method=SGD, this is the learning rate used to train the variational dist')
+parser.add_argument('--model_learn_rate', type=float, default=0.1, help='if opt_method=SGD, this is the learning rate used to train the model')
+parser.add_argument('--var_learn_rate', type=float, default=0.1, help='if opt_method=SGD, this is the learning rate used to train the variational dist')
 parser.add_argument('--batch_size', type=int, default=100, help='if opt_method=SGD, this is the size of a minibatch')
 parser.add_argument('--num_batch_per_em_step', type=int, default=1, help='if opt_method=SGD, this is the number of batches per EM step')
 parser.add_argument('--track_loss', dest='track_loss', action='store_true', help='track VNCE loss in E & M steps')
@@ -86,10 +86,10 @@ parser.set_defaults(track_loss=True)
 # nce optimisation arguments
 parser.add_argument('--nce_opt_method', type=str, default='SGD', help='nce optimisation method. L-BFGS-B and CG both seem to work')
 parser.add_argument('--maxiter_nce', type=int, default=5, help='number of iterations inside scipy.minimize')
-parser.add_argument('--nce_missing_num_epochs1', type=int, default=500, help='if nce_opt_method=SGD, this is the number of passes through data set')  # 250
+parser.add_argument('--nce_missing_num_epochs1', type=int, default=1, help='if nce_opt_method=SGD, this is the number of passes through data set')  # 250
 parser.add_argument('--nce_missing_num_epochs2', type=int, default=1, help='if nce_opt_method=SGD, this is the number of passes through data set')  # 250
 parser.add_argument('--nce_missing_num_epochs3', type=int, default=1, help='if nce_opt_method=SGD, this is the number of passes through data set')  # 250
-parser.add_argument('--nce_learn_rate', type=float, default=0.01, help='if nce_opt_method=SGD, this is the learning rate used')
+parser.add_argument('--nce_learn_rate', type=float, default=0.03, help='if nce_opt_method=SGD, this is the learning rate used')
 parser.add_argument('--nce_batch_size', type=int, default=100, help='if nce_opt_method=SGD, this is the size of a minibatch')
 
 # Other arguments
@@ -98,7 +98,7 @@ parser.add_argument('--no-separate_terms', dest='separate_terms', action='store_
 parser.set_defaults(separate_terms=False)
 parser.add_argument('--use_numeric_stable_approx_second_term', dest='use_numeric_stable_approx_second_term', action='store_true', help='')
 parser.add_argument('--no-use_numeric_stable_approx_second_term', dest='use_numeric_stable_approx_second_term', action='store_false')
-parser.set_defaults(use_numeric_stable_approx_second_term=True)
+parser.set_defaults(use_numeric_stable_approx_second_term=False)
 parser.add_argument('--random_seed', type=int, default=1083463236, help='seed for np.random.RandomState')
 
 args = parser.parse_args()
@@ -174,10 +174,16 @@ def cross_validate(args, frac_missing, i, reg_param):
 
 
 def plot_and_save_vnce(save, vnce_optimiser, vnce_loss, vnce_mse, which):
+    if which == '3':
+        vnce_params, vnce_losses, vnce_times = vnce_optimiser.get_flattened_result_arrays()
+        len_theta = len(vnce_loss.model.theta)
+        vnce_thetas = vnce_params[:, :len_theta]
+        vnce_alphas = vnce_params[:, len_theta:]
+        m_step_ids, e_step_ids, m_step_start_ids, e_step_start_ids = None, None, None, None
+    else:
+        vnce_thetas, vnce_alphas, vnce_losses, vnce_times = vnce_optimiser.get_flattened_result_arrays(flatten_params=False)
+        m_step_ids, e_step_ids, m_step_start_ids, e_step_start_ids = vnce_optimiser.get_m_and_e_step_ids()
 
-    vnce_thetas, vnce_alphas, vnce_losses, vnce_times = vnce_optimiser.get_flattened_result_arrays(
-        flatten_params=False)
-    m_step_ids, e_step_ids, m_step_start_ids, e_step_start_ids = vnce_optimiser.get_m_and_e_step_ids()
     vnce_train_losses = np.array(vnce_optimiser.train_losses)
     vnce_val_losses = np.array(vnce_optimiser.val_losses)
 
@@ -197,7 +203,7 @@ def plot_and_save_vnce(save, vnce_optimiser, vnce_loss, vnce_mse, which):
 
     pickle.dump(vnce_loss.model, open(os.path.join(save, "vnce_model{}.p".format(which)), "wb"))
     pickle.dump(vnce_loss.noise, open(os.path.join(save, "noise{}.p".format(which)), "wb"))
-    pickle.dump(vnce_loss.variational_noise, open(os.path.join(save, "var_dist{}.p".format(which)), "wb"))
+    pickle.dump(vnce_loss.variational_dist, open(os.path.join(save, "var_dist{}.p".format(which)), "wb"))
     pickle.dump(vnce_alphas, open(os.path.join(save, "alphas{}.p".format(which)), "wb"))
 
 
@@ -381,17 +387,6 @@ def generate_data(args):
     args.complete_X_val = args.data_dist.sample(int(args.sample_size / 5))
 
 
-# def generate_masks(args):
-#     X = deepcopy(args.complete_X_train)
-#     train_miss_mask = args.rng.uniform(0, 1, X.shape) < args.frac_missing
-#     X_val = deepcopy(args.complete_X_val)
-#     args.val_missing_data_mask = args.train_missing_data_mask[:len(X_val)]
-#
-#     # loop backwards through missing_fracs, creating nested sequence of miss_masks
-#     masks = []
-#     for i, frac in enumerate(args.frac_range[::-1]):
-
-
 def generate_mask(args):
     X = deepcopy(args.complete_X_train)
     train_miss_mask = args.rng.uniform(0, 1, X.shape) < args.frac_missing
@@ -403,16 +398,11 @@ def generate_mask(args):
     print("There are {} remaining data points after discarding".format(args.n))
 
     # set the number of EM steps to train for
-    if args.opt_method == 'SGD':
-        args.num_em_steps_per_epoch = int(args.n / (args.batch_size * args.num_batch_per_em_step))
-    else:
-        args.num_em_steps_per_epoch = 1
-    args.max_num_em_steps1 = args.max_num_epochs1 * args.num_em_steps_per_epoch * 2
-    # args.max_num_em_steps2 = args.max_num_epochs2 * args.num_em_steps_per_epoch
-    # args.max_num_em_steps3 = args.max_num_epochs3 * args.num_em_steps_per_epoch
-    #todo: change me back!
-    args.max_num_em_steps2 = 2
-    args.max_num_em_steps3 = 2
+    args.max_num_em_steps1 = args.max_num_epochs1 * get_num_em_steps_per_epoch(args, args.opt_method1, '1') * 2
+    args.max_num_em_steps2 = args.max_num_epochs2 * get_num_em_steps_per_epoch(args, args.opt_method2, '2')
+    args.max_num_em_steps3 = args.max_num_epochs3 * get_num_em_steps_per_epoch(args, args.opt_method3, '3')
+    # args.max_num_em_steps2 = 2
+    # args.max_num_em_steps3 = 2
 
     X_val = deepcopy(args.complete_X_val)
     args.val_missing_data_mask = args.train_missing_data_mask[:len(X_val)]
@@ -429,6 +419,22 @@ def generate_mask(args):
     args.X_val_sample_mean = np.array(masked_val.mean(0))
     args.X_val_sample_diag_var = np.array(masked_val.var(0))  # ignore covariances
     # print('sample mean: {} \n sample var: {}'.format(args.X_train_sample_mean, args.X_train_sample_diag_var))
+
+
+def get_num_em_steps_per_epoch(args, opt_method, num_vnce='1'):
+    if opt_method == 'SGD':
+        num_em_steps_per_epoch = int(args.n / (args.batch_size * args.num_batch_per_em_step))
+    else:
+        num_em_steps_per_epoch = 1
+
+    if num_vnce == '1':
+        args.num_em_steps_per_epoch1 = num_em_steps_per_epoch
+    if num_vnce == '2':
+        args.num_em_steps_per_epoch2 = num_em_steps_per_epoch
+    if num_vnce == '3':
+        args.num_em_steps_per_epoch3 = num_em_steps_per_epoch
+
+    return num_em_steps_per_epoch
 
 
 def make_noise(args):
@@ -449,7 +455,7 @@ def make_noise(args):
 def make_model(args):
     # initialise the model p(x, z)
     args.scale0 = np.array([-args.d])
-    #args.scale0 = np.array([0.])
+    # args.scale0 = np.array([0.])
     # args.mean0 = args.X_train_sample_mean
     # args.prec0 = args.true_prec
     args.mean0 = np.zeros(args.d).astype(float)
@@ -498,20 +504,22 @@ def make_regulariser(args):
 
 
 def make_data_providers(args):
-    args.use_sgd = (args.opt_method == 'SGD')
+    args.use_sgd1 = (args.opt_method1 == 'SGD')
+    args.use_sgd2 = (args.opt_method2 == 'SGD')
+    args.use_sgd3 = (args.opt_method3 == 'SGD')
     args.data_provider1 = DataProvider(train_data=args.X_train,
                                        val_data=args.X_val,
                                        noise_samples=args.Y,
                                        noise_to_data_ratio=args.nu,
                                        num_latent_per_data=args.nz,
-                                       variational_noise=args.var_dist,
+                                       variational_dist=args.var_dist,
                                        train_missing_data_mask=args.train_missing_data_mask,
                                        val_missing_data_mask=args.val_missing_data_mask,
                                        noise_miss_mask=args.noise_miss_mask,
                                        use_cdi=True,
                                        X_means=args.X_train_sample_mean,
                                        Y_means=args.Y_means,
-                                       use_minibatches=args.use_sgd,
+                                       use_minibatches=args.use_sgd1,
                                        batch_size=args.batch_size,
                                        use_reparam_trick=False,
                                        rng=args.rng)
@@ -521,14 +529,14 @@ def make_data_providers(args):
                                        noise_samples=args.Y,
                                        noise_to_data_ratio=args.nu,
                                        num_latent_per_data=args.nz,
-                                       variational_noise=args.approx_var_dist,
+                                       variational_dist=args.approx_var_dist,
                                        train_missing_data_mask=args.train_missing_data_mask,
                                        val_missing_data_mask=args.val_missing_data_mask,
                                        noise_miss_mask=args.noise_miss_mask,
                                        use_cdi=True,
                                        X_means=args.X_train_sample_mean,
                                        Y_means=args.Y_means,
-                                       use_minibatches=args.use_sgd,
+                                       use_minibatches=args.use_sgd2,
                                        batch_size=args.batch_size,
                                        use_reparam_trick=True,
                                        rng=args.rng)
@@ -538,12 +546,12 @@ def make_data_providers(args):
                                        noise_samples=args.Y,
                                        noise_to_data_ratio=args.nu,
                                        num_latent_per_data=args.nz,
-                                       variational_noise=args.lognormal_var_dist,
+                                       variational_dist=args.lognormal_var_dist,
                                        train_missing_data_mask=args.train_missing_data_mask,
                                        val_missing_data_mask=args.val_missing_data_mask,
                                        noise_miss_mask=args.noise_miss_mask,
                                        use_cdi=False,
-                                       use_minibatches=args.use_sgd,
+                                       use_minibatches=args.use_sgd3,
                                        batch_size=args.batch_size,
                                        use_reparam_trick=True,
                                        rng=args.rng)
@@ -564,10 +572,10 @@ def make_vnce_loss_functions(args):
                                          variational_dist=args.var_dist,
                                          noise_to_data_ratio=args.nu,
                                          use_neural_model=False,
-                                         use_neural_variational_noise=False,
+                                         use_neural_variational_dist=False,
                                          regulariser=args.l1_reg,
                                          reg_param_indices=args.reg_param_indices,
-                                         use_minibatches=args.use_sgd,
+                                         use_minibatches=args.use_sgd1,
                                          separate_terms=args.separate_terms,
                                          use_numeric_stable_approx_second_term=args.use_numeric_stable_approx_second_term,
                                          rng=args.rng)
@@ -578,10 +586,10 @@ def make_vnce_loss_functions(args):
                                          variational_dist=args.approx_var_dist,
                                          noise_to_data_ratio=args.nu,
                                          use_neural_model=False,
-                                         use_neural_variational_noise=True,
+                                         use_neural_variational_dist=True,
                                          regulariser=args.l1_reg,
                                          reg_param_indices=args.reg_param_indices,
-                                         use_minibatches=args.use_sgd,
+                                         use_minibatches=args.use_sgd2,
                                          use_reparam_trick=True,
                                          separate_terms=args.separate_terms,
                                          use_numeric_stable_approx_second_term=args.use_numeric_stable_approx_second_term,
@@ -593,10 +601,10 @@ def make_vnce_loss_functions(args):
                                          variational_dist=args.lognormal_var_dist,
                                          noise_to_data_ratio=args.nu,
                                          use_neural_model=False,
-                                         use_neural_variational_noise=False,
+                                         use_neural_variational_dist=args.use_sgd3,
                                          regulariser=args.l1_reg,
                                          reg_param_indices=args.reg_param_indices,
-                                         use_minibatches=args.use_sgd,
+                                         use_minibatches=False,
                                          use_reparam_trick=True,
                                          separate_terms=args.separate_terms,
                                          use_numeric_stable_approx_second_term=args.use_numeric_stable_approx_second_term,
@@ -607,21 +615,18 @@ def make_vnce_optimisers(args):
     m_step = SgdEmStep(do_m_step=True,
                        learning_rate=args.model_learn_rate,
                        num_batches_per_em_step=args.num_batch_per_em_step,
-                       noise_to_data_ratio=args.nu,
-                       inds = args.theta_inds,
-                       track_loss=args.track_loss,
-                       rng=args.rng)
+                       inds=args.theta_inds,
+                       track_loss=args.track_loss)
     e_step1 = ExactEStep(track_loss=True)
     e_step2 = SgdEmStep(do_m_step=False,
                         learning_rate=args.var_learn_rate,
                         num_batches_per_em_step=args.num_batch_per_em_step,
-                        noise_to_data_ratio=args.nu,
-                        track_loss=args.track_loss,
-                        rng=args.rng)
+                        track_loss=args.track_loss)
 
-    args.vnce_optimiser1 = VemOptimiser(m_step=m_step, e_step=e_step1, num_em_steps_per_save=args.num_em_steps_per_epoch)
-    args.vnce_optimiser2 = VemOptimiser(m_step=deepcopy(m_step), e_step=e_step2, num_em_steps_per_save=args.num_em_steps_per_epoch)
-    args.vnce_optimiser3 = VemOptimiser(m_step=deepcopy(m_step), e_step=deepcopy(e_step2), num_em_steps_per_save=args.num_em_steps_per_epoch)
+    args.vnce_optimiser1 = VemOptimiser(m_step=m_step, e_step=e_step1, num_em_steps_per_save=args.num_em_steps_per_epoch1)
+    args.vnce_optimiser2 = VemOptimiser(m_step=deepcopy(m_step), e_step=e_step2, num_em_steps_per_save=args.num_em_steps_per_epoch2)
+    # args.vnce_optimiser3 = VemOptimiser(m_step=deepcopy(m_step), e_step=deepcopy(e_step2), num_em_steps_per_save=args.num_em_steps_per_epoch3)
+    args.vnce_optimiser3 = ScipyOptimiser(opt_method=args.opt_method3, max_iter=args.maxiter3)
 
 
 def train(args):
@@ -634,17 +639,18 @@ def train(args):
                              stop_threshold=args.stop_threshold,
                              max_num_em_steps=args.max_num_em_steps1)
 
-    # args.vnce_optimiser2.fit(loss_function=args.vnce_loss2,
-    #                          theta0=deepcopy(args.vnce_loss2.model.theta),
-    #                          alpha0=deepcopy(args.vnce_loss2.get_alpha()),
-    #                          stop_threshold=args.stop_threshold,
-    #                          max_num_em_steps=args.max_num_em_steps2)
-    #
+    args.vnce_optimiser2.fit(loss_function=args.vnce_loss2,
+                             theta0=deepcopy(args.vnce_loss2.model.theta),
+                             alpha0=deepcopy(args.vnce_loss2.get_alpha()),
+                             stop_threshold=args.stop_threshold,
+                             max_num_em_steps=args.max_num_em_steps2)
+
     # args.vnce_optimiser3.fit(loss_function=args.vnce_loss3,
     #                          theta0=deepcopy(args.vnce_loss3.model.theta),
     #                          alpha0=deepcopy(args.vnce_loss3.get_alpha()),
     #                          stop_threshold=args.stop_threshold,
     #                          max_num_em_steps=args.max_num_em_steps3)
+    args.vnce_optimiser3.fit(loss_function=args.vnce_loss3)
 
     args.nce_missing_model = UnnormalisedTruncNorm(deepcopy(args.scale0), deepcopy(args.mean0), precision=deepcopy(args.prec0), rng=args.rng)
     args.nce_missing_optimiser = NCEOptimiser(model=args.nce_missing_model,
@@ -705,7 +711,7 @@ def main(args):
     # num_sims = 10
     # frac_range = [0.0, 0.2, 0.4, 0.6, 0.8]
     num_sims = 1
-    frac_range = [0.0]
+    frac_range = [0.3]
     reg_params = [0]
     # args.theta_inds = np.arange(args.d+1)  # only optimise scaling param and mean vector (not precision)
     args.theta_inds = None

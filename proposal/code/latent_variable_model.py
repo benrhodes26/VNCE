@@ -1227,7 +1227,7 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
     #
     #     return grad
 
-    def __init__(self, scaling_param, mean, prec_type='circular', precision=None, prec_subgraph_size=None, p_prec_nzero=None, rng=None):
+    def __init__(self, scaling_param, mean, prec_type=None, precision=None, prec_subgraph_size=None, p_prec_nzero=None, rng=None):
         """
         :param scaling_param: array (1, )
         :param mean: array (d, )
@@ -1242,9 +1242,6 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
             precision = self.make_circular_precision()
         elif prec_type == 'subgraph':
             precision = self.make_disconnected_subgraph_precision(prec_subgraph_size, p_prec_nzero)
-        elif precision is None:
-            print('must either specify prec_type of provide the precision matrix with prec argument.')
-            raise ValueError
 
         # Get lower triangle of precision with log of diagonal elements (to enforce positivity)
         prec = deepcopy(precision)

@@ -30,6 +30,154 @@ DEFAULT_SEED = 1083463236
 
 
 # noinspection PyPep8Naming,PyTypeChecker,PyMethodMayBeStatic
+class SgdOptimiser:
+    """Optimises the parameters of a loss function with method fit().
+
+    This loss function needs to be a callable: see MonteCarloVnceLoss for an example.
+
+    This class does not specify how to perform the optimisation within each epoch. This needs to be specified by a separate
+     (callable) object that is passed to the constructor of this class.
+    """
+
+    def __init__(self, do_epoch):
+        """
+
+        :param update_step: callable object
+            peforms the updates of the parameters for one epoch e.g by SGD or L-BFGS-B
+        """
+        self.do_epoch = do_epoch
+
+        # results during optimisation
+        self.parameters = []
+        self.losses = []  # losses recorded at each iteration (so per batch in SGD, or per iter in scipy.minimize)
+        self.train_losses = []  # loss over entire train set
+        self.val_losses = []
+        self.times = []
+
+    def fit(self, loss_function, param0, stop_threshold=1e-6, max_num_epochs=100):
+        """Optimise the loss function initialised on this class to fit the data X
+
+        :param loss_function: class
+            see MonteCarloVnceLoss for an example
+        :param param0: array
+            starting value of the parameters we want to optimise
+        :param stop_threshold:
+            if objective increases by less than this threshold after an epoch, terminate
+        :param max_num_em_steps:
+            terminate optimisation after this many epochs
+        """
+        self.init_parameters(loss_function, param0)
+
+        num_epochs = 0
+        prev_loss, current_loss = -99, -9  # arbitrary distinct numbers
+        while np.abs(prev_loss - current_loss) >= stop_threshold and num_epochs < max_num_epochs:
+
+            results = self.update_step(loss_function)
+            #todo: do epoch loop here and then make a call to an update function
+            self.do_epoch(*results, loss_function=loss_function)
+
+            prev_loss = current_loss
+            current_loss = loss_function.get_current_loss(get_float=True)
+            num_epochs += 1
+
+    def init_parameters(self, loss_function, param0):
+        """Initialise parameters and update optimisation results accordingly"""
+        loss_function.set_theta_and_alpha(param0)
+        initial_loss = loss_function(next_minibatch=True)
+        self.update_results([param0], [initial_loss], [time.time()], loss_function)
+
+    def update_results(self, params, losses, times, loss_function):
+        """Update optimisation results during learning"""
+        train_loss, val_loss = loss_function.compute_end_of_epoch_loss(print_loss=True)
+        self.times.append(times)
+        self.parameters.append(params)
+        self.losses.append(losses)
+        self.train_losses.append(train_loss)
+        self.val_losses.append(val_loss)
+
+    def get_flattened_result_arrays(self, flatten_params=True):
+        losses = np.array([loss for sublist in self.losses for loss in sublist])
+        times = np.array([t for sublist in self.times for t in sublist])
+        if flatten_params:
+            params = np.array([param for sublist in self.parameters for param in sublist])
+        else:
+            params = deepcopy(self.parameters)
+
+        start_time = times[0]
+        times -= start_time
+        return params, losses, times
+
+
+class ScipyOptimiser:
+    """"""
+
+    def __init__(self, opt_method, max_iter):
+        self.opt_method = opt_method
+        self.max_iter = max_iter
+
+        self.params = []
+        self.losses = []
+        self.times = []
+
+        self.train_losses = []
+        self.val_losses = []
+        self.num_iters = 0
+
+    def fit(self, loss_function):
+        """Execute optimisation of loss function scipy.minimise
+
+        :param loss_function:
+            see e.g. MonteCarloVnceLoss
+        """
+        assert not loss_function.use_minibatches, "Your loss function has use_minibatches=True, " \
+                                                  "but you are trying to optimise it with a non-linear optimiser. Use SGD instead."
+
+        def callback(param):
+            self.num_iters += 1
+            self.update_results(deepcopy(param), loss_function)
+
+        def loss_neg(param_k):
+            loss_function.set_theta_and_alpha(param_k)
+            self.current_loss = loss_function()
+            return deepcopy(-np.sum(self.current_loss))
+
+        def loss_grad_neg(param_k):
+            loss_function.set_theta_and_alpha(param_k)
+            grad = -loss_function.grad_wrt_theta_and_alpha()
+            return grad
+
+        start_param = loss_function.get_theta_and_alpha()
+
+        _ = minimize(loss_neg, start_param, method=self.opt_method, jac=loss_grad_neg,
+                     callback=callback, options={'maxiter': self.max_iter, 'gtol': 0, 'disp': True})
+
+        self.update_results(loss_function.get_theta_and_alpha(), loss_function)
+        params, losses, times = deepcopy(self.params), deepcopy(self.losses), deepcopy(self.times)
+
+        return np.array(params), np.array(losses), np.array(times)
+
+    def update_results(self, param, loss_function):
+        """Save current parameter, loss and time for plotting after optimisation"""
+        train_loss, val_loss = loss_function.compute_end_of_epoch_loss(print_loss=False)
+        print('iter {}: J1 (train) = {}'.format(self.num_iters, train_loss))
+        print('iter {}: J1 (val) = {}'.format(self.num_iters, val_loss))
+        self.params.append(deepcopy(param))
+        self.losses.append(deepcopy(self.current_loss))
+        self.times.append(time.time())
+        self.train_losses.append(train_loss)
+        self.val_losses.append(val_loss)
+
+    def get_flattened_result_arrays(self):
+        params = np.array(self.params)
+        losses = np.array(self.losses)
+        times = np.array(self.times)
+
+        start_time = times[0]
+        times -= start_time
+        return params, losses, times
+
+
+# noinspection PyPep8Naming,PyTypeChecker,PyMethodMayBeStatic
 class VemOptimiser:
     """Variational Expectation-Maximisation Noise-contrastive Estimation optimiser.
 
@@ -106,7 +254,7 @@ class VemOptimiser:
 
     def update_results(self, params, losses, times, loss_function, m_step=False, e_step=False):
         """Update optimisation results during learning"""
-        train_loss, val_loss = loss_function.compute_end_of_epoch_loss(m_step=m_step)
+        train_loss, val_loss = loss_function.compute_end_of_epoch_loss(print_loss=m_step)
         self.times.append(times)
         self.losses.append(losses)
         self.train_losses.append(train_loss)
@@ -216,7 +364,7 @@ class SgdEmStep:
     If used during the E step, it optimises the VNCE objective w.r.t the variational parameters alpha.
     In either case, it uses stochastic gradient descent with adjustable mini-batch size and learning rate.
     """
-    def __init__(self, do_m_step, learning_rate, num_batches_per_em_step, noise_to_data_ratio, rng, inds=None, track_loss=False):
+    def __init__(self, do_m_step, learning_rate, num_batches_per_em_step, inds=None, track_loss=False):
         """
         :param do_m_step: boolean
             if True, optimise loss function w.r.t model params theta. Else w.r.t variational params alpha.
@@ -232,10 +380,8 @@ class SgdEmStep:
         self.do_m_step = do_m_step
         self.learning_rate = learning_rate
         self.num_batches_per_em_step = num_batches_per_em_step
-        self.nu = noise_to_data_ratio
         self.inds = inds
         self.track_loss = track_loss
-        self.rng = rng
 
     def __call__(self, loss_function):
         """Execute optimisation of loss function using stochastic gradient ascent
@@ -377,7 +523,7 @@ class MonteCarloVnceLoss:
                  variational_dist,
                  noise_to_data_ratio,
                  use_neural_model=False,
-                 use_neural_variational_noise=False,
+                 use_neural_variational_dist=False,
                  regulariser=None,
                  reg_param_indices=None,
                  use_reparam_trick=False,
@@ -409,7 +555,7 @@ class MonteCarloVnceLoss:
             self.reg_param_indices = np.arange(len(model.theta))
 
         self.use_neural_model = use_neural_model
-        self.use_neural_variational_noise = use_neural_variational_noise
+        self.use_neural_variational_noise = use_neural_variational_dist
         self.use_reparam_trick = use_reparam_trick
         self.use_score_function = use_score_function
         self.use_rejection_reparam_trick = use_rejection_reparam_trick
@@ -465,27 +611,6 @@ class MonteCarloVnceLoss:
 
         # validate_shape(a.shape, (self.nz, len(self.X)))
         return first_term
-
-    # def second_term_of_loss(self):
-    #     Y = self.dp.Y
-    #     nu = self.nu
-    #
-    #     if self.use_importance_sampling:
-    #         ZY, Y_mask = self.dp.ZY, self.dp.Y_mask
-    #         h_y = self.h(Y, ZY, Y_mask)
-    #         expectation = np.mean(np.exp(h_y), axis=0)
-    #         c = (1 / nu) * expectation  # (n*nu, )
-    #         second_term = -nu * np.mean(np.log(1 + c))
-    #     else:
-    #         h_y = self.h2(Y)
-    #         exp1 = np.exp(h_y, out=np.zeros_like(h_y), where=h_y <= 0)
-    #         exp2 = np.exp(-h_y, out=np.zeros_like(h_y), where=h_y > 0)
-    #         c = (h_y <= 0) * np.log(1 + (1/nu) * exp1)
-    #         d = (h_y > 0) * (h_y + np.log((1/nu) + exp2))
-    #         second_term = -np.mean(c + d)
-    #
-    #     validate_shape(c.shape, (len(Y), ))
-    #     return second_term
 
     def second_term_of_loss(self):
         Y, ZY, Y_mask = self.dp.Y, self.dp.ZY, self.dp.Y_mask
@@ -631,7 +756,7 @@ class MonteCarloVnceLoss:
 
         X, ZX, E_ZX, X_mask = self.dp.X, self.dp.ZX, self.dp.E_ZX, self.dp.X_mask
         if self.use_reparam_trick:
-            grad_logmodel_wrt_z  = self.model.grad_log_wrt_z(X, ZX, X_mask)
+            grad_logmodel_wrt_z = self.model.grad_log_wrt_z(X, ZX, X_mask)
             grad_log_model = self.variational_dist.grad_log_model_wrt_alpha(X, E_ZX, grad_logmodel_wrt_z, X_mask)  # (len(alpha), nz, n)
             grad_log_var_dist = self.variational_dist.grad_log_wrt_alpha(X, E_ZX, grad_logmodel_wrt_z, X_mask)  # (len(alpha), nz, n)
             grad_wrt_alpha = self.reparam_trick_grad(grad_log_model, grad_log_var_dist)  # (n, len(alpha))
@@ -643,6 +768,11 @@ class MonteCarloVnceLoss:
             raise ValueError
 
         return np.mean(grad_wrt_alpha, axis=0)  # (len(alpha), )
+
+    def grad_wrt_theta_and_alpha(self, next_minibatch=False):
+        theta_grad = self.grad_wrt_theta(next_minibatch)
+        alpha_grad = self.grad_wrt_alpha(next_minibatch)
+        return np.concatenate((theta_grad, alpha_grad))
 
     def grad_wrt_variational_noise_nn_params(self, next_minibatch=False):
         """ returns gradient of parameters of neural network parametrising the variational distribution
@@ -690,7 +820,7 @@ class MonteCarloVnceLoss:
     def reparam_trick_grad(self, grad_log_model, grad_log_var_dist, separate_terms=False):
         X, ZX, X_mask = self.dp.X, self.dp.ZX, self.dp.X_mask
 
-        # joint_noise = (self.nu * self.noise(X, ZX) * self.variational_noise(ZX, X))
+        # joint_noise = (self.nu * self.noise(X, ZX) * self.variational_dist(ZX, X))
         # a = joint_noise / (self.model(X, ZX, X_mask) + joint_noise)  # (nz, n)
         h_x = self.h(X, ZX, X_mask)
         exp1 = np.exp(h_x, out=np.zeros_like(h_x), where=h_x <= 0)
@@ -744,51 +874,31 @@ class MonteCarloVnceLoss:
             current_alpha[inds] += learning_rate * grad[inds]
             self.set_alpha(current_alpha)
 
-    def compute_end_of_epoch_loss(self, m_step=True):
+    def compute_end_of_epoch_loss(self, print_loss=True):
         """"Compute loss on *whole* training set and validation set at end of each epoch"""
-        # save current data
-        cur_X = deepcopy(self.dp.X)
-        cur_Y = deepcopy(self.dp.Y)
-        cur_X_mask = deepcopy(self.dp.X_mask)
-        cur_Y_mask = deepcopy(self.dp.Y_mask)
-        self.dp.val_mode = True  # required when using the cdi algorithm, to avoid updating global data
 
         if not self.dp.use_cdi:
-            # eval on validation dataset
-            self.dp.X = deepcopy(self.dp.val_data)
-            self.dp.X_mask = deepcopy(self.dp.val_miss_mask)
-            num_val_noise = int(self.nu * len(self.dp.val_data))
-            self.dp.Y = deepcopy(self.dp.noise_samples[:num_val_noise])
-            self.dp.Y_mask = deepcopy(self.dp.noise_miss_mask[:num_val_noise])
-            self.dp.resample_from_variational_noise = True
-            val_loss = self.__call__()
-
             # eval on *whole* training set
-            self.dp.X = deepcopy(self.dp.train_data)
-            self.dp.X_mask = deepcopy(self.dp.train_miss_mask)
-            self.dp.Y = deepcopy(self.dp.noise_samples)
-            self.dp.Y_mask = deepcopy(self.dp.noise_miss_mask)
-            self.dp.resample_from_variational_noise = True
+            self.dp.set_data_and_masks(which_set='train', save_current=True)
             train_loss = self.__call__()
+            # eval on validation dataset
+            self.dp.set_data_and_masks(which_set='val', save_current=False)
+            val_loss = self.__call__()
         else:
-            val_loss = 0
-            self.dp.X = deepcopy(self.dp.train_data)
-            self.dp.X_mask = np.zeros_like(self.dp.X)
-            self.dp.Y = deepcopy(self.dp.noise_samples)
-            self.dp.Y_mask = np.zeros_like(self.dp.Y)
-            self.dp.resample_from_variational_noise = True
+            # using CDI, so treat current train data as fully observed and don't compute val loss
+            self.dp.set_data_and_masks(which_set='train', save_current=True)
+            self.dp.X_mask = np.zeros_like(self.dp.X_mask)
+            self.dp.E_ZX = self.variational_dist.sample_E(self.dp.nz, self.dp.X_mask)
+            self.dp.Y_mask = np.zeros_like(self.dp.Y_mask)
             train_loss = self.__call__()
-        if m_step:
-            print('epoch {}: J1 (train) = {}'.format(self.dp.current_epoch, train_loss))
-            print('epoch {}: J1 (val) = {}'.format(self.dp.current_epoch, val_loss))
+            val_loss = 0
 
         # substitute back in the original data
-        self.dp.X = cur_X
-        self.dp.Y = cur_Y
-        self.dp.X_mask = cur_X_mask
-        self.dp.Y_mask = cur_Y_mask
-        self.dp.val_mode = False
-        self.dp.resample_from_variational_noise = True
+        self.dp.set_data_and_masks(which_set='prev', save_current=False)
+
+        if print_loss:
+            print('epoch {}: J1 (train) = {}'.format(self.dp.current_epoch, train_loss))
+            print('epoch {}: J1 (val) = {}'.format(self.dp.current_epoch, val_loss))
 
         return train_loss, val_loss
 
@@ -816,6 +926,11 @@ class MonteCarloVnceLoss:
 
         return alpha
 
+    def get_theta_and_alpha(self):
+        theta = self.get_theta()
+        alpha = self.get_alpha()
+        return np.concatenate((theta, alpha))
+
     def get_current_loss(self, get_float=False):
         loss = deepcopy(self.dp.current_loss)
         if get_float:
@@ -831,6 +946,11 @@ class MonteCarloVnceLoss:
         else:
             self.variational_dist.alpha = deepcopy(new_alpha)
         self.dp.resample_from_variational_noise = True
+
+    def set_theta_and_alpha(self, new_param):
+        theta_len = len(self.model.theta)
+        self.set_theta(new_param[:theta_len])
+        self.set_alpha(new_param[theta_len:])
 
     def __repr__(self):
         return "MonteCarloVnceLoss"
