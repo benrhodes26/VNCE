@@ -1,11 +1,9 @@
 import os
 import sys
-code_dir = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/code'
-code_dir_2 = '/home/ben/masters-project/ben-rhodes-masters-project/proposal/code'
-code_dir_3 = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/code/neural_network'
-code_dir_4 = '/home/ben/masters-project/ben-rhodes-masters-project/proposal/code/neural_network'
-code_dirs = [code_dir, code_dir_2, code_dir_3, code_dir_4]
-for code_dir in code_dirs:
+CODE_DIRS = ['~/masters-project/ben-rhodes-masters-project/proposal/code', '/home/s1771906/code']
+CODE_DIRS_2 = [d + '/neural_network' for d in CODE_DIRS] + CODE_DIRS
+CODE_DIRS_2 = [os.path.expanduser(d) for d in CODE_DIRS_2]
+for code_dir in CODE_DIRS_2:
     if code_dir not in sys.path:
         sys.path.append(code_dir)
 
@@ -18,6 +16,7 @@ from distribution import RBMLatentPosterior, MultivariateBernoulliNoise, ChowLiu
 from fully_observed_models import VisibleRestrictedBoltzmannMachine
 from latent_variable_model import RestrictedBoltzmannMachine
 from plot import *
+from project_statics import *
 from utils import take_closest, mean_square_error
 
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
@@ -25,7 +24,6 @@ from copy import deepcopy
 from matplotlib import pyplot as plt
 from matplotlib import rc
 from numpy import random as rnd
-
 
 rc('lines', linewidth=0.5)
 rc('font', size=8)
@@ -36,10 +34,9 @@ rc('ytick', labelsize=10)
 
 parser = ArgumentParser(description='plot relationship between fraction of training data missing and final mean-squared error for'
                                     'a truncated normal model trained with VNCE', formatter_class=ArgumentDefaultsHelpFormatter)
-parser.add_argument('--save_dir', type=str, default='~/masters-project-non-code/experiments/trunc-norm/')
-parser.add_argument('--exp_name', type=str, default='test5d_nu10/', help='name of set of experiments this one belongs to')  # 5d-vlr0.1-nz=10-final
-parser.add_argument('--load_dir', type=str, default='/disk/scratch/ben-rhodes-masters-project/experimental-results/trunc_norm/')
-# parser.add_argument('--load_dir', type=str, default='/home/ben/masters-project-non-code/experimental-results/trunc-norm/')
+parser.add_argument('--save_dir', type=str, default=RESULTS + '/trunc-norm/')
+parser.add_argument('--exp_name', type=str, default='20d_reg_param_0.0001/', help='name of set of experiments this one belongs to')  # 5d-vlr0.1-nz=10-final
+parser.add_argument('--load_dir', type=str, default=EXPERIMENT_OUTPUTS + '/trunc_norm/')
 
 args = parser.parse_args()
 main_load_dir = os.path.join(args.load_dir, args.exp_name)
@@ -107,9 +104,9 @@ def plot_theta0_mses(axs, theta0_mu_mse, theta0_mean_mse, theta0_diag_mse, theta
 # methods = ['VNCE (true)', 'VNCE (cdi approx)', 'VNCE (lognormal approx)', 'NCE (means fill in)', 'NCE (noise fill in)', 'NCE (random fill in)']
 # filenames = ['vnce_results1.npz', 'vnce_results2.npz', 'vnce_results3.npz', 'nce_results1.npz', 'nce_results2.npz', 'nce_results3.npz']
 # colors = ['black', 'blue', 'purple', 'orange', 'green', 'red']
-methods = ['VNCE (true)', 'VNCE (lognormal approx)', 'NCE (means fill in)', 'NCE (noise fill in)']
-filenames = ['vnce_results1.npz', 'vnce_results3.npz', 'nce_results1.npz', 'nce_results2.npz']
-colors = ['black', 'purple', 'orange', 'green']
+methods = ['VNCE (lognormal approx)', 'NCE (means fill in)', 'MLE (sampling)']
+filenames = ['vnce_results3.npz', 'nce_results1.npz', 'cd_results.npz']
+colors = ['purple', 'orange', 'black']
 num_methods = len(methods)
 
 all_mus = [[] for i in range(num_methods)]
@@ -148,8 +145,10 @@ for outer_file in os.listdir(main_load_dir):
                     theta = thetas[-1]
                 else:
                     theta = thetas[-1][-1]
-            else:
+            elif filename[0] == 'n':
                 theta = loaded['nce_thetas'][-1]
+            else:
+                theta = loaded['cd_thetas'][-1]
 
             mu_mse, mean_mse, diag_prec_mse, n_diag_prec_mse = get_mses(true_theta, theta, d)
             frac_to_mu_mse_dict.setdefault(str(frac), []).append(mu_mse)
@@ -184,7 +183,7 @@ for i in range(num_methods):
 
 titles = [r'$\mu$', r'\textbf{b}', 'Diagonal of K', 'Off-diagonal of K']
 # upper_lims = [1, 1, 0.2, 0.2]
-upper_lims = [1, 10, 10, 0.2]
+upper_lims = [0.1, 5, 1, 0.03]
 for i, ax in enumerate(axs):
     ax.set_ylim(0, upper_lims[i])
     ax.set_title(titles[i])

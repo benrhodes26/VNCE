@@ -595,13 +595,14 @@ class MissingDataLogNormalPosterior(Distribution):
     def __init__(self, mean, precision, rng=None):
         self.mean_len = len(mean)
 
-        # lower triangular part of precision with log of diagonal elements (to enforce positivity)
+        # choleksy decomposition of precision with log of diagonal elements (to enforce positivity)
         prec = deepcopy(precision)
-        idiag = np.diag_indices_from(prec)
-        prec[idiag] = np.log(prec[idiag])
-        lower_prec = prec[np.tril_indices(self.mean_len)]
+        chol = np.linalg.cholesky(prec)
+        idiag = np.diag_indices_from(chol)
+        chol[idiag] = np.log(chol[idiag])
+        chol_flat = chol[np.tril_indices(self.mean_len)]
 
-        alpha = np.concatenate((mean.reshape(-1), lower_prec.reshape(-1)))
+        alpha = np.concatenate((mean.reshape(-1), chol_flat.reshape(-1)))
         super().__init__(alpha, rng=rng)
 
     def __call__(self, Z, U, log=False, nn_outputs=None):
@@ -664,6 +665,7 @@ class MissingDataLogNormalPosterior(Distribution):
             gradients of log_model w.r.t variational params alpha
         """
         V = deepcopy(U * (1 - miss_mask))  # (n, d)
+        joint_mean, joint_prec, joint_chol = self.get_joint_pretruncated_params()
         cond_means, cond_precs, H_matrices, inds_and_means = self.get_conditional_params(U, miss_mask)
         miss_inds, obs_inds, obs, obs_means, miss_mean = inds_and_means
 
@@ -706,28 +708,22 @@ class MissingDataLogNormalPosterior(Distribution):
             prec_bar = prec_bar_1 + prec_bar_2  # (nz, k, k)
             if not model:
                 prec_bar += 0.5 * cov
-            prec_bar_T = np.transpose(prec_bar, (0, 2, 1))
-            diag = np.ones_like(prec_bar, dtype='float64')
-            diag *= np.identity(k)
-            prec_bar_diag = prec_bar * diag
-            F = prec_bar + prec_bar_T - prec_bar_diag  # (nz, k, k)
 
-            i_diag = np.diag_indices_from(prec)
-            F[:, i_diag[0], i_diag[1]] *= prec[i_diag]  # since our parametrisation of the diag is in log-domain
-            S1_bar = reshape_condprec_to_prec_shape(F, i_miss, nz, self.mean_len)  # (nz, d, d)
+            S1_bar = reshape_condprec_to_prec_shape(prec_bar, i_miss, nz, self.mean_len)  # (nz, d, d)
 
             H_bar = dot_2d_with_3d(cov.T, D_bar)  # (nz, k, d-k)
-            H_bar = reshape_H_to_prec_shape(H_bar, i_miss, i_obs, nz, self.mean_len)  # (nz, d, d)
-            H_bar_T = np.transpose(H_bar, (0, 2, 1))
-            diag = np.ones_like(H_bar, dtype='float64')
-            diag *= np.identity(H_bar.shape[-1])
-            H_bar_diag = H_bar * diag
-            S2_bar = H_bar + H_bar_T - H_bar_diag
+            S2_bar = reshape_H_to_prec_shape(H_bar, i_miss, i_obs, nz, self.mean_len)  # (nz, d, d)
 
-            S_bar = S1_bar + S2_bar  # (nz, d, d)
+            joint_prec_bar = S1_bar + S2_bar  # (nz, d, d)
+            joint_prec_bar_T = np.transpose(joint_prec_bar, (0, 2, 1))
+            joint_prec_bar = joint_prec_bar + joint_prec_bar_T
+            joint_chol_bar = np.dot(joint_prec_bar, joint_chol)  # (nz, d, d)
+            i_diag = np.diag_indices_from(joint_chol)
+            joint_chol_bar[:, i_diag[0], i_diag[1]] *= joint_chol[i_diag]  # since our parametrisation of the diag is in log-domain
+
             tril =  np.tril_indices(self.mean_len)
-            S_bar = S_bar[:, tril[0], tril[1]]  # (nz, -1)
-            S_bar = S_bar.T  # (-1, nz)
+            alpha1_bar = joint_chol_bar[:, tril[0], tril[1]]  # (nz, -1)
+            alpha1_bar = alpha1_bar.T  # (-1, nz)
 
             mean_bar = np.zeros((nz, self.mean_len), dtype='float64')
             mean_bar[:, i_miss] = W_bar  # (nz, d)
@@ -737,7 +733,7 @@ class MissingDataLogNormalPosterior(Distribution):
             o_mean_bar = np.dot(G, W_bar.T)  # (d-k, nz)
             mean_bar[i_obs, :] = o_mean_bar  # (d, nz)
 
-            alpha_bar = np.concatenate((mean_bar, S_bar), axis=0)  # (len(alpha), nz)
+            alpha_bar = np.concatenate((mean_bar, alpha1_bar), axis=0)  # (len(alpha), nz)
             grads[:, :, i] = alpha_bar
 
         return grads  # (len(alpha), nz, n)
@@ -799,7 +795,7 @@ class MissingDataLogNormalPosterior(Distribution):
             H_matrices: list of arrays, of shape (num_missing, num_observed
         """
         V = deepcopy(U * (1 - miss_mask))  # (n, d)
-        mean, precision, lprec, prec_diag = self.get_joint_pretruncated_params()
+        mean, precision, chol = self.get_joint_pretruncated_params()
 
         cond_means = []
         cond_vars = []
@@ -841,20 +837,19 @@ class MissingDataLogNormalPosterior(Distribution):
     def get_joint_pretruncated_params(self, mean=None, lprec=None):
         """Get mean and precision of the log dist (which is a joint multivariate normal)"""
         if mean is None:
-            mean, lprec = deepcopy(self.alpha[:self.mean_len]), deepcopy(self.alpha[self.mean_len:])
+            # mean, lprec = deepcopy(self.alpha[:self.mean_len]), deepcopy(self.alpha[self.mean_len:])
+            mean, chol_flat = deepcopy(self.alpha[:self.mean_len]), deepcopy(self.alpha[self.mean_len:])
 
-        # symmetric decomposition of precision (with diagonal in log-domain)
-        lprecision = np.zeros((self.mean_len, self.mean_len), dtype='float64')
-        ilower = np.tril_indices(self.mean_len)
-        lprecision[ilower] = lprec
+        # parametrised in terms of cholesky decomposition of precision (with diagonal in log-domain)
+        d = len(mean)
+        chol = np.zeros((d, d))
+        chol[np.tril_indices(d)] = chol_flat
 
         # exp the diagonal, to enforce positivity
-        idiag = np.diag_indices_from(lprecision)
-        lprecision[idiag] = np.exp(lprecision[idiag])
+        chol[np.diag_indices(d)] = np.exp(chol[np.diag_indices(d)])
+        precision = np.dot(chol, chol.T)
 
-        precision = lprecision + lprecision.T - np.diag(np.diag(lprecision))
-
-        return mean, precision, lprecision, precision[idiag]
+        return mean, precision, chol
 
     def get_miss_mask(self, Z):
         """ Get 2d array of missing data mask

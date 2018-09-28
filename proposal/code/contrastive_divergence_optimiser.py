@@ -22,10 +22,6 @@ class CDOptimiser:
     """ Contrastive divergence Optimiser for estimating/learning the
     parameters of an unnormalised model as proposed in:
     http://www.cs.toronto.edu/~fritz/absps/tr00-004.pdf
-
-    For a simple, practical guide that informed this implementation, see:
-    https://www.cs.toronto.edu/~hinton/absps/guideTR.pdf
-
     """
     def __init__(self, model, rng=None):
         """ Initialise unnormalised model and noise distribution
@@ -44,7 +40,7 @@ class CDOptimiser:
         else:
             self.rng = rng
 
-    def fit(self, X, theta0, num_gibbs_steps, learning_rate, batch_size, num_epochs=50):
+    def fit(self, X, theta0, num_gibbs_steps, learning_rate, batch_size, num_epochs=50, nz=1, inds=None):
         """ Fit the parameters of the model to the data X.
 
         We fit the data by using the contrastive divergence gradient updates:
@@ -79,19 +75,24 @@ class CDOptimiser:
         :return thetas list of array
             values of model parameters (theta) after each gradient step
         """
+        if inds is None:
+            inds = np.arange(len(theta))
         # initialise parameters
         self.model.theta = deepcopy(theta0)
         self.thetas.append(deepcopy(theta0))
         self.times.append(time.time())
         n = X.shape[0]
+        epoch_count = 0
         for j in range(num_epochs):
+            print('cd epoch: {}'.format(epoch_count))
+            epoch_count += 1
+
             # shuffle data
             perm = self.rng.permutation(n)
             X = X[perm]
             for i in range(0, n, batch_size):
                 X_batch = X[i:i+batch_size]
-                Z, X_model, Z_model = self.model.sample_for_contrastive_divergence(
-                    X_batch, num_iter=num_gibbs_steps)
+                Z, X_model, Z_model = self.model.sample_for_contrastive_divergence(X_batch, num_gibbs_steps, nz)
 
                 data_grad = self.model.grad_log_wrt_params(X_batch, Z)  # (len(theta), 1, n)
                 data_grad = np.mean(data_grad, axis=(1, 2))  # (len(theta), )
@@ -100,7 +101,7 @@ class CDOptimiser:
                 model_grad = np.mean(model_grad, axis=(1, 2))  # (len(theta), )
 
                 grad = data_grad - model_grad  # (len(theta), )
-                self.model.theta += learning_rate * grad
+                self.model.theta[inds] += learning_rate * grad[inds]  # inds allows us to optimise a subset of the parameters
 
                 # save a result at start of learning
                 if i == 0 and j == 0:

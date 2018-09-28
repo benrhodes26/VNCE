@@ -153,7 +153,8 @@ class NCEOptimiser:
             learning_rate=0.3,
             batch_size=100,
             num_epochs=1000,
-            separate_terms=False):
+            separate_terms=False,
+            inds=None):
         """ Fit the parameters of the model to the data X
 
         optimise the objective function defined in self.compute_J().
@@ -189,7 +190,7 @@ class NCEOptimiser:
         if opt_method == 'SGD':
             self.maximize_J1_wrt_theta_SGD(X, learning_rate=learning_rate, batch_size=batch_size, num_epochs=num_epochs, separate_terms=separate_terms)
         else:
-            self.maximize_J1_wrt_theta(X, disp=disp, opt_method=opt_method, ftol=ftol, maxiter=maxiter, separate_terms=separate_terms)
+            self.maximize_J1_wrt_theta(X, disp=disp, opt_method=opt_method, ftol=ftol, maxiter=maxiter, separate_terms=separate_terms, inds=inds)
 
         self.thetas = np.array(self.thetas)
         self.Js = np.array(self.Js)
@@ -198,7 +199,7 @@ class NCEOptimiser:
 
         return np.array(self.thetas), np.array(self.Js), np.array(self.times)
 
-    def maximize_J1_wrt_theta(self, X, disp, opt_method='L-BFGS-B', ftol=1e-9, maxiter=100, separate_terms=False):
+    def maximize_J1_wrt_theta(self, X, disp, opt_method='L-BFGS-B', ftol=1e-9, maxiter=100, separate_terms=False, inds=None):
         """Return theta that maximises J1
 
         :param X: array (n, 1)
@@ -210,6 +211,8 @@ class NCEOptimiser:
             when max{|proj g_i | i = 1, ..., n} <= gtol where
             pg_i is the i-th component of the projected gradient.
         """
+        if inds is None:
+            inds = np.arange(len(self.model.theta))
         thetas, Js, times = [], [], []
 
         def callback(_):
@@ -218,14 +221,15 @@ class NCEOptimiser:
             # print("nce finite diff is: {}".format(check_grad(J1_k_neg, J1_k_grad_neg, self.model.theta)))
 
         def J1_k_neg(theta):
-            self.model.theta = theta
+            self.model.theta[inds] = theta
             return -self.compute_J(X)
 
         def J1_k_grad_neg(theta):
-            self.model.theta = theta
-            return -self.compute_J_grad(X)
+            self.model.theta[inds] = theta
+            return -self.compute_J_grad(X)[inds]
 
-        _ = minimize(J1_k_neg, self.model.theta, method=opt_method, jac=J1_k_grad_neg,
+        theta0 = deepcopy(self.model.theta[inds])
+        _ = minimize(J1_k_neg, theta0, method=opt_method, jac=J1_k_grad_neg,
                      callback=callback, options={'ftol': ftol, 'maxiter': maxiter, 'disp': disp})
 
         self.thetas.extend(thetas)

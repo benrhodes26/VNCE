@@ -1,14 +1,11 @@
 import os
 import sys
-code_dir = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/code'
-code_dir_2 = '/home/ben/masters-project/ben-rhodes-masters-project/proposal/code'
-code_dir_3 = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project/ben-rhodes-masters-project/proposal/code/neural_network'
-code_dir_4 = '/home/ben/masters-project/ben-rhodes-masters-project/proposal/code/neural_network'
-code_dirs = [code_dir, code_dir_2, code_dir_3, code_dir_4]
-for code_dir in code_dirs:
+CODE_DIRS = ['~/masters-project/ben-rhodes-masters-project/proposal/code', '/home/s1771906/code']
+CODE_DIRS_2 = [d + '/neural_network' for d in CODE_DIRS] + CODE_DIRS
+CODE_DIRS_2 = [os.path.expanduser(d) for d in CODE_DIRS_2]
+for code_dir in CODE_DIRS_2:
     if code_dir not in sys.path:
         sys.path.append(code_dir)
-
 import numpy as np
 
 from copy import deepcopy
@@ -95,6 +92,7 @@ def generate_data(n, d):
     old_X_mask = rnd.uniform(0, 1, X_train.shape) < 0.5
     X_mask = old_X_mask[~np.all(old_X_mask == 1, axis=1)].astype('int')
     X_train = X_train[~np.all(old_X_mask == 1, axis=1)]
+    # X_mask = np.array([[1, 1, 0]])
     n = len(X_train)
     print("num data points remaining: {}".format(n))
 
@@ -269,9 +267,9 @@ def main():
     # eps = np.sqrt(np.finfo(float).eps)
     eps = 1e-8
     n = 10
-    nu = 10
+    nu = 2
     nz = 3
-    d = 3
+    d = 4
     use_numeric_stable_approx_second_term = False
 
     # generate synthetic data
@@ -294,12 +292,12 @@ def main():
     # check_model_wrt_alpha_grad(alpha0[:1], [0])
     # check_model_wrt_alpha_grad(alpha0[1:2], [1])
     # check_model_wrt_alpha_grad(alpha0[2:3], [2])
-    # check_model_wrt_alpha_grad(alpha0[3:4], [3])
-    # check_model_wrt_alpha_grad(alpha0[4:5], [4])
-    # check_model_wrt_alpha_grad(alpha0[5:6], [5])
-    # check_model_wrt_alpha_grad(alpha0[[3, 4, 5]], [3, 4, 5])
-    # check_model_wrt_alpha_grad(alpha0[[6, 7]], [6, 7])
-    # check_model_wrt_alpha_grad(alpha0[8:], [8])
+    # check_model_wrt_alpha_grad(alpha0[3:4], [3], model, var_dist, X_train, X_mask, E, nz, eps)
+    # check_model_wrt_alpha_grad(alpha0[4:5], [4], model, var_dist, X_train, X_mask, E, nz, eps)
+    # check_model_wrt_alpha_grad(alpha0[5:6], [5], model, var_dist, X_train, X_mask, E, nz, eps)
+    # check_model_wrt_alpha_grad(alpha0[6:7], [6], model, var_dist, X_train, X_mask, E, nz, eps)
+    # check_model_wrt_alpha_grad(alpha0[7:8], [7], model, var_dist, X_train, X_mask, E, nz, eps)
+    # check_model_wrt_alpha_grad(alpha0[8:9], [8], model, var_dist, X_train, X_mask, E, nz, eps)
     check_model_wrt_alpha_grad(alpha0[:d], np.arange(d), model, var_dist, X_train, X_mask, E, nz, eps)
     check_model_wrt_alpha_grad(alpha0[d:], np.arange(d, len(alpha0)), model, var_dist, X_train, X_mask, E, nz, eps)
 

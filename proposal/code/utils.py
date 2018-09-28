@@ -337,3 +337,9 @@ def get_lower_tri_halving_diag(A):
 def dot_2d_with_3d(A, B):
     B_T = np.transpose(B, (0, 2, 1))
     return np.transpose(np.dot(B_T, A.T), (0, 2, 1))  # (nz, k, k)
+
+def get_diagonal_of_last_two_axis(A):
+    """Assumes Shape of (..., k, k)"""
+    diag = np.ones_like(A, dtype='float64')
+    diag *= np.identity(A.shape[-1])
+    return A * diag

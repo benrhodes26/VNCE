@@ -416,7 +416,7 @@ class ScipyMinimiseEmStep:
     If used during the E step, it optimises the VNCE objective w.r.t the variational parameters alpha.
     In either case, it uses stochastic gradient ascent with adjustable mini-batch size and learning rate.
     """
-    def __init__(self, do_m_step, optimisation_method='L-BFGS-B', max_iter=100):
+    def __init__(self, do_m_step, optimisation_method='L-BFGS-B', max_iter=100, inds=None):
         """
         :param do_m_step: boolean
             if True, optimise loss function w.r.t model params theta. Else w.r.t variational params alpha.
@@ -428,10 +428,13 @@ class ScipyMinimiseEmStep:
         self.do_m_step = do_m_step
         self.opt_method = optimisation_method
         self.max_iter = max_iter
+        self.inds = inds
+
         self.current_loss = None
         self.params = []
         self.losses = []
         self.times = []
+
 
     def __call__(self, loss_function):
         """Execute optimisation of loss function scipy.minimise
@@ -449,27 +452,27 @@ class ScipyMinimiseEmStep:
 
         def loss_neg(param_k):
             if self.do_m_step:
-                loss_function.set_theta(param_k)
+                loss_function.set_theta(param_k, inds=self.inds)
                 loss_function.just_first_term = False
             else:
-                loss_function.set_alpha(param_k)
+                loss_function.set_alpha(param_k, inds=self.inds)
                 loss_function.just_first_term = True
             self.current_loss = loss_function()
             return deepcopy(-np.sum(self.current_loss))
 
         def loss_grad_neg(param_k):
             if self.do_m_step:
-                loss_function.set_theta(param_k)
+                loss_function.set_theta(param_k, inds=self.inds)
                 grad = -loss_function.grad_wrt_theta()
             else:
-                loss_function.set_alpha(param_k)
+                loss_function.set_alpha(param_k, inds=self.inds)
                 grad = -loss_function.grad_wrt_alpha()
-            return grad
+            return grad[self.inds]
 
         if self.do_m_step:
-            start_param = loss_function.get_theta()
+            start_param = loss_function.get_theta(inds=self.inds)
         else:
-            start_param = loss_function.get_alpha()
+            start_param = loss_function.get_alpha(inds=self.inds)
 
         _ = minimize(loss_neg, start_param, method=self.opt_method, jac=loss_grad_neg,
                      options={'maxiter': self.max_iter, 'disp': True})
@@ -928,19 +931,22 @@ class MonteCarloVnceLoss:
             mask = self.dp.Y_mask
         return mask
 
-    def get_theta(self, ind=None):
+    def get_theta(self, inds=None):
         """Return parameters of model (optionally, just get subset by passing through indices)"""
-        if ind is not None:
-            theta = deepcopy(self.model.theta[ind])
-        else:
-            theta = deepcopy(self.model.theta)
+        if inds is None:
+            inds = np.arange(len(self.model.theta))
+        theta = deepcopy(self.model.theta[inds])
+
         return theta
 
-    def get_alpha(self):
+    def get_alpha(self, inds=None):
         if self.use_neural_variational_noise:
             alpha = deepcopy(self.variational_dist.nn.params)
         else:
-            alpha = deepcopy(self.variational_dist.alpha)
+            if inds is None:
+                inds = np.arange(len(self.variational_dist.alpha))
+            alpha = deepcopy(self.variational_dist.alpha[inds])
+
 
         return alpha
 
@@ -955,14 +961,18 @@ class MonteCarloVnceLoss:
             loss = np.sum(loss) if isinstance(loss, np.ndarray) else loss
         return loss
 
-    def set_theta(self, new_theta):
-        self.model.theta = deepcopy(new_theta)
+    def set_theta(self, new_theta, inds=None):
+        if inds is None:
+            inds = np.arange(len(self.model.theta))
+        self.model.theta[inds] = deepcopy(new_theta)
 
-    def set_alpha(self, new_alpha):
+    def set_alpha(self, new_alpha, inds=None):
         if self.use_neural_variational_noise:
             self.variational_dist.nn.params = new_alpha
         else:
-            self.variational_dist.alpha = deepcopy(new_alpha)
+            if inds is None:
+                inds = np.arange(len(self.variational_dist.alpha))
+            self.variational_dist.alpha[inds] = deepcopy(new_alpha)
         self.dp.resample_from_variational_noise = True
 
     def set_theta_and_alpha(self, new_param):

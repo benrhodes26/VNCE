@@ -128,6 +128,33 @@ class MLEOptimiser:
         _ = minimize(L_k_neg, self.phi.theta, method='L-BFGS-B', jac=L_k_grad_neg,
                      callback=callback, options={'ftol': ftol, 'maxiter': maxiter, 'disp': disp})
 
+    def maximize_L_wrt_theta(self, X, disp=True, ftol=1e-9, maxiter=100):
+        """Return theta that maximises L
+
+        :param X: array (n, 1)
+            data
+        :param disp: bool
+            display optimisation results for each iteration
+        :param gtol: float
+            parameter passed to scipy.minimize. An iteration will stop
+            when max{|proj g_i | i = 1, ..., n} <= gtol where
+            pg_i is the i-th component of the projected gradient.
+        """
+
+        def callback(_):
+            self.update_opt_results(X)
+
+        def L_k_neg(theta):
+            self.phi.theta = theta
+            return -self.compute_L(X)
+
+        def L_k_grad_neg(theta):
+            self.phi.theta = theta
+            return -self.compute_L_grad(X)
+
+        _ = minimize(L_k_neg, self.phi.theta, method='L-BFGS-B', jac=L_k_grad_neg,
+                     callback=callback, options={'ftol': ftol, 'maxiter': maxiter, 'disp': disp})
+
     def plot_loss_curve(self):
         fig, axs = plt.subplots(1, 1, figsize=(10, 7))
         axs.plot(self.times, self.Ls, c='k')
