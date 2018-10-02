@@ -42,28 +42,27 @@ START_TIME = strftime('%Y%m%d-%H%M', gmtime())
 parser = ArgumentParser(description='Experiments for learning the parameters of a truncated normal from incomplete data with VNCE',
                         formatter_class=ArgumentDefaultsHelpFormatter)
 # Read/write arguments
-
 parser.add_argument('--save_dir', type=str, default=EXPERIMENT_OUTPUTS +'/trunc_norm', help='Path to directory where model will be saved')
-parser.add_argument('--exp_name', type=str, default='20d_reg_param_test', help='name of set of experiments this one belongs to') #lognormal_50d_nu10
+parser.add_argument('--exp_name', type=str, default='test', help='name of set of experiments this one belongs to') #lognormal_50d_nu10
 parser.add_argument('--name', type=str, default=START_TIME, help='name of this exact experiment')
+parser.add_argument('--data_path', type=str, default=EXPERIMENT_OUTPUTS + '/trunc_norm/data', help='Number of datapoints')
 
-# Data arguments
+# data arguments
 parser.add_argument('--sample_size', type=int, default=1000, help='Number of datapoints')
-parser.add_argument('--frac_missing', type=float, default=0.0, help='percentage of data missing completely at random')
+parser.add_argument('--d', type=int, default=20, help='dimension of visibles for synthetic dataset')
+parser.add_argument('--frac_missing', type=float, default=0.1, help='percentage of data missing completely at random')
+parser.add_argument('--prec_type', type=str, default='circular', help='type of ground truth precision')
 parser.add_argument('--nz', type=int, default=5, help='Number of latent samples per datapoint')
 parser.add_argument('--nu', type=int, default=10, help='ratio of noise to data samples in NCE')
-parser.add_argument('--load_data', dest='load_data', action='store_true', help='Not currently in use. Keep default of False.')
-parser.add_argument('--no-load_data', dest='load_data', action='store_false')
-parser.set_defaults(load_data=False)
 
 # Model / var_dist arguments
-parser.add_argument('--d', type=int, default=20, help='dimension of visibles for synthetic dataset')
-parser.add_argument('--reg_param', type=float, default=0.0001, help='l1 regularisation parameter')
+
 parser.add_argument('--num_layers', type=int, default=2, help='number of layers if using a neural network to parametrise variational distribution')
 parser.add_argument('--hidden_dim', type=int, default=100, help='dimension of hidden layer in neural network')
 parser.add_argument('--activation_layer', type=object, default=TanhLayer(), help='type of non-linearity in neural network')
 
 # Latent NCE optimisation arguments
+parser.add_argument('--reg_param', type=float, default=0.001, help='l1 regularisation parameter')
 parser.add_argument('--opt_method1', type=str, default='BFGS', help='optimisation method.')
 parser.add_argument('--opt_method2', type=str, default='SGD', help='optimisation method.')
 parser.add_argument('--opt_method3', type=str, default='BFGS', help='optimisation method.')
@@ -83,11 +82,12 @@ parser.add_argument('--no-track_loss', dest='track_loss', action='store_false')
 parser.set_defaults(track_loss=True)
 
 # nce optimisation arguments
+parser.add_argument('--nce_reg_param', type=float, default=0.01, help='l1 regularisation parameter')
 parser.add_argument('--nce_opt_method', type=str, default='BFGS', help='nce optimisation method. L-BFGS-B and CG both seem to work')
-parser.add_argument('--maxiter_nce1', type=int, default=100, help='number of iterations inside scipy.minimize')
+parser.add_argument('--maxiter_nce1', type=int, default=10, help='number of iterations inside scipy.minimize')
 parser.add_argument('--maxiter_nce2', type=int, default=0, help='number of iterations inside scipy.minimize')
 parser.add_argument('--maxiter_nce3', type=int, default=0, help='number of iterations inside scipy.minimize')
-parser.add_argument('--nce_missing_num_epochs1', type=int, default=100, help='if nce_opt_method=SGD, this is the number of passes through data set')  # 250
+parser.add_argument('--nce_missing_num_epochs1', type=int, default=1, help='if nce_opt_method=SGD, this is the number of passes through data set')  # 250
 parser.add_argument('--nce_missing_num_epochs2', type=int, default=0, help='if nce_opt_method=SGD, this is the number of passes through data set')  # 250
 parser.add_argument('--nce_missing_num_epochs3', type=int, default=0, help='if nce_opt_method=SGD, this is the number of passes through data set')  # 250
 parser.add_argument('--nce_learn_rate', type=float, default=0.03, help='if nce_opt_method=SGD, this is the learning rate used')
@@ -95,9 +95,9 @@ parser.add_argument('--nce_batch_size', type=int, default=100, help='if nce_opt_
 
 # MLE optimisation arguments
 parser.add_argument('--cd_num_gibbs_steps', type=int, default=10, help='Gibbs MCMC thinning factor')
-parser.add_argument('--cd_learn_rate', type=float, default=0.1, help='learning rate for sampling-based MLE')
+parser.add_argument('--cd_learn_rate', type=float, default=1, help='learning rate for sampling-based MLE')
 parser.add_argument('--cd_batch_size', type=int, default=100, help='batch size for sampling-based MLE')
-parser.add_argument('--cd_num_epochs', type=int, default=0, help='number of epochs for sampling-based MLE')
+parser.add_argument('--cd_num_epochs', type=int, default=100, help='number of epochs for sampling-based MLE')
 parser.add_argument('--cd_nz', type=int, default=5, help='use nz samples for *data* expectation, '
                                                           'and nz*n samples for model expectations when using sampling-based MLE')
 
@@ -110,6 +110,7 @@ parser.add_argument('--no-use_numeric_stable_approx_second_term', dest='use_nume
 parser.set_defaults(use_numeric_stable_approx_second_term=False)
 # parser.add_argument('--random_seed', type=int, default=1083463236, help='seed for np.random.RandomState')
 parser.add_argument('--random_seed', type=int, default=108346322, help='seed for np.random.RandomState')
+parser.add_argument('--sim_num', type=int, default=0, help='id for this simulation')
 
 args = parser.parse_args()
 args.rng = rnd.RandomState(args.random_seed)
@@ -137,47 +138,6 @@ def get_mse(args, theta, method_name):
     mse = mean_square_error(args.theta_true[1:], theta)
     print('{} Mean Squared Error: {}'.format(method_name, mse))
     return mse
-
-
-# def update_best_loss(best_vnce1, frac_missing, vnce_val_loss1):
-#     if vnce_val_loss1 > best_vnce1[str(frac_missing)][1]:
-#         best_vnce1[str(frac_missing)][1] = vnce_val_loss1
-
-
-def cross_validate(args, frac_missing, i, reg_param):
-    best_runs = [args.best_vnce_true, args.best_vnce_approx, args.best_vnce_lognormal,
-                 args.best_nce_means, args.best_nce_noise, args.best_nce_rnd, args.best_cd]
-
-    val_losses = compute_val_losses(args)
-    for j in range(len(best_runs)):
-        best_run = best_runs[j]  # dict {frac_miss: (reg_param, best_val_loss)} for a particular method (e.g VNCE 1)
-        if i == 0:
-            best_run[str(frac_missing)] = [reg_param, val_losses[j]]
-        else:
-            if val_losses[j] > best_run[str(frac_missing)][1]:
-                best_run[str(frac_missing)][1] = val_losses[j]
-
-
-def compute_val_losses(args):
-    _, vnce_val_loss1 = args.vnce_loss1.compute_end_of_epoch_loss()
-    _, vnce_val_loss2 = args.vnce_loss2.compute_end_of_epoch_loss()
-    _, vnce_val_loss3 = args.vnce_loss3.compute_end_of_epoch_loss()
-
-    nce_val_data1 = args.X_val * (1 - args.val_missing_data_mask) + args.X_val_sample_mean * args.val_missing_data_mask
-    nce_val_loss1 = args.nce_missing_optimiser.compute_J(nce_val_data1)
-
-    noise_data = args.Y.reshape(args.nu, args.n, args.d)[0, :, :]
-    nce_val_data2 = args.X_val * (1 - args.val_missing_data_mask) + noise_data[:len(args.X_val)] * args.val_missing_data_mask
-    nce_val_loss2 = args.nce_missing_optimiser_2.compute_J(nce_val_data2)
-
-    rnd_fill = args.rng.uniform(0, 3, args.X_val.shape)
-    nce_val_data3 = args.X_val * (1 - args.val_missing_data_mask) + rnd_fill * args.val_missing_data_mask
-    nce_val_loss3 = args.nce_missing_optimiser_3.compute_J(nce_val_data3)
-
-    cd_val_loss = 0  # we can't compute it - there is no tractable objective function
-
-    val_losses = [vnce_val_loss1, vnce_val_loss2, vnce_val_loss3, nce_val_loss1, nce_val_loss2, nce_val_loss3, cd_val_loss]
-    return val_losses
 
 
 def plot_and_save_vnce(save, vnce_optimiser, vnce_loss, vnce_mse, which):
@@ -241,97 +201,33 @@ def save_cd(save, cd_optimiser, cd_model, cd_mse):
 
 
 def plot_and_save_results(save_dir, args):
-    save = os.path.join(save_dir, 'frac{}/reg{}'.format(str(args.frac_missing), str(args.reg_param)))
-    if not os.path.exists(save):
-        os.makedirs(save, exist_ok=True)
+    plot_and_save_vnce(save_dir, args.vnce_optimiser1, args.vnce_loss1, args.vnce_mse1, '1')
+    plot_and_save_vnce(save_dir, args.vnce_optimiser2, args.vnce_loss2, args.vnce_mse2, '2')
+    plot_and_save_vnce(save_dir, args.vnce_optimiser3, args.vnce_loss3, args.vnce_mse3, '3')
 
-    plot_and_save_vnce(save, args.vnce_optimiser1, args.vnce_loss1, args.vnce_mse1, '1')
-    plot_and_save_vnce(save, args.vnce_optimiser2, args.vnce_loss2, args.vnce_mse2, '2')
-    plot_and_save_vnce(save, args.vnce_optimiser3, args.vnce_loss3, args.vnce_mse3, '3')
+    plot_nce_results(args, save_dir)
+    save_nce(save_dir, args.nce_missing_optimiser, args.nce_missing_model, args.nce_mse1, "1")
+    save_nce(save_dir, args.nce_missing_optimiser_2, args.nce_missing_model_2, args.nce_mse2, "2")
+    save_nce(save_dir, args.nce_missing_optimiser_3, args.nce_missing_model_3, args.nce_mse3, "3")
 
-    plot_nce_results(args, save)
-    save_nce(save, args.nce_missing_optimiser, args.nce_missing_model, args.nce_mse1, "1")
-    save_nce(save, args.nce_missing_optimiser_2, args.nce_missing_model_2, args.nce_mse2, "2")
-    save_nce(save, args.nce_missing_optimiser_3, args.nce_missing_model_3, args.nce_mse3, "3")
+    save_cd(save_dir, args.cd_optimiser, args.cd_model, args.cd_mse)
 
-    save_cd(save, args.cd_optimiser, args.cd_model, args.cd_mse)
-
-    with open(os.path.join(save, "config.txt"), 'w') as f:
+    with open(os.path.join(save_dir, "config.txt"), 'w') as f:
         for key, value in vars(args).items():
             f.write("{}: {}\n".format(key, value))
-    pickle.dump(args, open(os.path.join(save, "config.p"), "wb"))
-    pickle.dump(args.data_dist, open(os.path.join(save, "data_dist.p"), "wb"))
-    np.savez(os.path.join(save, "theta0_and_theta_true"),
+    pickle.dump(args, open(os.path.join(save_dir, "config.p"), "wb"))
+    pickle.dump(args.data_dist, open(os.path.join(save_dir, "data_dist.p"), "wb"))
+    np.savez(os.path.join(save_dir, "theta0_and_theta_true"),
              theta0=args.theta0,
              theta_true=args.theta_true,
              init_mse=args.init_mse)
-    np.savez(os.path.join(save, "data"),
+    np.savez(os.path.join(save_dir, "data"),
              X_train=args.data_provider1.train_data,
              X_train_mask=args.data_provider1.train_miss_mask,
              X_val=args.data_provider1.val_data,
              X_val_mask=args.data_provider1.val_miss_mask,
              Y=args.data_provider1.Y)
 
-
-def copy_vnce(args, save, save_dir, best_vnce, which):
-    args.reg_param = best_vnce[str(args.frac_missing)][0]
-    load = os.path.join(save_dir, 'frac{}/reg{}'.format(str(args.frac_missing), str(args.reg_param)))
-    pickle.dump(args, open(os.path.join(save, "config.p"), "wb"))
-
-    copyfile(os.path.join(load, 'vnce_model{}.p'.format(which)), os.path.join(save, 'vnce_model{}.p'.format(which)))
-    copyfile(os.path.join(load, 'vnce_results{}.npz'.format(which)), os.path.join(save, 'vnce_results{}.npz'.format(which)))
-    copyfile(os.path.join(load, 'theta0_and_theta_true.npz'), os.path.join(save, 'theta0_and_theta_true.npz'))
-    copyfile(os.path.join(load, 'config.p'), os.path.join(save, 'config.p'))
-
-    with open(os.path.join(save, "reg_params.txt"), 'a') as f:
-        f.write("vnce{}: {}\n".format(which, args.reg_param))
-
-
-def copy_nce(args, save, save_dir, best_nce, which):
-    args.reg_param = best_nce[str(args.frac_missing)][0]
-    load = os.path.join(save_dir, 'frac{}/reg{}'.format(str(args.frac_missing), str(args.reg_param)))
-
-    copyfile(os.path.join(load, 'nce_model{}.p'.format(which)), os.path.join(save, 'nce_model{}.p'.format(which)))
-    copyfile(os.path.join(load, 'nce_results{}.npz'.format(which)), os.path.join(save, 'nce_results{}.npz'.format(which)))
-
-    with open(os.path.join(save, "reg_params.txt"), 'a') as f:
-        f.write("nce{}: {}\n".format(which, args.reg_param))
-
-
-def copy_cd(args, save, save_dir, best_cd):
-    args.reg_param = best_cd[str(args.frac_missing)][0]
-    load = os.path.join(save_dir, 'frac{}/reg{}'.format(str(args.frac_missing), str(args.reg_param)))
-
-    copyfile(os.path.join(load, 'cd_model.p'), os.path.join(save, 'cd_model.p'))
-    copyfile(os.path.join(load, 'cd_results.npz'), os.path.join(save, 'cd_results.npz'))
-
-    with open(os.path.join(save, "reg_params.txt"), 'a') as f:
-        f.write("cd: {}\n".format(args.reg_param))
-
-
-def save_best_results(args, save_dir):
-    best_vnce1 = args.best_vnce_true
-    best_vnce2 = args.best_vnce_approx
-    best_vnce3 = args.best_vnce_lognormal
-    best_nce1 = args.best_nce_means
-    best_nce2 = args.best_nce_noise
-    best_nce3 = args.best_nce_rnd
-    best_cd = args.best_cd
-    for frac_missing in args.frac_range:
-        args.frac_missing = frac_missing
-        save = os.path.join(save_dir, 'best/frac{}'.format(str(args.frac_missing)))
-        if not os.path.exists(save):
-            os.makedirs(save, exist_ok=True)
-
-        copy_vnce(args, save, save_dir, best_vnce1, '1')
-        copy_vnce(args, save, save_dir, best_vnce2, '2')
-        copy_vnce(args, save, save_dir, best_vnce3, '3')
-
-        copy_nce(args, save, save_dir, best_nce1, '1')
-        copy_nce(args, save, save_dir, best_nce2, '2')
-        copy_nce(args, save, save_dir, best_nce3, '3')
-
-        copy_cd(args, save, save_dir, best_cd)
 
 def compose_layers(args):
     """Return the layers for a multi-layer neural network according to the specified hyperparameters"""
@@ -379,78 +275,6 @@ def estimate_trunc_norm_params(sample_mean, sample_var):
     return trunc_mean, trunc_chol
 
 
-# def load_data(args):
-#     tnorm_data = loadmat('/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project-non-code/data/trunc_norm/trandn_result.mat')
-#     res = tnorm_data['total_result'].T
-#
-#     args.d = 100
-#     args.n = 2000
-#     args.X_train = res[:args.n]
-#     args.X_val = res[args.n:]
-#
-#     # parameters that generated to the loaded data
-#     args.true_mean = np.ones(args.d)
-#     a = np.diag(np.ones(args.d))
-#     b = np.diag(np.ones(args.d - 1), 1) * 0.1
-#     c = np.diag(np.ones(args.d - 1), -1) * 0.1
-#     args.true_prec = a + b + c
-#     args.true_prec[0, -1] = 0.1
-#     args.true_prec[-1, 0] = 0.1
-#     args.data_dist = MissingDataUnnormalisedTruncNorm(scaling_param=np.array([0.]), mean=args.true_mean,
-#                                                       precision=args.true_prec, rng=args.rng)
-#     args.theta_true = deepcopy(args.data_dist.theta)
-
-
-def generate_data(args):
-    rng = args.rng
-
-    # initialise ground-truth parameters for data generating distribution
-    # args.true_mean = rng.uniform(0, 2, args.d)
-    args.true_mean = np.zeros(args.d, dtype='float64')
-    # args.true_mean = np.ones(args.d, dtype='float64')
-    args.data_dist = MissingDataUnnormalisedTruncNorm(scaling_param=np.array([0.]), mean=args.true_mean, prec_type='circular', rng=rng)
-    # args.data_dist = MissingDataUnnormalisedTruncNormSymmetric(scaling_param=np.array([0.]), mean=args.true_mean, prec_type='circular', rng=rng)
-    args.theta_true = deepcopy(args.data_dist.theta)
-
-    # make synthetic data
-    args.complete_X_train = args.data_dist.sample(args.sample_size)
-    args.complete_X_val = args.data_dist.sample(int(args.sample_size / 5))
-
-
-def generate_mask(args):
-    X = deepcopy(args.complete_X_train)
-    train_miss_mask = args.rng.uniform(0, 1, X.shape) < args.frac_missing
-
-    # discard any data points that are all-zero
-    args.train_missing_data_mask = train_miss_mask[~np.all(train_miss_mask == 1, axis=1)]
-    args.X_train = X[~np.all(train_miss_mask == 1, axis=1)]
-    args.n = len(args.X_train)
-    print("There are {} remaining data points after discarding".format(args.n))
-
-    # set the number of EM steps to train for
-    args.max_num_em_steps1 = args.max_num_epochs1 * get_num_em_steps_per_epoch(args, args.opt_method1, '1') * 2
-    args.max_num_em_steps2 = args.max_num_epochs2 * get_num_em_steps_per_epoch(args, args.opt_method2, '2')
-    args.max_num_em_steps3 = args.max_num_epochs3 * get_num_em_steps_per_epoch(args, args.opt_method3, '3')
-    # args.max_num_em_steps2 = 2
-    # args.max_num_em_steps3 = 2
-
-    X_val = deepcopy(args.complete_X_val)
-    args.val_missing_data_mask = args.train_missing_data_mask[:len(X_val)]
-    args.X_val = X_val[:len(args.val_missing_data_mask)]
-
-    # calculate the sample mean and variance of non-missing data
-    observed_train_data = args.X_train * (1 - args.train_missing_data_mask)
-    masked_train = np.ma.masked_equal(observed_train_data, 0)
-    observed_val_data = args.X_val * (1 - args.val_missing_data_mask)
-    masked_val = np.ma.masked_equal(observed_val_data, 0)
-
-    args.X_train_sample_mean = np.array(masked_train.mean(0))
-    args.X_train_sample_diag_var = np.array(masked_train.var(0))  # ignore covariances
-    args.X_val_sample_mean = np.array(masked_val.mean(0))
-    args.X_val_sample_diag_var = np.array(masked_val.var(0))  # ignore covariances
-    # print('sample mean: {} \n sample var: {}'.format(args.X_train_sample_mean, args.X_train_sample_diag_var))
-
-
 def get_num_em_steps_per_epoch(args, opt_method, num_vnce='1'):
     if opt_method == 'SGD':
         num_em_steps_per_epoch = int(args.n / (args.batch_size * args.num_batch_per_em_step))
@@ -467,14 +291,22 @@ def get_num_em_steps_per_epoch(args, opt_method, num_vnce='1'):
     return num_em_steps_per_epoch
 
 
+def load_data(args):
+    #todo: update args with loaded args from generate_datsets.py
+    exact_data_path = os.path.join(args.data_path, "dim{}/{}/{}/frac{}/data.p".format(args.d, args.prec_type, args.sim_num, args.frac_missing))
+    data_args = pickle.load(open(exact_data_path, 'rb'))
+    vars(args).update(vars(data_args))
+    pickle.dump(args, open(os.path.join(args.save_dir, "config.p"), "wb"))
+
+    # set the number of EM steps to train for
+    args.max_num_em_steps1 = args.max_num_epochs1 * get_num_em_steps_per_epoch(args, args.opt_method1, '1') * 2
+    args.max_num_em_steps2 = args.max_num_epochs2 * get_num_em_steps_per_epoch(args, args.opt_method2, '2')
+    args.max_num_em_steps3 = args.max_num_epochs3 * get_num_em_steps_per_epoch(args, args.opt_method3, '3')
+
+
 def make_noise(args):
     # estimate (from the synthetic data) the parameters of a factorial truncated normal for the noise distribution
     args.noise_mean, args.noise_chol = estimate_trunc_norm_params(args.X_train_sample_mean, args.X_train_sample_diag_var)
-    # _, args.noise_chol = estimate_trunc_norm_params(args.X_train_sample_mean, args.X_train_sample_diag_var)
-    # args.noise_mean = np.zeros(args.d, dtype='float64')
-    # args.noise_chol = np.diag(args.true_prec)**0.5
-    # print('||noise_mean - true_mean||_2 = {}'.format(np.linalg.norm(args.true_mean - args.noise_mean)))
-    # print('||noise_vars - true_vars||_2 = {}'.format(np.linalg.norm(np.diag(args.true_prec) - (args.noise_chol**2))))
 
     # make noise distribution and noise samples for vnce
     args.noise = MissingDataProductOfTruncNormNoise(mean=args.noise_mean, chol=args.noise_chol, rng=args.rng)
@@ -531,6 +363,7 @@ def make_approx_lognormal_var_dist(args):
 def make_regulariser(args):
     # initiliase L1 regulariser
     args.l1_reg = L1Regulariser(args.reg_param)
+    args.nce_l1_reg = L1Regulariser(args.nce_reg_param)
     # we only regularise the off-diagonal elements of the precision. It is slightly tricky to calculate the indices of these
     # elements within theta (the model's parameters). This is because the precision matrix is symmetric, and hence theta
     # only contains the lower triangular elements, which are flattened and concatened with the rest of the model's parameters.
@@ -658,7 +491,7 @@ def make_vnce_optimisers(args):
 
     args.vnce_optimiser1 = VemOptimiser(m_step=m_step1, e_step=e_step1, num_em_steps_per_save=args.num_em_steps_per_epoch1)
     args.vnce_optimiser2 = VemOptimiser(m_step=m_step2, e_step=e_step2, num_em_steps_per_save=args.num_em_steps_per_epoch2)
-    args.vnce_optimiser3 = VemOptimiser(m_step=m_step3, e_step=e_step3, num_em_steps_per_save=args.num_em_steps_per_epoch3)
+    args.vnce_optimiser3 = VemOptimiser(m_step=m_step3, e_step=e_step3, num_em_steps_per_save=args.num_em_steps_per_epoch3, save_dir=args.save_dir)
     # args.vnce_optimiser3 = ScipyOptimiser(opt_method=args.opt_method3, max_iter=args.maxiter3)
 
 
@@ -712,9 +545,10 @@ def train(args):
     args.nce_missing_optimiser = NCEOptimiser(model=args.nce_missing_model,
                                               noise=args.noise,
                                               noise_samples=args.Y,
-                                              regulariser=args.l1_reg,
+                                              regulariser=args.nce_l1_reg,
                                               reg_param_indices=args.reg_param_indices,
-                                              nu=args.nu)
+                                              nu=args.nu,
+                                              save_dir=args.save_dir)
     args.filled_in_with_mean_data = args.X_train * (1 - args.train_missing_data_mask) + args.X_train_sample_mean * args.train_missing_data_mask
     try:
         args.nce_missing_optimiser.fit(X=args.filled_in_with_mean_data,
@@ -732,9 +566,10 @@ def train(args):
     args.nce_missing_optimiser_2 = NCEOptimiser(model=args.nce_missing_model_2,
                                                 noise=args.noise,
                                                 noise_samples=args.Y,
-                                                regulariser=args.l1_reg,
+                                                regulariser=args.nce_l1_reg,
                                                 reg_param_indices=args.reg_param_indices,
-                                                nu=args.nu)
+                                                nu=args.nu,
+                                                save_dir=args.save_dir)
     noise_data = args.Y.reshape(args.nu, args.n, args.d)[0, :, :]
     args.filled_in_with_noise_data = args.X_train * (1 - args.train_missing_data_mask) + noise_data * args.train_missing_data_mask
     try:
@@ -753,9 +588,10 @@ def train(args):
     args.nce_missing_optimiser_3 = NCEOptimiser(model=args.nce_missing_model_3,
                                                 noise=args.noise,
                                                 noise_samples=args.Y,
-                                                regulariser=args.l1_reg,
+                                                regulariser=args.nce_l1_reg,
                                                 reg_param_indices=args.reg_param_indices,
-                                                nu=args.nu)
+                                                nu=args.nu,
+                                                save_dir=args.save_dir)
     rnd_fill = args.rng.uniform(0, 3, args.X_train.shape)
     args.filled_in_with_rnd_data = args.X_train * (1 - args.train_missing_data_mask) + rnd_fill * args.train_missing_data_mask
     try:
@@ -771,7 +607,7 @@ def train(args):
         pass
 
     args.cd_model = MissingDataUnnormalisedTruncNorm(deepcopy(args.scale0), deepcopy(args.mean0), precision=deepcopy(args.prec0), rng=args.rng)
-    args.cd_optimiser =  CDOptimiser(model=args.cd_model, rng=args.rng)
+    args.cd_optimiser = CDOptimiser(model=args.cd_model, rng=args.rng, save_dir=args.save_dir)
     try:
         args.cd_optimiser.fit(X=args.X_train * (1 - args.train_missing_data_mask),
                               theta0=deepcopy(args.theta0),
@@ -781,77 +617,23 @@ def train(args):
                               num_epochs=args.cd_num_epochs,
                               nz=args.cd_nz,
                               inds=args.theta_inds)
-    except KeyboardInterrupt:
+    except:
         pass
 
 
 def main(args):
-    # num_sims = 100
-    # num_sims = 1
-    # frac_range = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-    # frac_range = [0.0, 0.2, 0.4, 0.6, 0.8]
-    frac_range = [args.frac_missing]
-    reg_params = [args.reg_param]
-    # args.theta_inds = np.arange(args.d+1)  # only optimise scaling param and mean vector (not precision)
     len_theta = int(0.5 * args.d * (args.d + 3)) + 1  # only optimise scaling param and precision
     args.theta_inds = np.concatenate((np.array([0]), np.arange(args.d + 1, len_theta))).astype(int)
 
-    # for i in range(num_sims):
-    #     save_dir = os.path.join(args.save_dir, args.exp_name, str(i))
-    #     if not os.path.exists(save_dir):
-    #         os.makedirs(save_dir)
-    #
-    #     if not args.load_data:
-    #         generate_data(args)
-    #
-    #     # for each value of fraction missing, search over regularisation param and pick best using cross-validation
-    #     args.best_vnce_true = {}
-    #     args.best_vnce_approx = {}
-    #     args.best_vnce_lognormal = {}
-    #     args.best_nce_means = {}
-    #     args.best_nce_noise = {}
-    #     args.best_nce_rnd = {}
-    #     args.best_cd = {}
-    #
-    #     args.frac_range = frac_range
-    #     for frac_missing in args.frac_range:
-    #         args.frac_missing = frac_missing
-    #         generate_mask(args)
-    #         for j, reg_param in enumerate(reg_params):
-    #             args.reg_param = reg_param
-    #             train(args)
-    #             calculate_mse(args)
-    #             cross_validate(args, frac_missing, j, reg_param)
-    #             plot_and_save_results(save_dir, args)
-    #     save_best_results(args, save_dir)
+    exp_dir = os.path.join(args.exp_name, str(args.sim_num), 'frac{}/reg{}'.format(str(args.frac_missing), str(args.reg_param)))
+    args.save_dir = os.path.join(args.save_dir, exp_dir)
+    if not os.path.exists(args.save_dir):
+        os.makedirs(args.save_dir, exist_ok=True)
 
-    save_dir = os.path.join(args.save_dir, args.exp_name, str(args.random_seed))
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir, exist_ok=True)
-
-    if not args.load_data:
-        generate_data(args)
-
-    # for each value of fraction missing, search over regularisation param and pick best using cross-validation
-    args.best_vnce_true = {}
-    args.best_vnce_approx = {}
-    args.best_vnce_lognormal = {}
-    args.best_nce_means = {}
-    args.best_nce_noise = {}
-    args.best_nce_rnd = {}
-    args.best_cd = {}
-
-    args.frac_range = frac_range
-    for frac_missing in args.frac_range:
-        args.frac_missing = frac_missing
-        generate_mask(args)
-        for j, reg_param in enumerate(reg_params):
-            args.reg_param = reg_param
-            train(args)
-            calculate_mse(args)
-            cross_validate(args, frac_missing, j, reg_param)
-            plot_and_save_results(save_dir, args)
-    save_best_results(args, save_dir)
+    load_data(args)
+    train(args)
+    calculate_mse(args)
+    plot_and_save_results(args.save_dir, args)
 
 
 if __name__ == "__main__":

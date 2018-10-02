@@ -12,9 +12,6 @@ import numpy as np
 import pickle
 import seaborn as sns
 
-from distribution import RBMLatentPosterior, MultivariateBernoulliNoise, ChowLiuTree
-from fully_observed_models import VisibleRestrictedBoltzmannMachine
-from latent_variable_model import RestrictedBoltzmannMachine
 from plot import *
 from project_statics import *
 from utils import take_closest, mean_square_error
@@ -35,7 +32,8 @@ rc('ytick', labelsize=10)
 parser = ArgumentParser(description='plot relationship between fraction of training data missing and final mean-squared error for'
                                     'a truncated normal model trained with VNCE', formatter_class=ArgumentDefaultsHelpFormatter)
 parser.add_argument('--save_dir', type=str, default=RESULTS + '/trunc-norm/')
-parser.add_argument('--exp_name', type=str, default='20d_reg_param_0.0001/', help='name of set of experiments this one belongs to')  # 5d-vlr0.1-nz=10-final
+# parser.add_argument('--exp_name', type=str, default='20d_reg_param_hub/0/separated_results/3/', help='name of set of experiments this one belongs to')  # 5d-vlr0.1-nz=10-final
+parser.add_argument('--exp_name', type=str, default='20d_reg_param_cir/', help='name of set of experiments this one belongs to')  # 5d-vlr0.1-nz=10-final
 parser.add_argument('--load_dir', type=str, default=EXPERIMENT_OUTPUTS + '/trunc_norm/')
 
 args = parser.parse_args()
@@ -47,30 +45,18 @@ if not os.path.exists(save_dir):
     os.makedirs(save_dir)
 
 
-def split_params(theta):
-    try:
-        mean = theta[1:1+d]
-    except IndexError:
-        pass
-    prec_flat = theta[1+d:]
-    prec = np.zeros((d, d))
-    prec[np.tril_indices(d)] = prec_flat
-    prec[np.diag_indices(d)] = np.exp(prec[np.diag_indices(d)])
+def split_params(dist, theta, d):
+    dist.theta = theta
+    mean, prec = dist.get_joint_pretruncated_params()[:2]
     prec_diag = deepcopy(prec[np.diag_indices(d)])
     prec_non_diag = deepcopy(prec[np.tril_indices(d, -1)])
-    prec += prec.T
-    prec[np.diag_indices(d)] -= prec_diag
 
-    cov = np.linalg.inv(prec)
-    cov_diag = cov[np.diag_indices(d)]
-    cov_n_diag = cov[np.tril_indices(d, -1)]
-
-    return mean, prec_diag, prec_non_diag, prec, cov_diag, cov_n_diag, cov
+    return mean, prec, prec_diag, prec_non_diag
 
 
-def get_mses(true_theta, theta, d):
-    true_mean, true_prec_diag, true_prec_n_diag, true_prec, true_cov_diag, true_cov_n_diag, true_cov = split_params(true_theta)
-    mean, prec_diag, prec_n_diag, prec, cov_diag, cov_n_diag, cov = split_params(theta)
+def get_mses(data_dist, model, true_theta, theta, d):
+    true_mean, true_prec, true_prec_diag, true_prec_n_diag = split_params(data_dist, true_theta, d)
+    mean, prec, prec_diag, prec_n_diag = split_params(model, theta, d)
 
     true_b = np.dot(true_prec, true_mean)
     b = np.dot(prec, mean)
@@ -94,20 +80,22 @@ def plot_errorbar(ax, fracs, mses, label, color):
     plot_errorbar_helper(ax, fracs, mses, deciles, label, color)
 
 
-def plot_theta0_mses(axs, theta0_mu_mse, theta0_mean_mse, theta0_diag_mse, theta0_ndiag_mse):
-    axs[0].plot((0, 1), (theta0_mu_mse, theta0_mu_mse), linestyle='--')
-    axs[1].plot((0, 1), (theta0_mean_mse, theta0_mean_mse), linestyle='--')
-    axs[2].plot((0, 1), (theta0_diag_mse, theta0_diag_mse), linestyle='--')
-    axs[3].plot((0, 1), (theta0_ndiag_mse, theta0_ndiag_mse), linestyle='--')
+# methods = ['VNCE (lognormal approx)', 'NCE (means fill in)', 'MLE (sampling)']
+methods = ['VNCE (lognormal approx)', 'NCE (means fill in)']
 
+# param_file = ['vnce_results3.npz', 'nce_results1.npz', 'cd_results.npz']
+param_file = ['vnce_results3.npz', 'nce_results1.npz']
 
-# methods = ['VNCE (true)', 'VNCE (cdi approx)', 'VNCE (lognormal approx)', 'NCE (means fill in)', 'NCE (noise fill in)', 'NCE (random fill in)']
-# filenames = ['vnce_results1.npz', 'vnce_results2.npz', 'vnce_results3.npz', 'nce_results1.npz', 'nce_results2.npz', 'nce_results3.npz']
-# colors = ['black', 'blue', 'purple', 'orange', 'green', 'red']
-methods = ['VNCE (lognormal approx)', 'NCE (means fill in)', 'MLE (sampling)']
-filenames = ['vnce_results3.npz', 'nce_results1.npz', 'cd_results.npz']
-colors = ['purple', 'orange', 'black']
+# model_files = ['vnce_model3.p', 'nce_model1.p', 'cd_model.p']
+model_files = ['vnce_model3.p', 'nce_model1.p']
+
+# colors = ['purple', 'orange', 'black']
+colors = ['purple', 'orange']
+
 num_methods = len(methods)
+# sorted_fracs = np.array([0.1, 0.3, 0.5, 0.7, 0.9])
+# sorted_fracs = np.array([0.1, 0.3, 0.5])
+sorted_fracs = np.array([0.0, 0.1, 0.2, 0.3, 0.4, 0.5])
 
 all_mus = [[] for i in range(num_methods)]
 all_means = [[] for i in range(num_methods)]
@@ -123,7 +111,7 @@ for outer_file in os.listdir(main_load_dir):
     frac_to_n_prec_diag_mse_dict = {}
 
     # loop through files and get mses of vnce and nce with 0s
-    sorted_fracs = sorted([float(f[4:]) for f in os.listdir(load_dir)])
+    # sorted_fracs = sorted([float(f[4:]) for f in os.listdir(load_dir)])
     sorted_dirs = ['frac' + str(frac) for frac in sorted_fracs]
     for i, file in enumerate(sorted_dirs):
         exp = os.path.join(load_dir, file)
@@ -131,26 +119,28 @@ for outer_file in os.listdir(main_load_dir):
         frac = float(config.frac_missing)
         d = config.d
 
-        loaded_theta = np.load(os.path.join(exp, 'theta0_and_theta_true.npz'))
-        true_theta = loaded_theta['theta_true']
-        theta0 = loaded_theta['theta0']
-        if i == 0:
-            theta0_mu_mse, theta0_mean_mse, theta0_diag_mse, theta0_ndiag_mse = get_mses(true_theta, theta0, d)
+        theta_true = config.theta_true
+        data_dist = config.data_dist
 
-        for filename in filenames:
-            loaded = np.load(os.path.join(exp, filename))
-            if filename[0] == 'v':
+        for p_file, m_file in zip(param_file, model_files):
+            loaded = np.load(os.path.join(exp, p_file))
+            if p_file[0] == 'v':
                 thetas = loaded['vnce_thetas']
+                print('VNCE times:', loaded['vnce_times'][-1])
                 if isinstance(thetas[-1][-1], float):
                     theta = thetas[-1]
                 else:
                     theta = thetas[-1][-1]
-            elif filename[0] == 'n':
+
+            elif p_file[0] == 'n':
                 theta = loaded['nce_thetas'][-1]
             else:
                 theta = loaded['cd_thetas'][-1]
+                print('CD times:', loaded['cd_times'][-1])
 
-            mu_mse, mean_mse, diag_prec_mse, n_diag_prec_mse = get_mses(true_theta, theta, d)
+            model = pickle.load(open(os.path.join(exp, m_file), 'rb'))
+            mu_mse, mean_mse, diag_prec_mse, n_diag_prec_mse = get_mses(data_dist, model, true_theta, theta, d)
+
             frac_to_mu_mse_dict.setdefault(str(frac), []).append(mu_mse)
             frac_to_mean_mse_dict.setdefault(str(frac), []).append(mean_mse)
             frac_to_prec_diag_mse_dict.setdefault(str(frac), []).append(diag_prec_mse)
@@ -166,7 +156,8 @@ for outer_file in os.listdir(main_load_dir):
 
 
 sns.set_style("darkgrid")
-fig, axs = plt.subplots(4, 1, figsize=(5.7, 10))
+# fig, axs = plt.subplots(4, 1, figsize=(5.7, 10))
+fig, axs = plt.subplots(2, 1, figsize=(5.7, 5.7))
 axs = axs.ravel()
 fracs = np.array(fracs)
 x_positions = []
@@ -175,15 +166,14 @@ for i in np.linspace(-0.015, 0.015, num_methods):
 percentiles = [25, 75]
 
 for i in range(num_methods):
-    plot_errorbar(axs[0], x_positions[i], all_mus[i], methods[i], colors[i])
-    plot_errorbar(axs[1], x_positions[i], all_means[i], methods[i], colors[i])
-    plot_errorbar(axs[2], x_positions[i], all_diags[i], methods[i], colors[i])
-    plot_errorbar(axs[3], x_positions[i], all_ndiags[i], methods[i], colors[i])
-    plot_theta0_mses(axs, theta0_mu_mse, theta0_mean_mse, theta0_diag_mse, theta0_ndiag_mse)
+    # plot_errorbar(axs[0], x_positions[i], all_mus[i], methods[i], colors[i])
+    # plot_errorbar(axs[1], x_positions[i], all_means[i], methods[i], colors[i])
+    plot_errorbar(axs[0], x_positions[i], all_diags[i], methods[i], colors[i])
+    plot_errorbar(axs[1], x_positions[i], all_ndiags[i], methods[i], colors[i])
 
-titles = [r'$\mu$', r'\textbf{b}', 'Diagonal of K', 'Off-diagonal of K']
+titles = ['Diagonal of K', 'Off-diagonal of K']
 # upper_lims = [1, 1, 0.2, 0.2]
-upper_lims = [0.1, 5, 1, 0.03]
+upper_lims = [2, 0.1]
 for i, ax in enumerate(axs):
     ax.set_ylim(0, upper_lims[i])
     ax.set_title(titles[i])

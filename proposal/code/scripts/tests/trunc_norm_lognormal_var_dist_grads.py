@@ -16,7 +16,7 @@ from scipy.stats import norm, multivariate_normal
 from data_provider import DataProvider
 from distribution import MissingDataLogNormalPosterior, MissingDataProductOfTruncNormNoise
 from initialisers import GlorotUniformInit, ConstantInit, UniformInit, ConstantVectorInit
-from latent_variable_model import MissingDataUnnormalisedTruncNorm
+from latent_variable_model import MissingDataUnnormalisedTruncNorm, MissingDataUnnormalisedTruncNormSymmetric
 from layers import AffineLayer, ReluLayer, TanhLayer
 from models import MultipleLayerModel
 from utils import *
@@ -32,7 +32,8 @@ def make_model(d):
     a = np.diag(np.ones(d)) * rnd.uniform(1, 4)
     b = np.diag(rnd.uniform(0.3, 0.5, d - 1), 1)
     prec0 = a + b + b.T
-    model = MissingDataUnnormalisedTruncNorm(scaling_param=scale0, mean=mean0, precision=prec0)
+    # model = MissingDataUnnormalisedTruncNorm(scaling_param=scale0, mean=mean0, precision=prec0)
+    model = MissingDataUnnormalisedTruncNormSymmetric(scaling_param=scale0, mean=mean0, precision=prec0)
     print('model mean: {}'.format(mean0))
     print('model prec diag: {}'.format(a))
 
@@ -266,10 +267,10 @@ def check_vnce_loss_grad_wrt_alpha(alpha0, loss, nz):
 def main():
     # eps = np.sqrt(np.finfo(float).eps)
     eps = 1e-8
-    n = 10
-    nu = 2
-    nz = 3
-    d = 4
+    n = 100
+    nu = 5
+    nz = 5
+    d = 5
     use_numeric_stable_approx_second_term = False
 
     # generate synthetic data
@@ -298,8 +299,8 @@ def main():
     # check_model_wrt_alpha_grad(alpha0[6:7], [6], model, var_dist, X_train, X_mask, E, nz, eps)
     # check_model_wrt_alpha_grad(alpha0[7:8], [7], model, var_dist, X_train, X_mask, E, nz, eps)
     # check_model_wrt_alpha_grad(alpha0[8:9], [8], model, var_dist, X_train, X_mask, E, nz, eps)
-    check_model_wrt_alpha_grad(alpha0[:d], np.arange(d), model, var_dist, X_train, X_mask, E, nz, eps)
-    check_model_wrt_alpha_grad(alpha0[d:], np.arange(d, len(alpha0)), model, var_dist, X_train, X_mask, E, nz, eps)
+    # check_model_wrt_alpha_grad(alpha0[:d], np.arange(d), model, var_dist, X_train, X_mask, E, nz, eps)
+    # check_model_wrt_alpha_grad(alpha0[d:], np.arange(d, len(alpha0)), model, var_dist, X_train, X_mask, E, nz, eps)
 
     print('-----------------------------------')
     print("Checking Var dist grads w.r.t alpha")
@@ -311,8 +312,8 @@ def main():
     # check_var_dist_wrt_alpha_grad(alpha0[[3, 4, 5]], [3, 4, 5])
     # check_var_dist_wrt_alpha_grad(alpha0[[6, 7]], [6, 7])
     # check_var_dist_wrt_alpha_grad(alpha0[8:], [8])
-    check_var_dist_wrt_alpha_grad(alpha0[:d], np.arange(d), model, var_dist, X_train, X_mask, E, nz, eps)
-    check_var_dist_wrt_alpha_grad(alpha0[d:], np.arange(d, len(alpha0)), model, var_dist, X_train, X_mask, E, nz, eps)
+    # check_var_dist_wrt_alpha_grad(alpha0[:d], np.arange(d), model, var_dist, X_train, X_mask, E, nz, eps)
+    # check_var_dist_wrt_alpha_grad(alpha0[d:], np.arange(d, len(alpha0)), model, var_dist, X_train, X_mask, E, nz, eps)
 
     # print("Checking log_model w.r.t z grads")
     # # z0 = rnd.uniform(0, 1, d) < 0.5

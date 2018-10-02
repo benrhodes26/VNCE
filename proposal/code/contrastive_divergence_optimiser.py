@@ -23,7 +23,7 @@ class CDOptimiser:
     parameters of an unnormalised model as proposed in:
     http://www.cs.toronto.edu/~fritz/absps/tr00-004.pdf
     """
-    def __init__(self, model, rng=None):
+    def __init__(self, model, rng=None, save_dir=None):
         """ Initialise unnormalised model and noise distribution
 
         :param model: LatentVariableModel
@@ -35,6 +35,7 @@ class CDOptimiser:
         self.model = model
         self.thetas = []  # for storing values of parameters during optimisation
         self.times = []  # seconds spent to reach each iteration during optimisation
+        self.save_dir = save_dir
         if not rng:
             self.rng = np.random.RandomState(DEFAULT_SEED)
         else:
@@ -110,12 +111,18 @@ class CDOptimiser:
 
             self.thetas.append(deepcopy(self.model.theta))
             self.times.append(time.time())
+            if self.save_dir:
+                self.save_to_file()
 
         self.thetas = np.array(self.thetas)
         self.times = np.array(self.times)
         self.times -= self.times[0]  # count seconds from 0
 
         return np.array(self.thetas), np.array(self.times)
+
+    def save_to_file(self):
+        np.savez(os.path.join(self.save_dir, "cd_results"), cd_thetas=self.thetas, cd_times=self.times)
+        pickle.dump(self.model, open(os.path.join(self.save_dir, "cd_model.p"), "wb"))
 
     def av_log_like_for_each_iter(self, X, thetas=None):
         """Calculate average log-likelihood at each iteration

@@ -24,7 +24,7 @@ class NCEOptimiser:
     to the parameters of the unnormalised model and a method for performing the
     optimisation: self.fit().
     """
-    def __init__(self, model, noise, noise_samples, regulariser=None, reg_param_indices=None, nu=1, eps=1e-15):
+    def __init__(self, model, noise, noise_samples, regulariser=None, reg_param_indices=None, nu=1, eps=1e-15, save_dir=None):
         """ Initialise unnormalised model and noise distribution
 
         :param model: FullyObservedModel
@@ -50,6 +50,7 @@ class NCEOptimiser:
         self.Js = []  # for storing values of objective function during optimisation
         self.times = []  # seconds spent to reach each iteration during optimisation
         self.num_iters = 0
+        self.save_dir = save_dir
 
     def h(self, U):
         return self.model(U, log=True) - self.noise(U, log=True)
@@ -303,6 +304,12 @@ class NCEOptimiser:
         self.thetas.append(deepcopy(self.model.theta))
         self.Js.append(deepcopy(J))
         print('iter {}: loss: {}'.format(self.num_iters, J))
+        if self.save_dir:
+            self.save_to_file()
+
+    def save_to_file(self):
+        np.savez(os.path.join(self.save_dir, "nce_results"), nce_thetas=self.thetas, nce_times=self.times, nce_losses=self.Js)
+        pickle.dump(self.model, open(os.path.join(self.save_dir, "nce_model.p"), "wb"))
 
     def plot_loss_curve(self):
         fig, axs = plt.subplots(1, 1, figsize=(10, 7))

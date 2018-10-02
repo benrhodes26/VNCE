@@ -30,7 +30,7 @@ mle_quantile_to_run_dict = pickle.load(open(os.path.join(load_dir, 'mle_quantile
 
 sample_sizes = np.array([100, 500, 2500, 12500])
 sns.set_style('darkgrid')
-fig, axs = plt.subplots(1, 2, figsize=(6.75, 3.35), sharex=True, sharey=True)
+fig, axs = plt.subplots(1, 2, figsize=(6.75, 2.5), sharex=True, sharey=True)
 axs = axs.ravel()
 ax1 = axs[0]
 plot1(ax1, vnce_quantile_to_run_dict, sample_sizes, colour='r', label='VNCE', marker='o', markersize=3)

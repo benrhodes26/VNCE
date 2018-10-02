@@ -16,6 +16,7 @@ if code_dir_2 not in sys.path:
     sys.path.append(code_dir_2)
 
 import numpy as np
+import pickle
 import time
 
 from collections import OrderedDict
@@ -192,7 +193,7 @@ class VemOptimiser:
     provided at initialisation as objects with particular methods: see SgdEmStep or ScipyMinimiseEmStep for examples.
     """
 
-    def __init__(self, m_step, e_step, num_em_steps_per_save=1):
+    def __init__(self, m_step, e_step, num_em_steps_per_save=1, save_dir=None):
         """
         :param e_step: object
             see e.g. SgdEmStep
@@ -212,6 +213,7 @@ class VemOptimiser:
         self.train_losses = []  # loss over entire train set
         self.val_losses = []
         self.times = []
+        self.save_dir = save_dir
 
     def fit(self, loss_function, theta0, alpha0, stop_threshold=1e-6, max_num_em_steps=100):
         """Optimise the loss function initialised on this class to fit the data X
@@ -269,6 +271,21 @@ class VemOptimiser:
             self.thetas.append(params)
         if e_step:
             self.alphas.append(params)
+
+        if self.save_dir:
+            self.save_to_file(loss_function)
+
+    def save_to_file(self, loss_function):
+        vnce_thetas, vnce_alphas, vnce_losses, vnce_times = self.get_flattened_result_arrays(flatten_params=False)
+        np.savez(os.path.join(self.save_dir, "vnce_results"),
+                 vnce_thetas=vnce_thetas,
+                 vnce_times=vnce_times,
+                 vnce_losses=vnce_losses)
+        pickle.dump(loss_function, open(os.path.join(self.save_dir, "vnce_loss.p"), "wb"))
+        pickle.dump(loss_function.model, open(os.path.join(self.save_dir, "vnce_model.p"), "wb"))
+        pickle.dump(loss_function.noise, open(os.path.join(self.save_dir, "noise.p"), "wb"))
+        pickle.dump(loss_function.variational_dist, open(os.path.join(self.save_dir, "var_dist.p"), "wb"))
+        pickle.dump(vnce_alphas, open(os.path.join(self.save_dir, "alphas.p"), "wb"))
 
     def get_flattened_result_arrays(self, flatten_params=True):
         losses = np.array([loss for sublist in self.losses for loss in sublist])

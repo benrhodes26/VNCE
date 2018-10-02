@@ -1116,13 +1116,13 @@ class StarsAndMoonsModel(LatentVarModel):
     def sample(self, n):
         z_mean = np.zeros(2)
         z_cov = np.identity(2)
-        z = rnd.multivariate_normal(mean=z_mean, cov=z_cov, size=n)
+        z = self.rng.multivariate_normal(mean=z_mean, cov=z_cov, size=n)
         z1_z2 = np.product(z, axis=1)
         z1_z2 = np.tile(z1_z2.reshape(-1, 1), (1, 2))
 
         noise_mean = np.zeros(2)
         noise_cov = self.c * np.identity(2)
-        noise = rnd.multivariate_normal(mean=noise_mean, cov=noise_cov, size=n)
+        noise = self.rng.multivariate_normal(mean=noise_mean, cov=noise_cov, size=n)
 
         if self.truncate_gaussian:
             noise = np.abs(noise)
@@ -1131,97 +1131,6 @@ class StarsAndMoonsModel(LatentVarModel):
 
 
 class MissingDataUnnormalisedTruncNorm(LatentVarModel):
-
-    # def __init__(self, scaling_param, mean, chol, rng=None):
-    #     """
-    #     :param scaling_param: array (1, )
-    #     :param mean: array (d, )
-    #     :param chol: array (d, d)
-    #         Lower triangular cholesky decomposition
-    #     :param rng:
-    #     :return:
-    #     """
-    #     self.mean_len = len(mean)
-    #
-    #     # cholesky of precision with log of diagonal elements (to enforce positivity)
-    #     chol = deepcopy(chol)
-    #     idiag = np.diag_indices_from(chol)
-    #     chol[idiag] = np.log(chol[idiag])
-    #     lower_chol = chol[np.tril_indices(self.mean_len)]
-    #     self.chol_len = len(lower_chol)
-    #
-    #     theta = np.concatenate((scaling_param, mean.reshape(-1), lower_chol.reshape(-1)))
-    #     super().__init__(theta, rng=rng)
-
-
-    # def __call__(self, U, Z, log=False):
-    #     """Evaluate unnormalised model
-    #
-    #     :param U: array (n, k)
-    #         observed data (elements set to 0 are missing)
-    #     :param Z: array (nz, n, k)
-    #         filled-in missing data (elements set to 0 are not missing)
-    #     :param log: boolean
-    #         if True, return value of logphi, where phi is the unnormalised model
-    #     """
-    #     V = U + Z  # (nz, n, k) - fill in the missing data
-    #     scaling_param = deepcopy(self.theta[0])
-    #     mean, chol, chol_diag = self.get_mean_and_chol()
-    #     truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)
-    #
-    #     V_centred = V - mean
-    #     P = np.dot(chol, chol.T)  # (k, k) - precision matrix
-    #     VP = np.dot(V_centred, P)  # (nz, n, k)
-    #     power = -0.5 * np.sum(VP * V_centred, axis=-1)  # (nz, n)
-    #     log_norm_const = (-self.mean_len / 2) * np.log(2 * np.pi) + np.sum(np.log(chol_diag))
-    #
-    #     val = -scaling_param + log_norm_const + power
-    #     if log:
-    #         val = truncation_mask * val + (1 - truncation_mask) * -15  # should be -infty, but -15 avoids numerical issues
-    #     else:
-    #         val = truncation_mask * np.exp(val)
-    #
-    #     return val  # (nz, n)
-    #
-    # def grad_log_wrt_params(self, U, Z):
-    #     """ Nabla_theta(log(phi(x,z; theta))) where phi is the unnormalised model
-    #
-    #     :param U: array (n, d)
-    #          either data or noise for NCE
-    #     :param Z: (nz, n, m) or (n, m)
-    #         m-dimensional latent variable samples. nz per datapoint in U.
-    #     :return grad: array (len(theta), nz, n)
-    #     """
-    #     V = U + Z  # (nz, n, d) - fill in the missing data
-    #     truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)
-    #
-    #     mean, chol, chol_diag = self.get_mean_and_chol()
-    #     ones_with_chol_diag = np.ones_like(chol)  # (d , d)
-    #     ones_with_chol_diag[np.diag_indices_from(ones_with_chol_diag)] = chol_diag
-    #
-    #     grad_wrt_to_scaling_param = np.ones((1, ) + Z.shape[:2]) * -1  # (1, nz, n)
-    #
-    #     V_centred = V - mean
-    #     P = np.dot(chol, chol.T)  # (d, d) - precision matrix
-    #     grad_wrt_to_mean = np.dot(V_centred, P.T)  # (nz, n, d)
-    #     grad_wrt_to_mean = np.transpose(grad_wrt_to_mean, [2, 0, 1])  # (d, nz, n)
-    #
-    #     V1 = np.repeat(V_centred, self.mean_len, axis=-1)  # (nz, n, d*d)
-    #     V2 = np.tile(V_centred, self.mean_len)  # (nz, n, d*d)
-    #     v3_shape = Z.shape[:2] + (self.mean_len, self.mean_len)
-    #     V3 = (V1 * V2).reshape(v3_shape)  # (nz, n, d, d)
-    #     V4 = np.dot(V3, chol)  # (nz, n, d, d)
-    #     V4 *= ones_with_chol_diag  # (nz, n, d, d)
-    #     V5 = (np.identity(self.mean_len) - V4)  # (nz, n, d, d)
-    #
-    #     ilower = np.tril_indices(self.mean_len)
-    #     grad_wrt_chol = V5[:, :, ilower[0], ilower[1]].reshape(Z.shape[:2] + (-1, ))  # (nz, n, d(d+1)/2)
-    #     grad_wrt_chol = np.transpose(grad_wrt_chol, [2, 0, 1])  # (d(d+1)/2, nz, n)
-    #
-    #     grad = np.concatenate((grad_wrt_to_scaling_param, grad_wrt_to_mean, grad_wrt_chol), axis=0)  # (len(theta), nz, n)
-    #     grad *= truncation_mask  # truncate
-    #
-    #     return grad
 
     def __init__(self, scaling_param, mean, prec_type=None, precision=None, prec_subgraph_size=None, p_prec_nzero=None, rng=None):
         """
@@ -1233,9 +1142,15 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         :return:
         """
         self.mean_len = len(mean)
+        if not rng:
+            self.rng = rnd.RandomState(DEFAULT_SEED)
+        else:
+            self.rng = rng
 
         if prec_type == 'circular':
             precision = self.make_circular_precision()
+        elif prec_type == 'hub':
+            precision = self.make_hub_precision()
         elif prec_type == 'subgraph':
             precision = self.make_disconnected_subgraph_precision(prec_subgraph_size, p_prec_nzero)
 
@@ -1304,17 +1219,16 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         # ones_with_prec_diag[np.diag_indices_from(ones_with_prec_diag)] = precision_diag
         ones_with_chol_diag[np.diag_indices_from(ones_with_chol_diag)] = np.diag(chol)
 
-
         grad_wrt_to_scaling_param = np.ones((1, ) + Z.shape[:2], dtype='float64') * -1  # (1, nz, n)
 
         V_centred = V - mean  # (nz, n, d)
         grad_wrt_to_mean = np.dot(V_centred, precision.T)  # (nz, n, d)
         grad_wrt_to_mean = np.transpose(grad_wrt_to_mean, [2, 0, 1])  # (d, nz, n)
 
-        V1 = np.repeat(V_centred, self.mean_len, axis=-1)  # (nz, n, d*d)
-        V2 = np.tile(V_centred, self.mean_len)  # (nz, n, d*d)
+        V2 = np.einsum('hij,hik->hijk', V_centred, V_centred)  # outer product. (nz, n, d*d)
         v3_shape = Z.shape[:2] + (self.mean_len, self.mean_len)
-        V3 = - 0.5 * (V1 * V2).reshape(v3_shape)  # (nz, n, d, d)  # derivatives of precision w.r.t log model
+        V3 = - 0.5 * V2.reshape(v3_shape)  # (nz, n, d, d)  # derivatives of precision w.r.t log model
+
 
         V3_T = np.transpose(V3, (0, 1, 3, 2))  # (nz, n, d, d)
         V4 = V3 + V3_T
@@ -1402,53 +1316,6 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
 
         return grads_wrt_missing_vars  # n-length list of arrays with shape (nz, k)
 
-    # def sample(self, n):
-    #     """ Sample from a truncated multivariate normal with rejection sampling with uniform proposal (note: this won't scale)
-    #     :param n: sample size
-    #     """
-    #     # mean, chol, chol_diag = self.get_mean_and_chol()
-    #     # stds = (1 / chol_diag)
-    #     mean, precision, lprecision, precision_diag = self.get_mean_and_lprecision()
-    #     cov = np.linalg.inv(precision)
-    #     print('covariance: {}'.format(cov))
-    #     print('variances: {}'.format(np.diag(cov)))
-    #     stds = np.diag(cov)**0.5
-    #     low_proposal = np.maximum(mean - (5 * stds), 0)
-    #     high_proposal = mean + (5 * stds)
-    #     k = len(mean)
-    #
-    #     sample = np.zeros((n, k), dtype='float64')
-    #     total_n_accepted = 0
-    #     expected_num_proposals_per_accept = (100 / (2 * np.pi))**(k/2)
-    #     proposal_size = int(4 * n * expected_num_proposals_per_accept)
-    #     if proposal_size > 10**8:
-    #         print('WARNING: GENERATING THE MAXIMUM NUMBER (10**8) OF SAMPLES FROM THE PROPOSAL DISTRIBUTION INSIDE A WHILE LOOP,'
-    #               ' AS PART OF THE ACCEPT-REJECT ALGORITHM. THIS COULD TAKE A VERY LONG TIME. THE DIMENSIONALITY OF YOUR DATA MAY'
-    #               ' BE TOO HIGH')
-    #         proposal_size = 10**8
-    #
-    #     print('sampling from the model...')
-    #     while total_n_accepted < n:
-    #         proposal = self.rng.uniform(low_proposal, high_proposal, (proposal_size, k))  # (proposal_size, k)
-    #         V = proposal - mean
-    #
-    #         # P = np.dot(chol, chol.T)  # (k, k) - precision matrix
-    #         VP = np.dot(V, precision)  # (proposal_size, k)
-    #         acceptance_prob = np.exp(-0.5 * np.sum(VP * V, axis=-1))  # (proposal_size, )
-    #         accept = self.rng.uniform(0, 1, proposal_size) < acceptance_prob
-    #         accepted = proposal[accept]
-    #
-    #         n_accepted = len(accepted)
-    #         if total_n_accepted + n_accepted >= n:
-    #             remain = n - total_n_accepted
-    #             sample[total_n_accepted:] = accepted[:remain]
-    #         else:
-    #             sample[total_n_accepted: total_n_accepted+n_accepted] = accepted
-    #         total_n_accepted += n_accepted
-    #         print('total num samples from model accepted: {}'.format(min(total_n_accepted, n)))
-    #     print('finished sampling!')
-    #
-    #     return sample
 
     def sample(self, n, mean=None, precision=None, num_iter=100):
         import readline
@@ -1545,22 +1412,6 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
         miss_mask[X == 0] = 1
         return miss_mask
 
-    # def get_joint_pretruncated_params(self):
-    #     """get mean and lower triangular elements of the precision matrix (note: we get log of diagonal elements)"""
-    #     mean, lprec = deepcopy(self.theta[1:1+self.mean_len]), deepcopy(self.theta[1+self.mean_len:])
-    #
-    #     # lower-triangular decomposition of the precision
-    #     lprecision = np.zeros((self.mean_len, self.mean_len), dtype='float64')
-    #     ilower = np.tril_indices(self.mean_len)
-    #     lprecision[ilower] = lprec
-    #
-    #     # exp the diagonal, to enforce positivity
-    #     idiag = np.diag_indices_from(lprecision)
-    #     lprecision[idiag] = np.exp(lprecision[idiag])
-    #
-    #     precision = lprecision + lprecision.T - np.diag(np.diag(lprecision))
-    #
-    #     return mean, precision, lprecision, precision[idiag]
 
     def get_joint_pretruncated_params(self):
         """get mean and lower triangular elements of the precision matrix (note: we get log of diagonal elements)"""
@@ -1580,11 +1431,40 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
     def make_circular_precision(self):
         d = self.mean_len
         a = np.diag(np.ones(d)) * 1.2
-        b = np.diag(rnd.uniform(0.3, 0.5, d - 1), 1)
+        b = np.diag(self.rng.uniform(0.3, 0.5, d - 1), 1)
         prec = a + b + b.T
-        prec[0, -1] = rnd.uniform(0.3, 0.5)
+        prec[0, -1] = self.rng.uniform(0.3, 0.5)
         prec[-1, 0] = deepcopy(prec[0, -1])
         return prec
+
+    def make_hub_precision(self):
+        prec = self.make_circular_precision()
+        d = self.mean_len
+        num_hubs = int(d / 10)
+        num_spokes_per_hub = int(d / 4)
+        hubs = self.rng.choice(d, num_hubs, replace=False)
+        print(hubs)
+
+        prec_2 = np.zeros((d, d))
+        for hub in hubs:
+            other_nodes = [i for i in range(d) if i not in [(hub - 1) % d, hub, (hub + 1) % d ]]
+            spokes = self.rng.choice(other_nodes, num_spokes_per_hub - 2, replace=False)
+            prec_2[hub, spokes] = self.rng.uniform(0.3, 0.5, num_spokes_per_hub - 2)
+            print(hub, spokes)
+        prec_2 = prec_2 + prec_2.T
+        prec += prec_2
+
+        self.enforce_positive_def(d, prec)
+        return prec
+
+    def enforce_positive_def(self, d, prec):
+        min_eig = np.min(np.linalg.eig(prec)[0])
+        i_diag = np.diag_indices(d)
+        diag = 0
+        while min_eig < 0.1:
+            diag += 0.1
+            prec[i_diag] = diag
+            min_eig = np.min(np.linalg.eig(prec)[0])
 
     def make_disconnected_subgraph_precision(self, prec_subgraph_size, p_prec_nzero):
         d = self.mean_len
@@ -1596,20 +1476,13 @@ class MissingDataUnnormalisedTruncNorm(LatentVarModel):
             subgraph = np.zeros((m, m))
             for j in range(m):
                 for k in range(j):
-                    a = rnd.uniform(0, 1) < p_prec_nzero
+                    a = self.rng.uniform(0, 1) < p_prec_nzero
                     if a == 1:
-                        subgraph[j, k] = rnd.uniform(0.5, 1)
+                        subgraph[j, k] = self.rng.uniform(0.5, 1)
             prec[i * m:(i + 1) * m, i * m:(i + 1) * m] = subgraph
         prec = prec + prec.T
 
-        min_eig = np.min(np.linalg.eig(prec)[0])
-        i_diag = np.diag_indices(d)
-        diag = 0
-        while min_eig < 0.1:
-            diag += 0.1
-            prec[i_diag] = diag
-            min_eig = np.min(np.linalg.eig(prec)[0])
-
+        self.enforce_positive_def(d, prec)
         return prec
 
 
@@ -1625,9 +1498,15 @@ class MissingDataUnnormalisedTruncNormSymmetric(LatentVarModel):
         :return:
         """
         self.mean_len = len(mean)
+        if not rng:
+            self.rng = rnd.RandomState(DEFAULT_SEED)
+        else:
+            self.rng = rng
 
         if prec_type == 'circular':
             precision = self.make_circular_precision()
+        elif prec_type == 'hub':
+            precision = self.make_hub_precision()
         elif prec_type == 'subgraph':
             precision = self.make_disconnected_subgraph_precision(prec_subgraph_size, p_prec_nzero)
 
@@ -1652,7 +1531,7 @@ class MissingDataUnnormalisedTruncNormSymmetric(LatentVarModel):
         """
         V = (1 - miss_mask) * U + (miss_mask * Z)  # (nz, n, k) - fill in the missing data
         scaling_param = deepcopy(self.theta[0])
-        mean, precision, _, _ = self.get_mean_and_lprecision()
+        mean, precision, _, _ = self.get_joint_pretruncated_params()
         truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)
 
         V_centred = V - mean
@@ -1677,7 +1556,7 @@ class MissingDataUnnormalisedTruncNormSymmetric(LatentVarModel):
         V = (1 - miss_mask) * U + (miss_mask * Z)  # (nz, n, k) - fill in the missing data
         truncation_mask = np.all(V >= 0, axis=-1)  # (nz, n)
 
-        mean, precision, lprecision, precision_diag = self.get_mean_and_lprecision()
+        mean, precision, lprecision, precision_diag = self.get_joint_pretruncated_params()
         ones_with_prec_diag = np.ones_like(precision, dtype='float64')  # (d , d)
         ones_with_prec_diag[np.diag_indices_from(ones_with_prec_diag)] = precision_diag
 
@@ -1687,10 +1566,9 @@ class MissingDataUnnormalisedTruncNormSymmetric(LatentVarModel):
         grad_wrt_to_mean = np.dot(V_centred, precision.T)  # (nz, n, d)
         grad_wrt_to_mean = np.transpose(grad_wrt_to_mean, [2, 0, 1])  # (d, nz, n)
 
-        V1 = np.repeat(V_centred, self.mean_len, axis=-1)  # (nz, n, d*d)
-        V2 = np.tile(V_centred, self.mean_len)  # (nz, n, d*d)
+        V2 = np.einsum('hij,hik->hijk', V_centred, V_centred)  # outer product. (nz, n, d*d)
         v3_shape = Z.shape[:2] + (self.mean_len, self.mean_len)
-        V3 = - (V1 * V2).reshape(v3_shape)  # (nz, n, d, d)
+        V3 = - V2.reshape(v3_shape)  # (nz, n, d, d)  # derivatives of precision w.r.t log model
 
         V4 = 0.5 * V_centred**2  # (nz, n, d)
         idiag = np.diag_indices(self.mean_len)
@@ -1717,7 +1595,7 @@ class MissingDataUnnormalisedTruncNormSymmetric(LatentVarModel):
         :param grad_z_wrt_nn_outputs: array (len(nn_outputs), nz, n, k)
         :return grad: array (len(nn_outputs), nz, n)
         """
-        mean, precision, _, _ = self.get_mean_and_lprecision()
+        mean, precision, _, _ = self.get_joint_pretruncated_params()
         V = (1 - miss_mask) * U + (miss_mask * Z)  # (nz, n, k) - fill in the missing data
         miss_mask = np.zeros_like(Z)
         miss_mask[np.nonzero(Z)] = 1
@@ -1746,7 +1624,7 @@ class MissingDataUnnormalisedTruncNormSymmetric(LatentVarModel):
         :return: array (len(alpha), nz, n)
             gradient of log_model w.r.t alpha (which is non-zero due to the reparameterisation trick)
         """
-        mean, prec, _, _ = self.get_mean_and_lprecision()
+        mean, prec, _, _ = self.get_joint_pretruncated_params()
         miss_inds, obs_inds = get_missing_and_observed_indices(miss_mask, miss_mask.shape[0])
 
         # get precision of conditional for each data point
@@ -1771,54 +1649,6 @@ class MissingDataUnnormalisedTruncNormSymmetric(LatentVarModel):
 
         return grads_wrt_missing_vars  # n-length list of arrays with shape (nz, k)
 
-    # def sample(self, n):
-    #     """ Sample from a truncated multivariate normal with rejection sampling with uniform proposal (note: this won't scale)
-    #     :param n: sample size
-    #     """
-    #     # mean, chol, chol_diag = self.get_mean_and_chol()
-    #     # stds = (1 / chol_diag)
-    #     mean, precision, lprecision, precision_diag = self.get_mean_and_lprecision()
-    #     cov = np.linalg.inv(precision)
-    #     print('covariance: {}'.format(cov))
-    #     print('variances: {}'.format(np.diag(cov)))
-    #     stds = np.diag(cov)**0.5
-    #     low_proposal = np.maximum(mean - (5 * stds), 0)
-    #     high_proposal = mean + (5 * stds)
-    #     k = len(mean)
-    #
-    #     sample = np.zeros((n, k), dtype='float64')
-    #     total_n_accepted = 0
-    #     expected_num_proposals_per_accept = (100 / (2 * np.pi))**(k/2)
-    #     proposal_size = int(4 * n * expected_num_proposals_per_accept)
-    #     if proposal_size > 10**8:
-    #         print('WARNING: GENERATING THE MAXIMUM NUMBER (10**8) OF SAMPLES FROM THE PROPOSAL DISTRIBUTION INSIDE A WHILE LOOP,'
-    #               ' AS PART OF THE ACCEPT-REJECT ALGORITHM. THIS COULD TAKE A VERY LONG TIME. THE DIMENSIONALITY OF YOUR DATA MAY'
-    #               ' BE TOO HIGH')
-    #         proposal_size = 10**8
-    #
-    #     print('sampling from the model...')
-    #     while total_n_accepted < n:
-    #         proposal = self.rng.uniform(low_proposal, high_proposal, (proposal_size, k))  # (proposal_size, k)
-    #         V = proposal - mean
-    #
-    #         # P = np.dot(chol, chol.T)  # (k, k) - precision matrix
-    #         VP = np.dot(V, precision)  # (proposal_size, k)
-    #         acceptance_prob = np.exp(-0.5 * np.sum(VP * V, axis=-1))  # (proposal_size, )
-    #         accept = self.rng.uniform(0, 1, proposal_size) < acceptance_prob
-    #         accepted = proposal[accept]
-    #
-    #         n_accepted = len(accepted)
-    #         if total_n_accepted + n_accepted >= n:
-    #             remain = n - total_n_accepted
-    #             sample[total_n_accepted:] = accepted[:remain]
-    #         else:
-    #             sample[total_n_accepted: total_n_accepted+n_accepted] = accepted
-    #         total_n_accepted += n_accepted
-    #         print('total num samples from model accepted: {}'.format(min(total_n_accepted, n)))
-    #     print('finished sampling!')
-    #
-    #     return sample
-
     def sample(self, n):
         import readline
         import rpy2
@@ -1831,7 +1661,7 @@ class MissingDataUnnormalisedTruncNormSymmetric(LatentVarModel):
         rtmvnorm = tm.rtmvnorm
 
         d = self.mean_len
-        mean, precision, _, _ = self.get_mean_and_lprecision()
+        mean, precision, _, _ = self.get_joint_pretruncated_params()
         r_mean = r.c(mean)
         r_prec = r.matrix(precision, ncol=d, nrow=d)
         lower_bounds = r.c(np.zeros(d))
@@ -1839,7 +1669,7 @@ class MissingDataUnnormalisedTruncNormSymmetric(LatentVarModel):
                            algorithm="gibbs", thinning=100, **{'burn.in.samples': 100})
         return np.array(samples).reshape(n, d)
 
-    def get_mean_and_lprecision(self):
+    def get_joint_pretruncated_params(self):
         """get mean and lower triangular elements of the precision matrix (note: we get log of diagonal elements)"""
         mean, lprec = deepcopy(self.theta[1:1+self.mean_len]), deepcopy(self.theta[1+self.mean_len:])
 
@@ -1859,11 +1689,38 @@ class MissingDataUnnormalisedTruncNormSymmetric(LatentVarModel):
     def make_circular_precision(self):
         d = self.mean_len
         a = np.diag(np.ones(d)) * 1.2
-        b = np.diag(rnd.uniform(0.3, 0.5, d - 1), 1)
+        b = np.diag(self.rng.uniform(0.3, 0.5, d - 1), 1)
         prec = a + b + b.T
-        prec[0, -1] = rnd.uniform(0.3, 0.5)
+        prec[0, -1] = self.rng.uniform(0.3, 0.5)
         prec[-1, 0] = deepcopy(prec[0, -1])
         return prec
+
+    def make_hub_precision(self):
+        prec = self.make_circular_precision()
+        d = self.mean_len
+        num_hubs = int(d / 10)
+        num_spokes_per_hub = int(d / 4)
+        hubs = self.rng.choice(d, num_hubs, replace=False)
+
+        prec_2 = np.zeros((d,d))
+        for hub in hubs:
+            other_nodes = [i for i in range(d) if i not in [(hub - 1) % d, hub, (hub + 1) % d ]]
+            spokes = self.rng.choice(other_nodes, num_spokes_per_hub - 2, replace=False)
+            prec_2[hub, spokes] = self.rng.uniform(0.3, 0.5, num_spokes_per_hub - 2)
+        prec_2 = prec_2 + prec_2.T
+        prec += prec_2
+
+        self.enforce_positive_def(d, prec)
+        return prec
+
+    def enforce_positive_def(self, d, prec):
+        min_eig = np.min(np.linalg.eig(prec)[0])
+        i_diag = np.diag_indices(d)
+        diag = 0
+        while min_eig < 0.1:
+            diag += 0.1
+            prec[i_diag] = diag
+            min_eig = np.min(np.linalg.eig(prec)[0])
 
     def make_disconnected_subgraph_precision(self, prec_subgraph_size, p_prec_nzero):
         d = self.mean_len
@@ -1875,9 +1732,9 @@ class MissingDataUnnormalisedTruncNormSymmetric(LatentVarModel):
             subgraph = np.zeros((m, m))
             for j in range(m):
                 for k in range(j):
-                    a = rnd.uniform(0, 1) < p_prec_nzero
+                    a = self.rng.uniform(0, 1) < p_prec_nzero
                     if a == 1:
-                        subgraph[j, k] = rnd.uniform(0.5, 1)
+                        subgraph[j, k] = self.rng.uniform(0.5, 1)
             prec[i * m:(i + 1) * m, i * m:(i + 1) * m] = subgraph
         prec = prec + prec.T
 

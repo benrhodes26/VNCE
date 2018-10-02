@@ -780,7 +780,7 @@ class UnnormalisedTruncNorm(Model):
             if True, return value of logphi, where phi is the unnormalised model
         """
         scaling_param = deepcopy(self.theta[0])
-        mean, precision, _, _ = self.get_mean_and_lprecision()
+        mean, precision, _, _ = self.get_joint_pretruncated_params()
         truncation_mask = np.all(U >= 0, axis=-1)  # (nz, n)
 
         V_centred = U - mean
@@ -809,7 +809,7 @@ class UnnormalisedTruncNorm(Model):
         n = U.shape[0]
         truncation_mask = np.all(U >= 0, axis=-1)  # (n, )
 
-        mean, precision, lprecision, precision_diag = self.get_mean_and_lprecision()
+        mean, precision, lprecision, precision_diag = self.get_joint_pretruncated_params()
         ones_with_prec_diag = np.ones_like(precision)  # (d , d)
         ones_with_prec_diag[np.diag_indices_from(ones_with_prec_diag)] = precision_diag
 
@@ -844,7 +844,7 @@ class UnnormalisedTruncNorm(Model):
         """
         # mean, chol, chol_diag = self.get_mean_and_chol()
         # stds = (1 / chol_diag)
-        mean, precision, lprecision, precision_diag = self.get_mean_and_lprecision()
+        mean, precision, lprecision, precision_diag = self.get_joint_pretruncated_params()
         cov = np.linalg.inv(precision)
         stds = np.diag(cov)**0.5
         low_proposal = np.maximum(mean - (5 * stds), 0)
@@ -884,7 +884,7 @@ class UnnormalisedTruncNorm(Model):
 
         return sample
 
-    def get_mean_and_lprecision(self):
+    def get_joint_pretruncated_params(self):
         """get mean and lower triangular elements of the precision matrix (note: we get log of diagonal elements)"""
         mean, lprec = deepcopy(self.theta[1:1+self.mean_len]), deepcopy(self.theta[1+self.mean_len:])
 

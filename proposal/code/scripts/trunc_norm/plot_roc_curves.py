@@ -15,15 +15,12 @@ import seaborn as sns
 
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from copy import deepcopy
-# from graph_tool.draw import graph_draw
 from matplotlib import pyplot as plt
 from matplotlib import rc
 from numpy import random as rnd
 from sklearn.metrics import roc_curve, auc
 
-from distribution import RBMLatentPosterior, MultivariateBernoulliNoise, ChowLiuTree
-from fully_observed_models import VisibleRestrictedBoltzmannMachine
-from latent_variable_model import RestrictedBoltzmannMachine
+from latent_variable_model import MissingDataUnnormalisedTruncNorm, MissingDataUnnormalisedTruncNormSymmetric
 from plot import *
 from project_statics import *
 from utils import take_closest
@@ -39,7 +36,8 @@ parser = ArgumentParser(description='plot relationship between fraction of train
                                     'a truncated normal model trained with VNCE', formatter_class=ArgumentDefaultsHelpFormatter)
 parser.add_argument('--save_dir', type=str, default=RESULTS + '/trunc-norm/')
 parser.add_argument('--load_dir', type=str, default=EXPERIMENT_OUTPUTS + '/trunc_norm/')
-parser.add_argument('--exp_name', type=str, default='20d_reg_param_0.0001/', help='name of set of experiments this one belongs to')
+# parser.add_argument('--exp_name', type=str, default='20d_reg_param/0/separated_results/3/', help='name of set of experiments this one belongs to')
+parser.add_argument('--exp_name', type=str, default='20d_reg_param_cir/', help='name of set of experiments this one belongs to')
 
 args = parser.parse_args()
 main_load_dir = os.path.join(args.load_dir, args.exp_name)
@@ -52,17 +50,17 @@ if not os.path.exists(save_dir):
 plt.switch_backend('cairo')
 
 
-def get_lower_diag_matrix(d, theta):
-    precision = np.zeros((d, d))
-    i_tril = np.tril_indices(d)
-    precision[i_tril] = theta[1 + d:]
-    precision[np.diag_indices(d)] = 0
+def get_lower_diag_matrix(dist, theta, d):
+    dist.theta = theta
+    precision = dist.get_joint_pretruncated_params()[1]
+    precision[np.diag_indices(d)] = 0  # ignore diagonals - only interested in off diagonal elements
     return precision
 
-def get_auc_fpr_tpr(metrics_dict, true_theta, est_theta, d):
-    true_precision = get_lower_diag_matrix(d, true_theta)
-    est_precision = get_lower_diag_matrix(d, est_theta)
+def get_auc_fpr_tpr(metrics_dict, data_dist, model, true_theta, est_theta, d):
+    true_precision = get_lower_diag_matrix(data_dist, true_theta, d)
+    est_precision = get_lower_diag_matrix(model, est_theta, d)
 
+    true_precision[true_precision < 1e-5] = 0  # get rid of any numerical errors
     true_edges = np.nonzero(true_precision)
     true_edges = list(zip(true_edges[0], true_edges[1]))
     all_edges = np.tril_indices(d, -1)
@@ -74,16 +72,15 @@ def get_auc_fpr_tpr(metrics_dict, true_theta, est_theta, d):
 
     scores = est_precision[np.tril_indices(d, -1)]
     scores = np.abs(scores)
-    scores = scores / np.sum(scores)
-    try:
-        fpr, tpr, thresholds = roc_curve(true_labels, scores)
-        roc_auc = auc(fpr, tpr)
+    # scores = scores / np.sum(scores)
 
-        metrics_dict['auc'].append(roc_auc)
-        metrics_dict['fpr'].append(fpr.tolist())
-        metrics_dict['tpr'].append(tpr.tolist())
-    except:
-        pass
+    fpr, tpr, thresholds = roc_curve(true_labels, scores)
+    roc_auc = auc(fpr, tpr)
+
+    metrics_dict['auc'].append(roc_auc)
+    metrics_dict['fpr'].append(fpr.tolist())
+    metrics_dict['tpr'].append(tpr.tolist())
+
 
 def append_to_all_metrics(all_metrics, metrics):
     all_metrics['auc'].append(metrics['auc'])
@@ -99,30 +96,37 @@ def plot_auc(ax, fracs, deciles, label, colour):
 '-----------------------------------------------------------------------------------------------------'
 # fracs = np.arange(0, 10, 2) / 10
 # fracs = np.array([0.2, 0.5])
-fracs = np.array([0.1, 0.3, 0.5, 0.7, 0.9])
+# fracs = np.array([0.1, 0.3, 0.5])
+fracs = np.array([0.0, 0.1, 0.2, 0.3, 0.4, 0.5])
+# fracs = np.array([0.1, 0.3, 0.5, 0.7, 0.9])
+sorted_fracs = fracs
 frac_range = np.arange(1)  # 10
 
 fpr_range = np.arange(0, 1.02, 0.02)
 # method_names = ['VNCE (lognormal)', 'NCE (means)', 'NCE (noise)', 'MLE (sampling)']
-method_names = ['VNCE (lognormal)', 'NCE (means)', 'MLE (sampling)']
+# method_names = ['VNCE (lognormal)', 'NCE (means)', 'MLE (sampling)']
 # method_names = ['VNCE (lognormal)', 'MLE (sampling)']
-# method_names = ['VNCE (lognormal)', 'NCE (means)']
+method_names = ['VNCE (lognormal)', 'NCE (means)']
 # method_names = ['VNCE (lognormal)']
 
-# filenames = ['vnce_results3.npz', 'nce_results1.npz', 'nce_results2.npz', 'cd_results.npz']
-filenames = ['vnce_results3.npz', 'nce_results1.npz', 'cd_results.npz']
-# filenames = ['vnce_results3.npz', 'cd_results.npz']
-# filenames = ['vnce_results3.npz', 'nce_results1.npz']
-# filenames = ['vnce_results3.npz']
-# filenames = ['nce_results1.npz', 'nce_results2.npz']
+# param_files = ['vnce_results3.npz', 'nce_results1.npz', 'nce_results2.npz', 'cd_results.npz']
+# param_files = ['vnce_results3.npz', 'nce_results1.npz', 'cd_results.npz']
+# param_files = ['vnce_results3.npz', 'cd_results.npz']
+param_files = ['vnce_results3.npz', 'nce_results1.npz']
+# param_files = ['vnce_results3.npz']
+# param_files = ['nce_results1.npz', 'nce_results2.npz']
+
+# model_files = ['vnce_model3.p', 'nce_model1.p', 'cd_model.p']
+model_files = ['vnce_model3.p', 'nce_model1.p']
+
 # method_colours = ['purple', 'orange', 'green', 'black']
-method_colours = ['purple', 'orange', 'black']
+# method_colours = ['purple', 'orange', 'black']
 # method_colours = ['purple', 'black']
-# method_colours = ['purple', 'orange']
+method_colours = ['purple', 'orange']
 # method_colours = ['purple']
 # method_colours = ['orange', 'green']
-method_linestyles = ['-', '--', '.']
-# method_linestyles = ['--', '-']
+# method_linestyles = ['-', '--', '.']
+method_linestyles = ['--', '-']
 # method_linestyles = ['--']
 # method_names = ['VNCE (cdi true)', 'VNCE (lognormal)', 'NCE (means)', 'NCE (noise)', 'NCE (random)']
 # method_colours = ['black', 'purple', 'orange', 'green', 'red']
@@ -136,7 +140,7 @@ for outer_file in os.listdir(main_load_dir):
     load_dir = os.path.join(main_load_dir, outer_file, 'best')
     metrics = [{'auc': [], 'fpr': [], 'tpr': []} for i in range(num_methods)]
 
-    sorted_fracs = sorted([float(f[4:]) for f in os.listdir(load_dir)])
+    # sorted_fracs = sorted([float(f[4:]) for f in os.listdir(load_dir)])
     sorted_dirs = ['frac' + str(frac) for frac in sorted_fracs]
     for i, file in enumerate(sorted_dirs):
         load = os.path.join(load_dir, file)
@@ -144,18 +148,20 @@ for outer_file in os.listdir(main_load_dir):
         frac = float(config.frac_missing)
         d = config.d
 
-        loaded_true = np.load(os.path.join(load, 'theta0_and_theta_true.npz'))
-        theta_true = loaded_true['theta_true']
+        theta_true = config.theta_true
+        data_dist = config.data_dist
+
         for j in range(num_methods):
-            loaded = np.load(os.path.join(load, filenames[j]))
-            if filenames[j][0] == 'v':
+            loaded = np.load(os.path.join(load, param_files[j]))
+            if param_files[j][0] == 'v':
                 theta = loaded['vnce_thetas'][-1][-1]
-            elif filenames[j][0] == 'n':
+            elif param_files[j][0] == 'n':
                 theta = loaded['nce_thetas'][-1]
-            elif filenames[j][0] == 'c':
+            elif param_files[j][0] == 'c':
                 theta = loaded['cd_thetas'][-1]
 
-            get_auc_fpr_tpr(metrics[j], theta_true, theta, d)
+            model = pickle.load(open(os.path.join(load, model_files[j]), 'rb'))
+            get_auc_fpr_tpr(metrics[j], data_dist, model, theta_true, theta, d)
 
     for j in range(num_methods):
         append_to_all_metrics(all_metrics[j], metrics[j])
@@ -213,7 +219,7 @@ x_positions = []
 for i in np.linspace(-0.015, 0.015, num_methods):
     x_positions.append(fracs + i)
 
-percentiles = [10, 50, 90]
+percentiles = [25, 50, 75]
 # percentiles = [1, 50, 99]
 aucs = [np.array(metric['auc']) for metric in all_metrics]
 deciles = [np.percentile(auc, percentiles, axis=0) for auc in aucs]
