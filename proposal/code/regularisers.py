@@ -33,8 +33,9 @@ class Regulariser(metaclass=ABCMeta):
 class L1Regulariser(Regulariser):
 
     def __call__(self, param):
-        return self.reg_param * np.sum(np.abs(param))
+        #todo: normalise me
+        return - self.reg_param * np.sum(np.abs(param)) / param.size
 
     def grad(self, param):
-        return self.reg_param * np.sign(param)
+        return - self.reg_param * np.sign(param) / param.size
 

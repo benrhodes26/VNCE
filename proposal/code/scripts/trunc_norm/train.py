@@ -43,14 +43,14 @@ parser = ArgumentParser(description='Experiments for learning the parameters of 
                         formatter_class=ArgumentDefaultsHelpFormatter)
 # Read/write arguments
 parser.add_argument('--save_dir', type=str, default=EXPERIMENT_OUTPUTS +'/trunc_norm', help='Path to directory where model will be saved')
-parser.add_argument('--exp_name', type=str, default='test', help='name of set of experiments this one belongs to') #lognormal_50d_nu10
+parser.add_argument('--exp_name', type=str, default='test', help='name of set of experiments this one belongs to')  # lognormal_50d_nu10
 parser.add_argument('--name', type=str, default=START_TIME, help='name of this exact experiment')
 parser.add_argument('--data_path', type=str, default=EXPERIMENT_OUTPUTS + '/trunc_norm/data', help='Number of datapoints')
 
 # data arguments
 parser.add_argument('--sample_size', type=int, default=1000, help='Number of datapoints')
 parser.add_argument('--d', type=int, default=20, help='dimension of visibles for synthetic dataset')
-parser.add_argument('--frac_missing', type=float, default=0.1, help='percentage of data missing completely at random')
+parser.add_argument('--frac_missing', type=float, default=0.8, help='percentage of data missing completely at random')
 parser.add_argument('--prec_type', type=str, default='circular', help='type of ground truth precision')
 parser.add_argument('--nz', type=int, default=5, help='Number of latent samples per datapoint')
 parser.add_argument('--nu', type=int, default=10, help='ratio of noise to data samples in NCE')
@@ -62,7 +62,7 @@ parser.add_argument('--hidden_dim', type=int, default=100, help='dimension of hi
 parser.add_argument('--activation_layer', type=object, default=TanhLayer(), help='type of non-linearity in neural network')
 
 # Latent NCE optimisation arguments
-parser.add_argument('--reg_param', type=float, default=0.001, help='l1 regularisation parameter')
+parser.add_argument('--reg_param', type=float, default=1000, help='l1 regularisation parameter')
 parser.add_argument('--opt_method1', type=str, default='BFGS', help='optimisation method.')
 parser.add_argument('--opt_method2', type=str, default='SGD', help='optimisation method.')
 parser.add_argument('--opt_method3', type=str, default='BFGS', help='optimisation method.')
@@ -72,10 +72,10 @@ parser.add_argument('--maxiter3', type=int, default=5, help='number of iteration
 parser.add_argument('--stop_threshold', type=float, default=0, help='Tolerance used as stopping criterion in EM loop')
 parser.add_argument('--max_num_epochs1', type=int, default=0, help='Maximum number of loops through the dataset during training')  # 500
 parser.add_argument('--max_num_epochs2', type=int, default=0, help='Maximum number of loops through the dataset during training')  # 500
-parser.add_argument('--max_num_epochs3', type=int, default=0, help='Maximum number of loops through the dataset during training')  # 500
+parser.add_argument('--max_num_epochs3', type=int, default=10, help='Maximum number of loops through the dataset during training')  # 500
 parser.add_argument('--model_learn_rate', type=float, default=0.1, help='if opt_method=SGD, this is the learning rate used to train the model')
 parser.add_argument('--var_learn_rate', type=float, default=0.1, help='if opt_method=SGD, this is the learning rate used to train the variational dist')
-parser.add_argument('--batch_size', type=int, default=100, help='if opt_method=SGD, this is the size of a minibatch')
+parser.add_argument('--batch_size', type=int, default=50, help='if opt_method=SGD, this is the size of a minibatch')
 parser.add_argument('--num_batch_per_em_step', type=int, default=1, help='if opt_method=SGD, this is the number of batches per EM step')
 parser.add_argument('--track_loss', dest='track_loss', action='store_true', help='track VNCE loss in E & M steps')
 parser.add_argument('--no-track_loss', dest='track_loss', action='store_false')
@@ -84,22 +84,22 @@ parser.set_defaults(track_loss=True)
 # nce optimisation arguments
 parser.add_argument('--nce_reg_param', type=float, default=0.01, help='l1 regularisation parameter')
 parser.add_argument('--nce_opt_method', type=str, default='BFGS', help='nce optimisation method. L-BFGS-B and CG both seem to work')
-parser.add_argument('--maxiter_nce1', type=int, default=10, help='number of iterations inside scipy.minimize')
+parser.add_argument('--maxiter_nce1', type=int, default=100, help='number of iterations inside scipy.minimize')
 parser.add_argument('--maxiter_nce2', type=int, default=0, help='number of iterations inside scipy.minimize')
 parser.add_argument('--maxiter_nce3', type=int, default=0, help='number of iterations inside scipy.minimize')
-parser.add_argument('--nce_missing_num_epochs1', type=int, default=1, help='if nce_opt_method=SGD, this is the number of passes through data set')  # 250
+parser.add_argument('--nce_missing_num_epochs1', type=int, default=100, help='if nce_opt_method=SGD, this is the number of passes through data set')  # 250
 parser.add_argument('--nce_missing_num_epochs2', type=int, default=0, help='if nce_opt_method=SGD, this is the number of passes through data set')  # 250
 parser.add_argument('--nce_missing_num_epochs3', type=int, default=0, help='if nce_opt_method=SGD, this is the number of passes through data set')  # 250
 parser.add_argument('--nce_learn_rate', type=float, default=0.03, help='if nce_opt_method=SGD, this is the learning rate used')
-parser.add_argument('--nce_batch_size', type=int, default=100, help='if nce_opt_method=SGD, this is the size of a minibatch')
+parser.add_argument('--nce_batch_size', type=int, default=50, help='if nce_opt_method=SGD, this is the size of a minibatch')
 
 # MLE optimisation arguments
 parser.add_argument('--cd_num_gibbs_steps', type=int, default=10, help='Gibbs MCMC thinning factor')
-parser.add_argument('--cd_learn_rate', type=float, default=1, help='learning rate for sampling-based MLE')
-parser.add_argument('--cd_batch_size', type=int, default=100, help='batch size for sampling-based MLE')
+parser.add_argument('--cd_learn_rate', type=float, default=0.01, help='learning rate for sampling-based MLE')
+parser.add_argument('--cd_batch_size', type=int, default=50, help='batch size for sampling-based MLE')
 parser.add_argument('--cd_num_epochs', type=int, default=100, help='number of epochs for sampling-based MLE')
-parser.add_argument('--cd_nz', type=int, default=5, help='use nz samples for *data* expectation, '
-                                                          'and nz*n samples for model expectations when using sampling-based MLE')
+parser.add_argument('--cd_nz', type=int, default=5, help='use nz samples for *data* expectation '
+                                                         'and nz*n samples for model expectations when using sampling-based MLE')
 
 # Other arguments
 parser.add_argument('--separate_terms', dest='separate_terms', action='store_true', help='separate the two terms that make up J1/J objective functions')
@@ -109,8 +109,8 @@ parser.add_argument('--use_numeric_stable_approx_second_term', dest='use_numeric
 parser.add_argument('--no-use_numeric_stable_approx_second_term', dest='use_numeric_stable_approx_second_term', action='store_false')
 parser.set_defaults(use_numeric_stable_approx_second_term=False)
 # parser.add_argument('--random_seed', type=int, default=1083463236, help='seed for np.random.RandomState')
-parser.add_argument('--random_seed', type=int, default=108346322, help='seed for np.random.RandomState')
-parser.add_argument('--sim_num', type=int, default=0, help='id for this simulation')
+parser.add_argument('--random_seed', type=int, default=20781, help='seed for np.random.RandomState')
+parser.add_argument('--sim_num', type=int, default=100, help='id for this simulation')
 
 args = parser.parse_args()
 args.rng = rnd.RandomState(args.random_seed)
@@ -292,7 +292,6 @@ def get_num_em_steps_per_epoch(args, opt_method, num_vnce='1'):
 
 
 def load_data(args):
-    #todo: update args with loaded args from generate_datsets.py
     exact_data_path = os.path.join(args.data_path, "dim{}/{}/{}/frac{}/data.p".format(args.d, args.prec_type, args.sim_num, args.frac_missing))
     data_args = pickle.load(open(exact_data_path, 'rb'))
     vars(args).update(vars(data_args))

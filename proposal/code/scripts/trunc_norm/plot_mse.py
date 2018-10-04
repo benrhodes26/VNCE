@@ -33,7 +33,7 @@ parser = ArgumentParser(description='plot relationship between fraction of train
                                     'a truncated normal model trained with VNCE', formatter_class=ArgumentDefaultsHelpFormatter)
 parser.add_argument('--save_dir', type=str, default=RESULTS + '/trunc-norm/')
 # parser.add_argument('--exp_name', type=str, default='20d_reg_param_hub/0/separated_results/3/', help='name of set of experiments this one belongs to')  # 5d-vlr0.1-nz=10-final
-parser.add_argument('--exp_name', type=str, default='20d_reg_param_cir/', help='name of set of experiments this one belongs to')  # 5d-vlr0.1-nz=10-final
+parser.add_argument('--exp_name', type=str, default='20d_hub/', help='name of set of experiments this one belongs to')  # 5d-vlr0.1-nz=10-final
 parser.add_argument('--load_dir', type=str, default=EXPERIMENT_OUTPUTS + '/trunc_norm/')
 
 args = parser.parse_args()
@@ -80,17 +80,17 @@ def plot_errorbar(ax, fracs, mses, label, color):
     plot_errorbar_helper(ax, fracs, mses, deciles, label, color)
 
 
-# methods = ['VNCE (lognormal approx)', 'NCE (means fill in)', 'MLE (sampling)']
-methods = ['VNCE (lognormal approx)', 'NCE (means fill in)']
+methods = ['VNCE (lognormal approx)', 'NCE (means fill in)', 'MLE (sampling)']
+# methods = ['VNCE (lognormal approx)', 'NCE (means fill in)']
 
-# param_file = ['vnce_results3.npz', 'nce_results1.npz', 'cd_results.npz']
-param_file = ['vnce_results3.npz', 'nce_results1.npz']
+param_file = ['vnce_results3.npz', 'nce_results1.npz', 'cd_results.npz']
+# param_file = ['vnce_results3.npz', 'nce_results1.npz']
 
-# model_files = ['vnce_model3.p', 'nce_model1.p', 'cd_model.p']
-model_files = ['vnce_model3.p', 'nce_model1.p']
+model_files = ['vnce_model3.p', 'nce_model1.p', 'cd_model.p']
+# model_files = ['vnce_model3.p', 'nce_model1.p']
 
-# colors = ['purple', 'orange', 'black']
-colors = ['purple', 'orange']
+colors = ['purple', 'orange', 'black']
+# colors = ['purple', 'orange']
 
 num_methods = len(methods)
 # sorted_fracs = np.array([0.1, 0.3, 0.5, 0.7, 0.9])
@@ -103,7 +103,8 @@ all_diags = [[] for i in range(num_methods)]
 all_ndiags = [[] for i in range(num_methods)]
 
 for outer_file in os.listdir(main_load_dir):
-    load_dir = os.path.join(main_load_dir, outer_file, 'best')
+    # load_dir = os.path.join(main_load_dir, outer_file, 'best')
+    load_dir = os.path.join(main_load_dir, outer_file)
 
     frac_to_mu_mse_dict = {}
     frac_to_mean_mse_dict = {}
@@ -113,38 +114,40 @@ for outer_file in os.listdir(main_load_dir):
     # loop through files and get mses of vnce and nce with 0s
     # sorted_fracs = sorted([float(f[4:]) for f in os.listdir(load_dir)])
     sorted_dirs = ['frac' + str(frac) for frac in sorted_fracs]
-    for i, file in enumerate(sorted_dirs):
-        exp = os.path.join(load_dir, file)
-        config = pickle.load(open(os.path.join(exp, 'config.p'), 'rb'))
-        frac = float(config.frac_missing)
-        d = config.d
+    for i, frac_file in enumerate(sorted_dirs):
+        frac_dir = os.path.join(load_dir, frac_file)
+        for reg_file in os.listdir(frac_dir):
+            exp =  os.path.join(frac_dir, reg_file)
+            config = pickle.load(open(os.path.join(exp, 'config.p'), 'rb'))
+            frac = float(config.frac_missing)
+            d = config.d
 
-        theta_true = config.theta_true
-        data_dist = config.data_dist
+            theta_true = config.theta_true
+            data_dist = config.data_dist
 
-        for p_file, m_file in zip(param_file, model_files):
-            loaded = np.load(os.path.join(exp, p_file))
-            if p_file[0] == 'v':
-                thetas = loaded['vnce_thetas']
-                print('VNCE times:', loaded['vnce_times'][-1])
-                if isinstance(thetas[-1][-1], float):
-                    theta = thetas[-1]
+            for p_file, m_file in zip(param_file, model_files):
+                loaded = np.load(os.path.join(exp, p_file))
+                if p_file[0] == 'v':
+                    thetas = loaded['vnce_thetas']
+                    print('VNCE times:', loaded['vnce_times'][-1])
+                    if isinstance(thetas[-1][-1], float):
+                        theta = thetas[-1]
+                    else:
+                        theta = thetas[-1][-1]
+
+                elif p_file[0] == 'n':
+                    theta = loaded['nce_thetas'][-1]
                 else:
-                    theta = thetas[-1][-1]
+                    theta = loaded['cd_thetas'][-1]
+                    print('CD times:', loaded['cd_times'][-1])
 
-            elif p_file[0] == 'n':
-                theta = loaded['nce_thetas'][-1]
-            else:
-                theta = loaded['cd_thetas'][-1]
-                print('CD times:', loaded['cd_times'][-1])
+                model = pickle.load(open(os.path.join(exp, m_file), 'rb'))
+                mu_mse, mean_mse, diag_prec_mse, n_diag_prec_mse = get_mses(data_dist, model, theta_true, theta, d)
 
-            model = pickle.load(open(os.path.join(exp, m_file), 'rb'))
-            mu_mse, mean_mse, diag_prec_mse, n_diag_prec_mse = get_mses(data_dist, model, true_theta, theta, d)
-
-            frac_to_mu_mse_dict.setdefault(str(frac), []).append(mu_mse)
-            frac_to_mean_mse_dict.setdefault(str(frac), []).append(mean_mse)
-            frac_to_prec_diag_mse_dict.setdefault(str(frac), []).append(diag_prec_mse)
-            frac_to_n_prec_diag_mse_dict.setdefault(str(frac), []).append(n_diag_prec_mse)
+                frac_to_mu_mse_dict.setdefault(str(frac), []).append(mu_mse)
+                frac_to_mean_mse_dict.setdefault(str(frac), []).append(mean_mse)
+                frac_to_prec_diag_mse_dict.setdefault(str(frac), []).append(diag_prec_mse)
+                frac_to_n_prec_diag_mse_dict.setdefault(str(frac), []).append(n_diag_prec_mse)
 
     fracs = sorted([float(key) for key in frac_to_mean_mse_dict.keys()])
 

@@ -156,11 +156,15 @@ def plot_landmark_posteriors(x_landmarks,
         ax.set_aspect('equal')
 
     # add label to each row
-    rows = ['True', 'KL', 'Noise 1\n' + r'$\nu=1$', 'Noise 2\n' + r'$\nu=1$', 'Noise 2\n' + r'$\nu=100$']
+    rows = ['True posterior',
+            'VI posterior',
+            'VNCE posterior \n Noise 1\n' + r'$\nu=1$',
+            'VNCE posterior \n Noise 2\n' + r'$\nu=1$',
+            'VNCE posterior \n Noise 2\n' + r'$\nu=100$']
     pad = 5  # in points
     for ax, row in zip(axs[:, 0], rows):
         ax.annotate(row, xy=(0, 0.5), xytext=(-ax.yaxis.labelpad - pad, 0), xycoords=ax.yaxis.label,
-                    textcoords='offset points', size='large', ha='right', va='center')
+                    textcoords='offset points', size=8, ha='right', va='center')
 
     fig.subplots_adjust(left=0.15, wspace=0, hspace=0)
     fig.savefig(save_dir + 'figs/' + title + '.png', bbox_inches="tight")

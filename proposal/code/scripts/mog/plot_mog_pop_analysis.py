@@ -14,12 +14,12 @@ from matplotlib import rc
 from mog_population_analysis import *
 from plot import *
 
-rc('lines', linewidth=1)
-rc('font', size=14)
-rc('legend', fontsize=12)
+rc('lines', linewidth=0.5)
+rc('font', size=8)
+rc('legend', fontsize=8)
 #   rc('text', usetex=True)
-rc('xtick', labelsize=12)
-rc('ytick', labelsize=12)
+rc('xtick', labelsize=8)
+rc('ytick', labelsize=8)
 
 load_dir = '/disk/scratch/ben-rhodes-masters-project/experimental-results/mog/500_runs/sample_sizes'
 save_dir = '/afs/inf.ed.ac.uk/user/s17/s1771906/masters-project-non-code/figs'
@@ -30,7 +30,7 @@ mle_quantile_to_run_dict = pickle.load(open(os.path.join(load_dir, 'mle_quantile
 
 sample_sizes = np.array([100, 500, 2500, 12500])
 sns.set_style('darkgrid')
-fig, axs = plt.subplots(1, 2, figsize=(6.75, 2.5), sharex=True, sharey=True)
+fig, axs = plt.subplots(1, 2, figsize=(7, 2.5), sharex=True, sharey=True)
 axs = axs.ravel()
 ax1 = axs[0]
 plot1(ax1, vnce_quantile_to_run_dict, sample_sizes, colour='r', label='VNCE', marker='o', markersize=3)
@@ -53,4 +53,5 @@ axs[-1].set_ylabel('.', color=(0, 0, 0, 0))
 fig.text(0.5, 0.02, r'$log(10)$ sample size', ha='center')
 fig.text(0.0, 0.5, r'$log(10)$ MSE', va='center', rotation='vertical')
 fig.tight_layout()
+fig.subplots_adjust(wspace=0.1)
 save_fig(fig, save_dir, 'mog-sample-size-against-mse')
