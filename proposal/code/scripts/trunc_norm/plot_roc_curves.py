@@ -199,6 +199,10 @@ def plot_auc(ax, fracs, deciles, label, colour, linestyle, marker):
 '-----------------------------------------------------------------------------------------------------'
 # exp_names = ['20d_cir', '20d_cir_mle0.01', '20d_cir_mle0.001']
 exp_names = ['20d_hub', '20d_hub_mle0.01', '20d_hub_mle0.001']
+# exp_names = ['50d_cir_vnce', '50d_cir_nce', '50d_cir_mle', '50d_cir_mle0.01', '50d_cir_mle0.001']
+# exp_names = ['50d_hub_vnce', '50d_hub_nce', '50d_hub_mle', '50d_hub_mle0.01', '50d_hub_mle0.001']
+# exp_names = ['20d_cir_n50']
+# exp_names = ['20d_hub', '20d_hub_mle0.01', '20d_hub_mle0.001']
 load_dirs = [os.path.join(args.load_dir, exp_name) for exp_name in exp_names]
 load_dirs = [os.path.expanduser(load_dir) for load_dir in load_dirs]
 
@@ -207,49 +211,39 @@ save_dir = os.path.expanduser(save_dir)
 if not os.path.exists(save_dir):
     os.makedirs(save_dir)
 
-# fracs = np.arange(0, 10, 2) / 10
-# fracs = np.array([0.2, 0.5])
-# fracs = np.array([0.1, 0.3, 0.5])
+param_files = [['vnce_results3.npz', 'nce_results1.npz', 'cd_results.npz'], ['cd_results.npz'], ['cd_results.npz']]
+# param_files = [['vnce_results3.npz'], ['nce_results1.npz'], ['cd_results.npz'], ['cd_results.npz'], ['cd_results.npz']]
+# param_files = [['vnce_results3.npz', 'nce_results1.npz', 'cd_results.npz']]
+
+model_files = [['vnce_model3.p', 'nce_model1.p', 'cd_model.p'], ['cd_model.p'], ['cd_model.p']]
+# model_files = [['vnce_model3.p'], ['nce_model1.p'], ['cd_model.p'], ['cd_model.p'], ['cd_model.p']]
+# model_files = [['vnce_model3.p', 'nce_model1.p', 'cd_model.p']]
+
+method_names = ['VNCE (lognormal)', 'NCE (means)', 'MC-MLE 0.1', 'MC-MLE 0.01', 'MC-MLE 0.001']
+# method_names = ['VNCE', 'NCE', 'MC-MLE 0.01']
+# method_names = ['VNCE (lognormal)', 'MC-MLE 0.01']
+# method_names = ['VNCE (lognormal)', 'NCE (means)']
+# method_names = ['VNCE (lognormal)']
+
+method_colours = ['red', 'blue', 'black', 'black', 'black']
+# method_colours = ['red', 'blue', 'black']
+
+method_linestyles = ['-', '-', '--', ':', '-.']
+# method_linestyles = ['--', '-', ':']
+# method_linestyles = ['--']
+
+method_markerstyles = ['d', '_', '^', 'o', 's']
+# method_markerstyles = ['d', '_', '^']
+
+
 fracs = np.array([0.0, 0.1, 0.2, 0.3, 0.4, 0.5])
-# fracs = np.array([0.1, 0.3, 0.5, 0.7, 0.9])
 sorted_fracs = fracs
 frac_range = np.arange(10)  # 10
 fpr_range = np.arange(0, 1.02, 0.02)
 
-# param_files = ['vnce_results3.npz', 'nce_results1.npz', 'nce_results2.npz', 'cd_results.npz']6951Bj!
+all_metrics = []
+for load_dir, param_file, model_file in zip(load_dirs, param_files, model_files):
+    all_metrics_2 = calculate_metrics(load_dir, param_file, model_file)
+    all_metrics += all_metrics_2
 
-param_files = ['vnce_results3.npz', 'nce_results1.npz', 'cd_results.npz']
-# param_files = ['vnce_results3.npz', 'cd_results.npz']
-# param_files = ['vnce_results3.npz', 'nce_results1.npz']
-# param_files = ['vnce_results3.npz']
-# param_files = ['nce_results1.npz', 'nce_results2.npz']
-
-model_files = ['vnce_model3.p', 'nce_model1.p', 'cd_model.p']
-# model_files = ['vnce_model3.p', 'nce_model1.p']
-
-# method_names = ['VNCE (lognormal)', 'NCE (means)', 'NCE (noise)', 'MLE (sampling)']
-method_names = ['VNCE', 'NCE', 'MC-MLE 0.1', 'MC-MLE 0.01', 'MC-MLE 0.001']
-# method_names = ['VNCE (lognormal)', 'MLE (sampling)']
-# method_names = ['VNCE (lognormal)', 'NCE (means)']
-# method_names = ['VNCE (lognormal)']
-
-# method_colours = ['purple', 'orange', 'green', 'black']
-method_colours = ['red', 'blue', 'black', 'black', 'black']
-# method_colours = ['purple', 'black']
-# method_colours = ['purple', 'orange']
-# method_colours = ['purple']
-# method_colours = ['orange', 'green']
-
-method_linestyles = ['-', '-', '--', ':', '-.']
-# method_linestyles = ['--', '-']
-# method_linestyles = ['--']
-
-method_markerstyles = ['d', '_', '^', 'o', 's']
-
-all_metrics = calculate_metrics(load_dirs[0], param_files, model_files)
-all_metrics_2 = calculate_metrics(load_dirs[1], ['cd_results.npz'], ['cd_model.p'])
-all_metrics_3 = calculate_metrics(load_dirs[2], ['cd_results.npz'], ['cd_model.p'])
-all_metrics += all_metrics_2
-all_metrics += all_metrics_3
-# plot_roc_curves(all_metrics, save_dir)
 plot_auc_curves(all_metrics, method_names, method_colours, method_linestyles, method_markerstyles, save_dir)

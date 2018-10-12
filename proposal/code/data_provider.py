@@ -231,6 +231,14 @@ class DataProvider(object):
         else:
             self.global_E_ZX = deepcopy(self.global_E_ZX[:, data_perm, :])
 
+    def reset_number_of_latent_samples(self, new_nz):
+        self.nz = new_nz
+        self.sample_global_E()
+
+    def sample_global_E(self):
+        self.global_E_ZX = self.variational_dist.sample_E(self.nz, self.train_miss_mask)
+        self.global_E_ZX_val = self.variational_dist.sample_E(self.nz, self.val_miss_mask)
+
     def new_epoch(self):
         """Shuffle data X and noise Y and print current loss"""
         n, d = self.train_data.shape
