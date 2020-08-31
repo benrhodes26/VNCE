@@ -1,1 +1,1 @@
-# ben-rhodes-masters-project
+# Code for variational noise contrastive estimation
